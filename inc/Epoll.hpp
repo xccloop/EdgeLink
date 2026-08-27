@@ -13,7 +13,7 @@ public:
     Epoll();
     ~Epoll();
 
-    int create(int TCP_serve_fd);
+    int create();
 
     // 带事件参数（可传入 EPOLLIN | EPOLLET 等）
     int add(int fd, int epoll_event);
@@ -24,6 +24,8 @@ public:
     int add(int fd);
     int del(int fd);
     int mod(int fd);
+
+    int wait(struct epoll_event events[],int length,int timeout_ms = -1);
 
 private:
     int epoll_fd;

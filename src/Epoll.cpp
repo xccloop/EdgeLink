@@ -186,8 +186,7 @@ Epoll::~Epoll() {
     close_fd(epoll_fd);
 }
 
-int Epoll::create(int TCP_serve_fd) {
-    (void)TCP_serve_fd; // 避免未使用警告
+int Epoll::create() {
     this->epoll_fd = epoll_create(1);
     if (this->epoll_fd == -1) {
         perror("epoll create fail");
@@ -261,4 +260,16 @@ int Epoll::del(int fd) {
 
 int Epoll::mod(int fd) {
     return mod(fd, EPOLLIN);   // 默认 LT 读事件
+}
+
+
+int Epoll::wait(epoll_event events[], int length, int timeout_ms)
+{
+    if (epoll_fd < 0 || events == nullptr || length <= 0)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return epoll_wait(epoll_fd, events, length, timeout_ms);
 }

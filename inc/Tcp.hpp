@@ -35,7 +35,8 @@ public:
 
     int client_accept();
 
-    int fd();
+    int fd() const; //这样做可以让返回的fd设置为可读但不可写
+    //用方只能把它用于 epoll.add()、比较、日志等，不能 close(get_fd())。fd 的关闭权仍属于 TcpServe，否则析构时会发生“重复关闭”或误关闭复用后的 fd。
 
 private:
     int Tcp_fd{-1};//tcp套接字
@@ -57,7 +58,7 @@ public:
     ssize_t data_receive(char buffer[],size_t length);
     ssize_t data_send(const char buffer[],size_t length);
 
-    int fd();
+    int fd() const;
 
 private:
     int client_fd{-1};

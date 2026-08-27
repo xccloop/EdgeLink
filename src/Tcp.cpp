@@ -232,7 +232,7 @@ int TcpServe::client_accept()
     return client_fd;
 }
 
-int TcpServe::fd()
+int TcpServe::fd() const
 {
     if(Tcp_fd == -1)
     {
@@ -242,6 +242,8 @@ int TcpServe::fd()
 
     return Tcp_fd;
 }
+
+
 
 TcpConnection::TcpConnection(int client_fd)
 {
@@ -279,7 +281,7 @@ ssize_t TcpConnection::data_send(const char *buffer, size_t length)
     return static_cast<ssize_t>(sent_length);
 }
 
-int TcpConnection::fd()
+int TcpConnection::fd() const
 {
     if(client_fd == -1)
     {
