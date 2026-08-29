@@ -169,25 +169,33 @@ void Epoll_serve()
 
 */
 
-void close_fd(int &fd)
-{
-    if(fd != -1)
-    {
-        close(fd);
-        fd = -1;
-    }
-}
 
 Epoll::Epoll() {
     epoll_fd = -1;
 }
 
 Epoll::~Epoll() {
-    close_fd(epoll_fd);
+    if(epoll_fd != -1)
+    {
+        close(epoll_fd);
+        epoll_fd = -1;
+    }
 }
 
 int Epoll::create() {
-    this->epoll_fd = epoll_create(1);
+
+    //这个判断用于检查epoll是不是已经创建过了，防止再次创建
+    if(this->epoll_fd != -1)
+    {
+        perror("epoll fd alreay create");
+        return 0;
+    }
+
+    //this->epoll_fd = epoll_create(1);
+    this->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+    //我们采用create1来进行创建，并使用EPOLL_CLOEXEC，这就意味着进程执行 fork() 创建子进程，然后子进程调用 exec() 执行新程序时，
+    //自动关闭这个 epoll_fd。这防止了子进程无意中继承了父进程的 epoll 句柄，导致资源泄漏或“文件描述符用完”的严重生产事故
+    //一般都使用这个，而且epoll_create1仅支持这一个宏或者0，如果是0就和epoll_create一样
     if (this->epoll_fd == -1) {
         perror("epoll create fail");
         return -1;
@@ -200,7 +208,7 @@ int Epoll::add(int fd, int epoll_event) {
         perror("epoll add fail");
         return -1;
     }
-    struct epoll_event ev;
+    struct epoll_event ev{};
     ev.events = epoll_event;
     ev.data.fd = fd;
     if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &ev) == -1) {
@@ -215,7 +223,7 @@ int Epoll::del(int fd, int epoll_event) {
         perror("epoll delete fail");
         return -1;
     }
-    struct epoll_event ev;
+    struct epoll_event ev{};
     ev.events = epoll_event;
     ev.data.fd = fd;
     if (epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, &ev) == -1) {
@@ -230,7 +238,7 @@ int Epoll::mod(int fd, int epoll_event) {
         perror("epoll modify fail");
         return -1;
     }
-    struct epoll_event ev;
+    struct epoll_event ev{};
     ev.events = epoll_event;
     ev.data.fd = fd;
     if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, &ev) == -1) {
@@ -243,19 +251,6 @@ int Epoll::mod(int fd, int epoll_event) {
 // ---------- 无参重载（默认 LT） ----------
 int Epoll::add(int fd) {
     return add(fd, EPOLLIN);   // 默认 LT 读事件
-}
-
-int Epoll::del(int fd) {
-    if (this->epoll_fd == -1) {
-        perror("epoll delete fail");
-        return -1;
-    }
-    // 删除时事件参数被忽略，直接传 NULL
-    if (epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, NULL) == -1) {
-        perror("epoll delete fail");
-        return -1;
-    }
-    return 0;
 }
 
 int Epoll::mod(int fd) {

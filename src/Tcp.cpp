@@ -3,11 +3,15 @@
 */
 
 #include "Tcp.hpp"
+#include <asm-generic/errno-base.h>
+#include <asm-generic/errno.h>
 #include <cerrno>
 #include <cstddef>
 #include <cstdio>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <unistd.h>
 
 /*
     接下来我们具体思考如何使用TCP通信
@@ -243,7 +247,26 @@ int TcpServe::fd() const
     return Tcp_fd;
 }
 
+bool TcpServe::setnoblocking()
+{
+    //设置fd为非阻塞我们使用
+    //fcntl允许我们进行文件操作
+    //这里分两步进行，第一步我们先通过第一次fcntl的F_GETFL将fd的属性用我们设置的flags提取出来
+    //第二步我们在通过fcntl的F_SETFL将fd设置为O_ONOBLOCKING也就是非阻塞
+    int flags = fcntl(Tcp_fd,F_GETFL,0);
+    if(flags == -1)
+    {
+        return false;
+    }
 
+    //我们通过|（按位或）的方式开启这个开关
+    if (fcntl(Tcp_fd, F_SETFL, flags | O_NONBLOCK) == -1)
+    {
+        return false;
+    }
+
+    return true;
+}
 
 TcpConnection::TcpConnection(int client_fd)
 {
@@ -255,9 +278,60 @@ TcpConnection::~TcpConnection()
     close_fd(client_fd);
 }
 
+/*
+    当前的情况下receive,send都是阻塞式的，我们在此之前设置fd为非阻塞式，那就会出现非阻塞式的一些特殊情况，我们使用错误编码来代指这些情况，我们也需要对这些非阻塞式的特殊错误进行处理
+    
+*/
+
 ssize_t TcpConnection::data_receive(char buffer[],size_t length)
 {
     ssize_t data_recive = recv(this->client_fd, buffer,length,0);  // 保留一个字节给'\0'
+    if(data_recive == -1)
+    {
+        if(errno == EAGAIN || errno == EWOULDBLOCK)//这里的errno就是特殊错误代码
+        //出现错误的第一种情况为资源暂时不可用，我们可以直接返回-1或者返回0再次重试，这里加一个内括号是因为运算优先级的问题
+        {
+            // 暂时没数据，返回 -1，上层会忽略并继续 epoll_wait
+            return -1;
+        }
+        if (errno == EINTR)
+        {
+            // 被信号中断，可以重试，这里简单返回 -1 让上层重试也行
+            // 或者用 goto 重试，但简单起见返回 -1
+            return -1;
+        }
+        if(errno == ECONNRESET || errno == EPIPE || errno == ENOTCONN || errno == ESHUTDOWN)
+        //这四类错误十分严重我们需要立即关闭fd
+        //ECONNRESET	连接被对端重置（RST）。	对端进程崩溃、异常重启，或者对端硬生生关闭了连接（没发 FIN）。	
+        //EPIPE	向已关闭的连接写入数据。	对端已经关闭了连接（FIN），你还调用 send。注意：如果你用了 MSG_NOSIGNAL，系统不会发 SIGPIPE 信号杀死进程，但 send 会返回 -1 并设置 errno 为 EPIPE。	。
+        //ENOTCONN	套接字未连接。	fd 不是已连接的 socket（比如已被关闭）。	
+        //ESHUTDOWN	套接字已经关闭了写端（或读端）。	本方已经主动执行了 shutdown。	
+        {
+            close(client_fd);
+            return -1;
+        }
+        if(errno == EBADF || errno == EFAULT || errno == EINVAL)
+        //这三类错误为程序逻辑错误，我们需要打印相关日志来提醒并且返回-1
+        {
+            if(errno == EBADF)//文件描述符无效
+            {
+                perror("fd is not available");
+                return -1;
+            }
+            if(errno == EFAULT)//传入的缓冲区指针指向了非法的地址
+            {
+                perror("the buffer poniter point a lllegal adress");
+                return -1;
+            }
+            if(errno == EINVAL)//传入的参数无效
+            {
+                perror("parament is not available");
+                return -1;
+            }
+        }
+        perror("unexpected error");//其余的错误不常见因此直接返回-1，如果遇到了，在细节调试
+        return -1;
+    }
     return data_recive;
 }
 
@@ -272,11 +346,56 @@ ssize_t TcpConnection::data_send(const char *buffer, size_t length)
             sent_length += static_cast<size_t>(data_send);
             continue;
         }
-        if(data_send == -1 && errno == EINTR)
+
+        //接下来时send的非阻塞处理代码错误
+        if(data_send == -1)
         {
-            continue;
-        }
-        return -1;
+            if(errno == EAGAIN || errno == EWOULDBLOCK)
+            {
+                // send触发EAGAIN是因为缓冲区已满，无法写入更多数据
+                if(sent_length > 0)//如果已经写入了一部分数据，那我们返回写入的字节数，如果一个数据没写就直接返回-1
+                {
+                    return static_cast<ssize_t>(sent_length);
+                }
+                return -1;
+            }
+            if(errno == EINTR)
+            {
+                continue;//系统调用被信号中断，重试
+            }
+            //同样的，这四类错误是严重错误，我们需要理解关闭fd并且从epoll树移除
+            if(errno == EPIPE || errno == ECONNRESET || errno == ENOTCONN || errno == ESHUTDOWN)
+            //EPIPE:对端已经关闭了连接（发过 FIN），你还调用 send。
+            //ECONNRESET: 端进程崩溃或异常重启，强行发送了 RST 包（而不是优雅的 FIN）
+            //ENOTCONN :这个 socket 根本没有处于连接状态（比如已经被关闭，或者还没 connect 成功）
+            //ESHUTDOWN:本端已经执行了 shutdown() 关闭了写端，你还试图 send。
+            {
+                close(client_fd);
+                return -1;
+            }
+            if(errno == EBADF || errno == EFAULT || errno == EINVAL)
+            {
+                if(errno == EBADF)//传入的 client_fd 无效（可能已经被关闭，或者根本不是 socket）。
+                {
+                    perror("fd is not acailable");
+                    close(client_fd);
+                    return -1;
+                }
+                if(errno == EFAULT)//传入的 buffer 指针指向了非法内存地址（野指针）
+                {
+                    perror("buffer poniter point a lllegal adress ");
+                    close(client_fd);
+                    return -1;
+                }
+                if(errno == EINVAL)//传入的参数无效
+                {
+                    perror("parament is not avaiable");
+                    return -1;
+                }
+            }
+            perror("unexpected error");
+            return -1;
+        }        
     }
     return static_cast<ssize_t>(sent_length);
 }
@@ -290,4 +409,21 @@ int TcpConnection::fd() const
     }
 
     return client_fd;
+}
+
+bool TcpConnection::setnoblocking()
+{
+    //设置fd为非阻塞我们使用
+    int flags = fcntl(client_fd,F_GETFL,0);
+    if(flags == -1)
+    {
+        return false;
+    }
+
+    if (fcntl(client_fd, F_SETFL, flags | O_NONBLOCK) == -1)
+    {
+        return false;
+    }
+    
+    return true;
 }

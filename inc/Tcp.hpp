@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <fcntl.h>
 
 #define TCPSERVE_INIT_FAIL -1
 #define TCPSERVE_INIT_SUCCESS 0
@@ -35,8 +36,11 @@ public:
 
     int client_accept();
 
-    int fd() const; //这样做可以让返回的fd设置为可读但不可写
+    int fd() const; //这样做可以让返回为 int 副本；
     //用方只能把它用于 epoll.add()、比较、日志等，不能 close(get_fd())。fd 的关闭权仍属于 TcpServe，否则析构时会发生“重复关闭”或误关闭复用后的 fd。
+
+    //为了适配epoll，我们需要把fd设置为非阻塞
+    bool setnoblocking();
 
 private:
     int Tcp_fd{-1};//tcp套接字
@@ -59,6 +63,8 @@ public:
     ssize_t data_send(const char buffer[],size_t length);
 
     int fd() const;
+
+    bool setnoblocking();
 
 private:
     int client_fd{-1};
