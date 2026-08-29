@@ -230,7 +230,10 @@ int TcpServe::client_accept()
     
     int client_fd = accept(Tcp_fd, (struct sockaddr*)&client_addr, &client_addr_len);
     if (client_fd == -1) {
-        perror("accept failed");
+        if(errno != EAGAIN && errno != EWOULDBLOCK)
+        {
+            perror("accept failed");
+        }
         return -1;
     }
     return client_fd;
@@ -307,7 +310,6 @@ ssize_t TcpConnection::data_receive(char buffer[],size_t length)
         //ENOTCONN	套接字未连接。	fd 不是已连接的 socket（比如已被关闭）。	
         //ESHUTDOWN	套接字已经关闭了写端（或读端）。	本方已经主动执行了 shutdown。	
         {
-            close(client_fd);
             return -1;
         }
         if(errno == EBADF || errno == EFAULT || errno == EINVAL)
@@ -370,7 +372,6 @@ ssize_t TcpConnection::data_send(const char *buffer, size_t length)
             //ENOTCONN :这个 socket 根本没有处于连接状态（比如已经被关闭，或者还没 connect 成功）
             //ESHUTDOWN:本端已经执行了 shutdown() 关闭了写端，你还试图 send。
             {
-                close(client_fd);
                 return -1;
             }
             if(errno == EBADF || errno == EFAULT || errno == EINVAL)
@@ -378,13 +379,11 @@ ssize_t TcpConnection::data_send(const char *buffer, size_t length)
                 if(errno == EBADF)//传入的 client_fd 无效（可能已经被关闭，或者根本不是 socket）。
                 {
                     perror("fd is not acailable");
-                    close(client_fd);
                     return -1;
                 }
                 if(errno == EFAULT)//传入的 buffer 指针指向了非法内存地址（野指针）
                 {
                     perror("buffer poniter point a lllegal adress ");
-                    close(client_fd);
                     return -1;
                 }
                 if(errno == EINVAL)//传入的参数无效
