@@ -9,17 +9,19 @@
 #include "Ringbuffer.hpp"
 #include <cstring>
 #include <iostream>
+#include <stdexcept>
 
 //初始化
 Ringbuffer::Ringbuffer(unsigned int size)
 {
     if(size == 0)
     {
-        printf("Can't create a Ringbuffer that zero size");
+        //修复：容量为0时后续所有回绕计算都没有意义，所以这里直接阻止无效对象继续创建
+        throw std::invalid_argument("Can't create a Ringbuffer that zero size");
     }
 
     this->size = size;
-    this->buffer = new char[size];
+    this->buffer = new uint8_t[size];
     this->write_pos = 0;
     this->read_pos = 0;
     this->full = 0;
@@ -75,7 +77,7 @@ int Ringbuffer::Ringbuffer_mirror_inspect()
     return RINGBUFFER_NORMAL;
 }
 
-int Ringbuffer::write( const char *data,unsigned int length)
+int Ringbuffer::write( const uint8_t *data,unsigned int length)
 {
     //安全检查
     if(data == nullptr || length == 0)
@@ -149,7 +151,7 @@ int Ringbuffer::write( const char *data,unsigned int length)
     而且我发现缓冲区需要访问read_pos的数据，所以到读取数据的时候，我们是不是直接读取需要判断
     下面我们还是需要安全检查
 */
-int Ringbuffer::read(char *data,unsigned int length)
+int Ringbuffer::read(uint8_t *data,unsigned int length)
 {
     if(data == nullptr || length ==0)
     {
@@ -217,4 +219,55 @@ int Ringbuffer::data_space()
     }
 
     return this->size - this->read_pos + this->write_pos;
+}
+
+//这个函数很关键，它用于给frame_parseer查看数据，找到我们的协议帧
+int Ringbuffer::see(unsigned int offset)
+{
+    int current_data_length = data_space();
+
+    //检查请求的偏移量是否超出了当前缓冲区中有效数据的范围。
+    //背景：data_space() 返回当前缓冲区中实际可读的数据长度（即 write_pos 和 read_pos 之间的元素个数）。
+    //如果 offset 大于等于这个长度，就意味着你想查看的位置还没有数据（已经被覆盖或从未写入）。
+    //修复：先判断长度再转成无符号类型，这样就不会出现int和unsigned int直接比较的编译警告
+    if(current_data_length <= 0 || offset >= static_cast<unsigned int>(current_data_length))
+    {
+        return -1;
+    }
+
+    unsigned int see_poss = this->read_pos + offset;
+
+    //如果 read_pos + offset 大于等于 size，说明已经到达或越过数组末尾，需要减去 size，使索引回到数组头部，从而正确访问逻辑上连续的数据
+    if(see_poss >= this->size)
+    {
+        see_poss -= this->size;
+    }
+
+    return this->buffer[see_poss];
+}
+
+//这个函数用于丢弃已经确认不需要的数据，它不会把数据复制出来，只会向前移动读指针
+int Ringbuffer::discard(unsigned int length)
+{
+    int current_data_length = data_space();
+    if(length == 0 || current_data_length <= 0)
+    {
+        return 0;
+    }
+
+    //修复：调用方要求丢弃的数据比现有数据多时，我们最多只能丢弃当前真实存在的数据
+    unsigned int actually_discard_length = length;
+    if(actually_discard_length > static_cast<unsigned int>(current_data_length))
+    {
+        actually_discard_length = static_cast<unsigned int>(current_data_length);
+    }
+
+    this->read_pos += actually_discard_length;
+    if(this->read_pos >= this->size)
+    {
+        this->read_pos -= this->size;
+        this->read_pos_mirror ^= 1;
+    }
+
+    return static_cast<int>(actually_discard_length);
 }
