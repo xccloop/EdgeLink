@@ -6,6 +6,7 @@
     
 */
 #include <cstddef>
+#include <cstdint>
 #include <netinet/in.h>
 #include <cstdio>
 #include <iostream>
@@ -59,7 +60,7 @@ public:
     TcpConnection &operator=(const TcpConnection &) = delete;
 
     //这里使用ssize_t是因为这个类型为实际的数字，如果用其他的比如size_t，返回-1就会变成很大的数字
-    ssize_t data_receive(char buffer[],size_t length);
+    ssize_t data_receive(uint8_t buffer[],size_t length);
     ssize_t data_send(const char buffer[],size_t length);
 
     int fd() const;

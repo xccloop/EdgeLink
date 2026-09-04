@@ -23,6 +23,7 @@ add_executable(frame_parser_tests
     tests/frame_parser_test.cpp
     src/CRC.cpp
     src/Frame.cpp
+    src/Message.cpp
     src/Ringbuffer.cpp
 )
 add_test(NAME frame_parser_tests COMMAND frame_parser_tests)

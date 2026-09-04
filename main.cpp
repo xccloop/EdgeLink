@@ -20,6 +20,8 @@
 //现在我们有了 TCP，epoll，ringbuffer，frame，足够我们来写一份服务端戴代码了
 //要求，使用epoll ET监听tcp，并且将收到的数据存储进ringbufer然后校验自定义帧协议
 
+#include "Frame.hpp"
+#include "Tcp.hpp"
 #include "common_headfile.hpp"
 
 int main()
@@ -27,7 +29,6 @@ int main()
     //首先我们先创建客户端然后使用epoll
     TcpServe tcpserve(TCPSERVE_PORT,TCPSERVE_BACKLOG);
     Epoll epoll;
-
     /*
         这句话是是现代c语言定义一个数组的方式，它采用模板，里面的内容是指向ClientState的智能指针，长度为MAX_CLIENTS，并且初始化为nullptr，也就是括号里面什么都没写
         这样子做我就可以通过client[i]来控制我操作第几个客户端，因为每个指针指向的是一个单独的结构体，然后将这个指针写为unique_ptr这样做让普通的指针变为智能指针，
@@ -71,7 +72,13 @@ int main()
         int nready = epoll.wait(events, EPOLLEVENT_SIZE);
         if(nready == -1)
         {
+            //修复：EINTR只是epoll_wait被信号临时中断，重新等待就可以；其他错误才说明事件循环无法继续
+            if(errno == EINTR)
+            {
+                continue;
+            }
             perror("epoll error");
+            return -1;
         }
 
         int client_fd = 0;
@@ -97,6 +104,17 @@ int main()
                         client_fd = tcpserve.client_accept();
                         if(client_fd == -1)
                         {
+                            //修复：ET模式必须一直accept到EAGAIN，这个错误表示当前的新连接已经全部取完，不是服务端故障
+                            if(errno == EAGAIN || errno == EWOULDBLOCK)
+                            {
+                                break;
+                            }
+                            //修复：EINTR只表示accept被信号打断，继续循环就能重新接收这个连接
+                            if(errno == EINTR)
+                            {
+                                continue;
+                            }
+                            //修复：其他accept错误已经由client_accept打印，结束本轮accept但不能让一个监听错误直接结束整个服务端
                             break;
                         }
 
@@ -147,6 +165,144 @@ int main()
 
                 case FdType::Tcpclient:
                 {
+                    //现在说明有了客户端发送数据给我们了，我们要做的是接受数据，别忘了我们之前可是为了单独的客户端创建了结构体指针的
+                    int slot = -1;//注意slot要在for之外，不然每次循环都要都会赋值-1
+                    //修复：这里使用client_index避免遮蔽外层epoll事件下标i，后面events[i]才能一直代表当前事件
+                    for(int client_index = 0;client_index < MAX_CLIENTS;client_index++)
+                    {
+                        //这里比较的是fd而不是client_fd，因为我们要比较的是clients数组里面存储的client_fd和响应的fd是否相同然后才返回下标
+                        if(clients[client_index] != nullptr && clients[client_index]->connection.fd() == fd)
+                        {
+                            slot = client_index;
+                            break;
+                        }
+                    }
+
+                    //修复：必须遍历完clients以后再判断是否找到，否则第一个位置不匹配就会提前结束整个服务端
+                    if(slot == -1)
+                    {
+                        //修复：哈希表存在但ClientState不存在说明登记已经失效，删除epoll和哈希表记录并关闭fd可以阻止错误事件反复触发和资源泄漏
+                        epoll.del(fd, 0);
+                        fd_table.erase(fd);
+                        close(fd);
+                        break;
+                    }
+
+                    //修复：同一个客户端事件可能同时包含可读、关闭或错误标志，所以先保存事件掩码再分别处理，不能因为没有EPOLLIN就退出服务端
+                    unsigned int event_mask = events[i].events;
+                    bool close_client = (event_mask & EPOLLERR) != 0;
+
+                    if(close_client == false && (event_mask & EPOLLIN) != 0)
+                    {
+                        uint8_t data_tmp[READ_BUFFER_LENGTH]{};
+
+                        //修复：客户端使用了EPOLLET，一次通知必须循环读取到EAGAIN，否则内核中剩余的数据可能不会再次触发边沿通知
+                        while(true)
+                        {
+                            int ringbuffer_space_length = clients[slot]->receive_ringbuffer.free_space();
+
+                            //修复：Ringbuffer没有剩余空间时不能继续从TCP取数据，否则已经离开内核的数据会因为无处保存而永久丢失
+                            if(ringbuffer_space_length <= 0)
+                            {
+                                close_client = true;
+                                break;
+                            }
+
+                            size_t receive_length = READ_BUFFER_LENGTH;
+
+                            //修复：本次recv长度不能超过Ringbuffer剩余空间，这样收到的每一个字节都保证有位置保存
+                            if(static_cast<size_t>(ringbuffer_space_length) < receive_length)
+                            {
+                                receive_length = static_cast<size_t>(ringbuffer_space_length);
+                            }
+
+                            //修复：保存recv真实返回值，后面只能写入实际收到的字节，不能固定把整个临时数组都写进Ringbuffer
+                            ssize_t receive_result = clients[slot]->connection.data_receive(data_tmp, receive_length);
+                            if(receive_result > 0)
+                            {
+                                int write_result = clients[slot]->receive_ringbuffer.write(
+                                    data_tmp,
+                                    static_cast<unsigned int>(receive_result));
+                                //修复：Ringbuffer必须完整接收本次recv的全部字节，部分写入会让TCP字节流永久缺失并破坏后续帧边界
+                                if(write_result != receive_result)
+                                {
+                                    close_client = true;
+                                    break;
+                                }
+
+                                //现在环形缓冲区里面就有了原始字节流，我们调用frame_parser筛选固定Telemetry帧。
+                                //修复：一次recv可能粘着多帧，所以成功解析一帧后继续调用，直到Ringbuffer只剩半帧
+                                while(true)
+                                {
+                                    //注意要在这里创建临时的帧协议而不是全局
+                                    //修复：Frame只在SUCCESS时读取，使用{}初始化可以避免半包或错误状态下残留旧数据
+                                    Frame frame{};
+                                    int parse_result = frame_parser(&clients[slot]->receive_ringbuffer,&frame);
+                                    if(parse_result == FRAME_PARSE_SUCCESS)
+                                    {
+                                        //此TCP端口只承载Telemetry；接入Storage时在这里调用Message_handle转换。
+                                        //SUCCESS时解析器已经消费一整帧，继续循环可处理粘着的下一帧。
+                                        continue;
+                                    }
+
+                                    //修复：PENDING表示TCP半包，数据继续保留在当前客户端Ringbuffer中，等待下一次数据到来即可
+                                    if(parse_result == FRAME_PARSE_PENDING)
+                                    {
+                                        break;
+                                    }
+
+                                    //修复：ERROR表示解析器参数或缓冲区状态无法继续，只标记关闭当前客户端，不能返回-1结束整个服务端
+                                    close_client = true;
+                                    break;
+                                }
+
+                                if(close_client)
+                                {
+                                    break;
+                                }
+                                //修复：这批数据已经保存并解析完成，继续recv才能满足EPOLLET必须读到EAGAIN的要求
+                                continue;
+                            }
+
+                            //修复：recv返回0表示对端正常关闭连接，需要进入统一的客户端清理流程
+                            if(receive_result == 0)
+                            {
+                                close_client = true;
+                                break;
+                            }
+
+                            //修复：EINTR只表示recv被信号打断，重新调用recv不会丢失连接数据
+                            if(errno == EINTR)
+                            {
+                                continue;
+                            }
+
+                            //修复：EAGAIN表示非阻塞socket已经读空，本次ET事件处理完成，返回epoll_wait等待下一批数据
+                            if(errno == EAGAIN || errno == EWOULDBLOCK)
+                            {
+                                break;
+                            }
+
+                            //修复：其他recv错误说明当前客户端连接不能继续，只关闭这个客户端避免影响其他连接
+                            close_client = true;
+                            break;
+                        }
+                    }
+
+                    //修复：同一个事件可能同时带EPOLLIN和关闭标志，上面先读完最后一批数据，再根据RDHUP/HUP进入清理流程
+                    if((event_mask & (EPOLLRDHUP | EPOLLHUP)) != 0)
+                    {
+                        close_client = true;
+                    }
+
+                    if(close_client)
+                    {
+                        //修复：按epoll登记、类型登记、ClientState所有权的顺序清理，reset最终通过TcpConnection析构关闭客户端fd
+                        epoll.del(fd, 0);
+                        fd_table.erase(fd);
+                        clients[slot].reset();
+                    }
+
                     break;
                 }
             }

@@ -230,7 +230,8 @@ int TcpServe::client_accept()
     
     int client_fd = accept(Tcp_fd, (struct sockaddr*)&client_addr, &client_addr_len);
     if (client_fd == -1) {
-        if(errno != EAGAIN && errno != EWOULDBLOCK)
+        //修复：EAGAIN表示ET模式已经取完连接，EINTR表示被信号打断并由main重试，这两类都不应该打印成accept失败
+        if(errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
         {
             perror("accept failed");
         }
@@ -286,7 +287,7 @@ TcpConnection::~TcpConnection()
     
 */
 
-ssize_t TcpConnection::data_receive(char buffer[],size_t length)
+ssize_t TcpConnection::data_receive(uint8_t buffer[],size_t length)
 {
     ssize_t data_recive = recv(this->client_fd, buffer,length,0);  // 保留一个字节给'\0'
     if(data_recive == -1)
