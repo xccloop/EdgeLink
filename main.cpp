@@ -20,15 +20,18 @@
 //现在我们有了 TCP，epoll，ringbuffer，frame，足够我们来写一份服务端戴代码了
 //要求，使用epoll ET监听tcp，并且将收到的数据存储进ringbufer然后校验自定义帧协议
 
-#include "Frame.hpp"
+#include "TcpFrame.hpp"
+#include "Message.hpp"
 #include "Tcp.hpp"
 #include "common_headfile.hpp"
+#include <cstdio>
 
 int main()
 {
     //首先我们先创建客户端然后使用epoll
     TcpServe tcpserve(TCPSERVE_PORT,TCPSERVE_BACKLOG);
     Epoll epoll;
+    Storage storage;
     /*
         这句话是是现代c语言定义一个数组的方式，它采用模板，里面的内容是指向ClientState的智能指针，长度为MAX_CLIENTS，并且初始化为nullptr，也就是括号里面什么都没写
         这样子做我就可以通过client[i]来控制我操作第几个客户端，因为每个指针指向的是一个单独的结构体，然后将这个指针写为unique_ptr这样做让普通的指针变为智能指针，
@@ -66,6 +69,15 @@ int main()
 
     //这句话的意思是将tcp_fd插入进哈希表，并且属于Tcpserve
     fd_table.emplace(tcp_fd, FdType::Tcpserve);
+
+    if(storage.open("/home/qxc/Desktop/Mini_Edgehub/data/edgehub.db") == false)
+    {
+        return -1;
+    }
+    if(storage.createTable() == false)
+    {
+        return -1;
+    }
 
     while(1)
     {
@@ -230,18 +242,32 @@ int main()
                                     break;
                                 }
 
-                                //现在环形缓冲区里面就有了原始字节流，我们调用frame_parser筛选固定Telemetry帧。
+                                //现在环形缓冲区里面就有了原始字节流，我们调用tcp_frame_parser筛选固定Telemetry帧。
                                 //修复：一次recv可能粘着多帧，所以成功解析一帧后继续调用，直到Ringbuffer只剩半帧
                                 while(true)
                                 {
                                     //注意要在这里创建临时的帧协议而不是全局
-                                    //修复：Frame只在SUCCESS时读取，使用{}初始化可以避免半包或错误状态下残留旧数据
-                                    Frame frame{};
-                                    int parse_result = frame_parser(&clients[slot]->receive_ringbuffer,&frame);
+                                    //修复：TcpFrame只在SUCCESS时读取，使用{}初始化可以避免半包或错误状态下残留旧数据
+                                    TcpFrame frame{};
+                                    Message message{};
+                                    int parse_result = tcp_frame_parser(&clients[slot]->receive_ringbuffer,&frame);
                                     if(parse_result == FRAME_PARSE_SUCCESS)
                                     {
                                         //此TCP端口只承载Telemetry；接入Storage时在这里调用Message_handle转换。
                                         //SUCCESS时解析器已经消费一整帧，继续循环可处理粘着的下一帧。
+                                        Message_handle(&message, &frame);
+                                        if(storage.isOpen() == true)
+                                        {
+                                            if(storage.insertMessage(message) == false)
+                                            {
+                                                std::string storage_error = storage.getLastError();
+                                                fprintf(stderr, "%s\n", storage_error.c_str());
+                                            }
+                                        }
+                                        else
+                                        {
+                                            continue;
+                                        }
                                         continue;
                                     }
 

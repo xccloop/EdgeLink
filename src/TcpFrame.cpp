@@ -1,4 +1,4 @@
-#include "Frame.hpp"
+#include "TcpFrame.hpp"
 #include "CRC.hpp"
 #include "Ringbuffer.hpp"
 #include <chrono>
@@ -52,7 +52,7 @@ int64_t frame_received_at_us()
 }
 }
 
-int frame_parser(Ringbuffer *ringbuffer,Frame *frame)
+int tcp_frame_parser(Ringbuffer *ringbuffer,TcpFrame *frame)
 {
     if(ringbuffer == nullptr || frame == nullptr)
     {
@@ -139,9 +139,7 @@ int frame_parser(Ringbuffer *ringbuffer,Frame *frame)
 
         constexpr unsigned int temperature_offset = FRAME_HEADER_LENGTH;
         constexpr unsigned int temperature_scale_offset = temperature_offset + FRAME_TEMPERATURE_LENGTH;
-        constexpr unsigned int pressure_offset = temperature_scale_offset + FRAME_TEMPERATURE_SCALE_LENGTH;
-        constexpr unsigned int pressure_scale_offset = pressure_offset + FRAME_PRESSURE_LENGTH;
-        constexpr unsigned int crc_offset = pressure_scale_offset + FRAME_PRESSURE_SCALE_LENGTH;
+        constexpr unsigned int crc_offset = temperature_scale_offset + FRAME_TEMPERATURE_SCALE_LENGTH;
         uint32_t expected_crc = frame_crc_read(candidate,crc_offset);
         bool crc_valid = crc32_check(candidate + 2,
             FRAME_HEADER_LENGTH - 2 + FRAME_TELEMETRY_LENGTH,expected_crc);
@@ -151,7 +149,7 @@ int frame_parser(Ringbuffer *ringbuffer,Frame *frame)
             continue;
         }
 
-        Frame parsed_frame{};
+        TcpFrame parsed_frame{};
         parsed_frame.header.magic[0] = candidate[0];
         parsed_frame.header.magic[1] = candidate[1];
         parsed_frame.header.version = candidate[2];
@@ -161,8 +159,6 @@ int frame_parser(Ringbuffer *ringbuffer,Frame *frame)
             | static_cast<uint16_t>(candidate[6]);
         parsed_frame.temperature = frame_i32_read(candidate,temperature_offset);
         parsed_frame.temperatureScale = frame_i8_read(candidate,temperature_scale_offset);
-        parsed_frame.pressure = frame_i32_read(candidate,pressure_offset);
-        parsed_frame.pressureScale = frame_i8_read(candidate,pressure_scale_offset);
         parsed_frame.crc32 = expected_crc;
         parsed_frame.receivedAtUs = frame_received_at_us();
 

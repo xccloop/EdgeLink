@@ -1,9 +1,10 @@
 #pragma once
 
 #include "Tcp.hpp"
-#include "Frame.hpp"
+#include "TcpFrame.hpp"
 #include "CRC.hpp"
 #include "Epoll.hpp"
+#include "Storage.hpp"
 #include <cstdio>
 #include <sys/epoll.h>
 #include <array>
