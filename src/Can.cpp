@@ -1,6 +1,7 @@
 //这个文件我们来实现CAN通信
 #include "Can.hpp"
 #include <linux/can.h>
+#include <sys/types.h>
 #include <unistd.h>
 //在linux中，CAN通信与TCP通信的底层都是socket，也就是说它也可以接入epoll
 //同样的我们先把完整的CAN流程写出来然后再封装为类
@@ -105,3 +106,148 @@ void CAN_serve()
 
 */
 
+Can::Can()
+{
+    this->can_fd = -1;
+}
+
+Can::~Can()
+{
+    close(this->can_fd);
+}
+
+bool Can::init()
+{
+    struct sockaddr_can addr;
+    struct ifreq ifr {};
+    can_fd = socket(PF_CAN, SOCK_RAW, CAN_RAW);//创建套接字
+    if (can_fd < 0)
+    {
+        return false;
+    }
+    strcpy(ifr.ifr_name, "can0");//找到can0，也就是ifconfig -a显示的can0，注意要先插入usb-can才有
+    if (ioctl(can_fd, SIOCGIFINDEX, &ifr) < 0)//获取网络接口 can0 的索引
+    {
+        close(can_fd);
+        return false;
+    }
+    addr.can_family = AF_CAN;//CAN
+    addr.can_ifindex = ifr.ifr_ifindex;//can0的索引
+    //这句话中，reinterpret_cast是最强制的强制转换，他把sockaddr_can类型强制转化为了socket通用的sockaddr
+    //和tcp的bind一样，第二个都必须强制转化为sockaddr，这是历史遗留问题，暂且就当这么写吧
+    if (bind(can_fd, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) < 0)//绑定套接字和can0
+    {
+        close(can_fd);
+        return false;
+    }
+    return true;
+}
+
+int Can::receive(can_frame &receive)
+{
+    ssize_t nbytes = read(can_fd, &receive, sizeof(receive));
+    if(nbytes < 0)
+    {
+        return -1;
+    }
+    return nbytes;
+}
+
+bool Can::send(uint32_t can_id, const uint8_t *data, uint8_t len)
+{
+    if(can_fd < 0 || len > 8)
+    {
+        return false;
+    }
+
+    struct can_frame can_frame;
+    can_frame.can_id = can_id;
+    can_frame.can_dlc = len;
+    std::memcpy(can_frame.data,data,len);
+    ssize_t nbytes = write(can_fd, &can_frame, sizeof(can_frame));
+    
+    if(nbytes != sizeof(can_frame))
+    {
+        return false;
+    }
+
+    return true;
+}
+
+bool Can::setnoblocking()
+{
+    //与TCP设置非阻塞一致，我们可以将can以同样的方式设置非阻塞
+    int flags = fcntl(can_fd, F_GETFL, 0);
+    if (flags < 0)
+    {
+        return false;
+    }
+    if (fcntl(can_fd, F_SETFL, flags | O_NONBLOCK) < 0)
+    {
+        return false;
+    }
+    return true;
+} 
+
+int Can::fd() const
+{
+    return can_fd;
+}
+
+// ---------- 过滤（累加） ----------
+bool Can::addFilter(uint32_t can_id) {
+    if (can_fd < 0) return false;
+
+    struct can_filter f;
+    f.can_id = can_id;
+    f.can_mask = CAN_SFF_MASK;  // 标准帧全匹配（0x7FF）
+    filters_.push_back(f); //我们在头文件中定义了一个vector的filters，这句话的意思是将我们刚刚定义好的f也就是一条过滤规则给加入到vector这个可变数组当中
+
+    // 立即将整个列表应用到内核
+    return applyFiltersToKernel();
+}
+
+bool Can::clearFilters()
+{
+    if (can_fd < 0)
+        return false;
+
+    filters_.clear();
+
+    struct can_filter filter {};
+    filter.can_id = 0;
+    filter.can_mask = 0;
+
+    if (setsockopt(can_fd,
+                   SOL_CAN_RAW,
+                   CAN_RAW_FILTER,
+                   &filter,
+                   sizeof(filter)) < 0)
+    {
+        perror("setsockopt clear filter");
+        return false;
+    }
+
+    return true;
+}
+
+// 私有函数：将 filters_ 列表设置到内核
+bool Can::applyFiltersToKernel() {
+    if (can_fd < 0) return false;
+    if (filters_.empty()) {
+        // 无过滤规则 -> 接收所有
+        if (setsockopt(can_fd, SOL_CAN_RAW, CAN_RAW_FILTER, nullptr, 0) < 0) {
+            perror("setsockopt empty filter");
+            return false;
+        }
+        return true;
+    }
+
+    if (setsockopt(can_fd, SOL_CAN_RAW, CAN_RAW_FILTER,
+                   filters_.data(),
+                   filters_.size() * sizeof(struct can_filter)) < 0) {
+        perror("setsockopt add filter");
+        return false;
+    }
+    return true;
+}
