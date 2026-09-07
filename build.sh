@@ -10,5 +10,3 @@ cmake -B build
 # 2. 编译（-j 用全部 CPU 核提升编译速度）
 cmake --build build -j"$(nproc)"
 
-# 3. 运行
-./build/Edgehub

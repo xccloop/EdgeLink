@@ -26,10 +26,20 @@
 #include "common_headfile.hpp"
 #include <cstdio>
 
+static volatile sig_atomic_t g_running = 1;
+static void sig_handler(int) { g_running = 0; }
+
 int main()
 {
+    signal(SIGINT, sig_handler);
+    signal(SIGTERM, sig_handler);
+    signal(SIGPIPE, SIG_IGN);
+
+    uint32_t can_receive_id = 0x123;
+
     //首先我们先创建客户端然后使用epoll
     TcpServe tcpserve(TCPSERVE_PORT,TCPSERVE_BACKLOG);
+    Can can;
     Epoll epoll;
     Storage storage;
     /*
@@ -42,6 +52,25 @@ int main()
     //我创建了一张名叫 fd_table 的查号表。凭借一个 int 数字（文件描述符），我能瞬间查到它对应的 FdType 枚举值。”
     //使用哈希表我们就可以做到区分listen_fd,client_fd也为后面接入CAN做好准备
     std::unordered_map<int, FdType> fd_table;
+
+    if(can.init() == false)
+    {
+        return -1;
+    }
+
+    if(can.setnoblocking() == false)
+    {
+        return -1;
+    }
+
+    if(can.addFilter(can_receive_id) == false)
+    {
+        return -1;
+    }
+
+    int can_fd = can.fd();
+
+    fd_table.emplace(can_fd, FdType::Can);
 
     struct epoll_event events[EPOLLEVENT_SIZE];
 
@@ -63,6 +92,11 @@ int main()
     }
 
     if(epoll.add(tcp_fd,EPOLLIN|EPOLLET) == -1)
+    {
+        return -1;
+    }
+
+    if(epoll.add(can_fd,EPOLLIN|EPOLLET) == -1)
     {
         return -1;
     }
@@ -331,8 +365,59 @@ int main()
 
                     break;
                 }
+                case FdType::Can: //can_fd 可读，读取接收队列中的 CAN frame
+                {
+                    unsigned int event_mask = events[i].events; //这里用于知道本次数据具体是什么
+                    if(event_mask & EPOLLIN) //这里判断如果数据是EPOLLIN，也就是可读数据的话
+                    {
+                        while(true)//既然这次已经收到通知了，我就一直 read，直到把当前 CAN 接收队列彻底读空，
+                        //因为我们是Epoll ET所以他只会告诉你来数据了，而我们要读取得把它读完
+                        {
+                            struct can_frame can_frame;
+                            int receive_result = can.receive(can_frame);
+                            Message can_message{};
+                            //现在我们就收到数据了，要区分数据到底是来了多少
+
+                            //如果收到的数据和can_frame长度相等，也就意味着收到了完整的一帧，我们对这一帧进行解析然后存储
+                            if(receive_result == sizeof(can_frame))
+                            {
+                                can_message.nodeId = can_frame.data[0];
+                                can_message.sequence =
+                                    (static_cast<uint16_t>(can_frame.data[1]) << 8) |
+                                    static_cast<uint16_t>(can_frame.data[2]);
+                                can_message.temperature =
+                                    (static_cast<uint32_t>(can_frame.data[3]) << 24) |
+                                    (static_cast<uint32_t>(can_frame.data[4]) << 16) |
+                                    (static_cast<uint32_t>(can_frame.data[5]) << 8)  |
+                                    static_cast<uint32_t>(can_frame.data[6]);
+                                can_message.temperatureScale =
+                                    static_cast<int8_t>(can_frame.data[7]);
+                                can_message.receivedAtUs = frame_received_at_us();
+
+                                storage.insertMessage(can_message);
+
+                                continue;
+                            }
+                            if (receive_result < 0 && errno == EINTR)//这种情况代表着读取被打断，我们继续尝试读取
+                            {
+                                continue;
+                            }
+                            if (receive_result < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))//这种情况代表资源（缓冲区）暂时不可用，并非连接出错”
+                            {
+                                break;
+                            }
+                            if (receive_result < 0)//其余情况直接break
+                            {
+                                break;
+                            }
+                        }
+                    }
+                }
+                break;
             }
         }
     }
+
+
     return 0;
 }

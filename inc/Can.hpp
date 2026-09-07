@@ -41,3 +41,11 @@ private:
     // 内部函数：将当前 filters_ 列表应用到内核
     bool applyFiltersToKernel();
 };
+
+/*
+    can_frame.data:
+    nodeId             1 byte
+    sequence           2 byte
+    temperature        4 byte
+    temperatureScale   1 byte
+*/

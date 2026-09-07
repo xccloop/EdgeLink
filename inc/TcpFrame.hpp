@@ -55,3 +55,4 @@ struct TcpFrame
 int tcp_frame_parser(Ringbuffer *ringbuffer,TcpFrame *frame);
 
 static_assert(sizeof(TcpFrameHeader) == FRAME_HEADER_LENGTH, "TcpFrameHeader must be 7 bytes");
+int64_t frame_received_at_us();

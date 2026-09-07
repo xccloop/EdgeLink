@@ -44,12 +44,12 @@ int8_t frame_i8_read(const uint8_t data[],unsigned int offset)
     }
     return static_cast<int8_t>(raw - 0x100);
 }
+}
 
 int64_t frame_received_at_us()
 {
     using namespace std::chrono;
     return duration_cast<microseconds>(system_clock::now().time_since_epoch()).count();
-}
 }
 
 int tcp_frame_parser(Ringbuffer *ringbuffer,TcpFrame *frame)
@@ -167,3 +167,4 @@ int tcp_frame_parser(Ringbuffer *ringbuffer,TcpFrame *frame)
         return FRAME_PARSE_SUCCESS;
     }
 }
+

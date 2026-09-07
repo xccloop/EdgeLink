@@ -20,6 +20,7 @@ add_executable(Edgehub
     src/Epoll.cpp
     src/Storage.cpp
     src/Message.cpp
+    src/Can.cpp
 )
 
 # 为 Edgehub 链接 SQLite 库
