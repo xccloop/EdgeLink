@@ -1,0 +1,25 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug GD32F103RCT6 (ST-Link + OpenOCD)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/edegnode.elf",
+      "cwd": "${workspaceFolder}",
+      "MIMode": "gdb",
+      "miDebuggerPath": "C:\\Program Files (x86)\\GNU Tools ARM Embedded\\5.4 2016q3\\bin\\arm-none-eabi-gdb.exe",
+      "miDebuggerServerAddress": "localhost:3333",
+      "debugServerPath": "C:\\Tools\\openocd\\bin\\openocd.exe",
+      "debugServerArgs": "-s C:\\Tools\\openocd\\share\\openocd\\scripts -f ${workspaceFolder}/openocd.cfg",
+      "serverStarted": "Listening on port 3333 for gdb connections",
+      "preLaunchTask": "Build GD32F103RCT6",
+      "stopAtEntry": true,
+      "setupCommands": [
+        { "text": "monitor reset halt", "description": "Reset and halt target" },
+        { "text": "load", "description": "Download ELF through SWD" },
+        { "text": "monitor reset init", "description": "Reset after download" }
+      ]
+    }
+  ]
+}

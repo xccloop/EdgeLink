@@ -1,0 +1,33 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build GD32F103RCT6",
+      "type": "shell",
+      "command": "D:\\Ksoftware\\mingw64\\bin\\mingw32-make.exe",
+      "args": ["all"],
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": "$gcc"
+    },
+    {
+      "label": "Flash GD32F103RCT6 (OpenOCD)",
+      "type": "shell",
+      "command": "C:\\Tools\\openocd\\bin\\openocd.exe",
+      "args": [
+        "-s", "C:\\Tools\\openocd\\share\\openocd\\scripts",
+        "-f", "${workspaceFolder}/openocd.cfg",
+        "-c", "program ${workspaceFolder}/build/edegnode.elf verify reset exit"
+      ],
+      "dependsOn": "Build GD32F103RCT6",
+      "dependsOrder": "sequence",
+      "problemMatcher": []
+    },
+    {
+      "label": "Clean GD32F103RCT6",
+      "type": "shell",
+      "command": "D:\\Ksoftware\\mingw64\\bin\\mingw32-make.exe",
+      "args": ["clean"],
+      "problemMatcher": []
+    }
+  ]
+}
