@@ -1,4 +1,5 @@
 --target=arm-none-eabi
+--sysroot=C:/Program Files (x86)/GNU Tools ARM Embedded/5.4 2016q3/arm-none-eabi
 -mcpu=cortex-m3
 -mthumb
 -DGD32F10X_HD
