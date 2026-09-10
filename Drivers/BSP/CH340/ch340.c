@@ -63,9 +63,7 @@ void ch340_init()
     usart_transmit_config(USART0, USART_TRANSMIT_ENABLE);
     usart_enable(USART0);
 
-    //最后我们设置串口中断，和设置EXTI中断差别不大，这里不过多赘述
-    // 使能USART中断
-    nvic_irq_enable(USART0_IRQn, 0, 0);
+    //USART0的NVIC优先级由board_config_init统一配置
     // 使能串口接收中断
     usart_interrupt_enable(USART0, USART_INT_RBNE);
 

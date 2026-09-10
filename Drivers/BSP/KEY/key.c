@@ -1,7 +1,6 @@
 #include "key.h"
 #include "gd32f10x.h"
 #include "gd32f10x_gpio.h"
-#include "gd32f10x_misc.h"
 #include "gd32f10x_rcu.h"
 #include "gd32f10x_exti.h"
 
@@ -22,7 +21,7 @@
     Alternate: SPI2_NSS(4), I2S2_WS(4)
     Remap: TIMER1_CH0, TIMER1_ETI, PA15, SPI0_NSS
 
-    与led的gpio控制不同，我们看到PA15的default为JTDI并非普通的PA15，我们在使用之前要记得把他重映射为普通IO
+    与led的gpio控制不同，我们看到PA15的default为JTDI并非普通的PA15，board_config_init会将其重映射为普通IO。
     与led的简单高低输出不同，对于按键，为了后续加入freertos，我们先进行中断+标志位的方式实现
 */
 
@@ -35,20 +34,18 @@
 
 void key_init()
 {
-    //这次的初始化要考虑到的有，时钟，重映射，中断
-    rcu_periph_clock_enable(GPIOA);
-    rcu_periph_clock_enable(GPIOC);
+    //这次的初始化要考虑到的有，时钟和中断
+    rcu_periph_clock_enable(RCU_GPIOA);
+    rcu_periph_clock_enable(RCU_GPIOC);
 
     /*
         关于JTAG有三个宏给我们使用
         GPIO_SWJ_NONJTRST_REMAP          !< full SWJ(JTAG-DP + SW-DP),but without NJTRST 
         GPIO_SWJ_SWDPENABLE_REMAP        !< JTAG-DP disabled and SW-DP enabled 
         GPIO_SWJ_DISABLE_REMAP           !< JTAG-DP disabled and SW-DP disabled 
-        分别代表着玩真JTAG+SWD,禁用JTAG保留SWD，禁用JTAG和SWD，我们的PA15处于JTAG，因此我们选择第二个并进行ENABLE
-        此外因为要使用重映射，所以我们必须要启用AF时钟也就是AFIO，这是因为底层寄存器有AFIO位
+        分别代表着完整JTAG+SWD、禁用JTAG保留SWD、禁用JTAG和SWD。
+        PA15的复用选择及AFIO时钟由board_config_init统一完成。
     */
-    rcu_periph_clock_enable(RCU_AF);
-    gpio_pin_remap_config(GPIO_SWJ_SWDPENABLE_REMAP, ENABLE);
 
     //由于我们的按键时低电平有效，因此设置为上拉输入
     gpio_init(KEY1_PORT, GPIO_MODE_IPU , GPIO_OSPEED_50MHZ, KEY1_PIN);
@@ -62,7 +59,7 @@ void key_init()
     /*
         接下来是关于中断的部分
         中断分为很多种，基本上我们常见的外设上面都设有中断，如串口中断，SPI中断等等等，我们这里的中断是用与检测GPIO引脚变化的中断，所以我们需要使用外部中断（exti）
-        配置 EXTI 信号源的时候需要用到 AFIO 的外部中断控制寄存器 AFIO_EXTISSx，所以用到 EXTI 必须开启 AFIO 时钟，不过我们重映射的时候已经开启了，这里就不用了
+        配置 EXTI 信号源的时候需要用到 AFIO 的外部中断控制寄存器 AFIO_EXTISSx，AFIO时钟已由board_config_init开启。
         通过查询数据手册后发现，EXTI中断源对应的EXTI事件是一一对应的编号，如我们的PC1,PA8,PA15,分别代表着exti1，exti8，exti15
     */
     //现在我们来配置exti来源选择
@@ -93,19 +90,6 @@ void key_init()
     exti_interrupt_flag_clear(EXTI_8);
     exti_interrupt_flag_clear(EXTI_15); 
 
-    /*
-        最后是中断的关键，我们来设置nvic优先级，nvic:它是 Cortex-M 内核里面专门负责管理“所有中断”的模块。我们使用的CAN中断，SPI中断等等等等中断都放在了这里面
-        此外我们发现最后两位形参，这两位形参是配置抢占优先级和子优先级的，数字越大意味着中断优先级越高，比如先看抢占优先级比大小再看子优先级比大小
-        抢占优先级和子优先级一共有四位，我们通过nvic_priority_group_set，如我们这里配置的也就代表着抢占优先级占两位，子优先级占两位
-        NVIC_PRIGROUP_PRE0_SUB4，再比如这个意味着抢占0位，子占4位
-        最后我们来看nvic_irq_enable函数，第一个函数代表着我们要使能哪个中断，后两位就是我们提到的抢占优先级和子优先级
-        我们这里发现，配置EXTI8,EXTI15的中断函数并不是如同EXTI1_IEQn的写法,而是5-9，10-15的写法，这是因为实际情况中没有那么多的资源去给exti
-        因此我们让5-9位一组exti，10-15位另外一组exti，只要有这区间内的exti响应，对应的中断函数就会触发，但是我们又知道我的按键只有一个那该怎么进行区分
-        这就提到了我们之前的中断标志位，具体的实现在Exti写吧
-    */
-    nvic_priority_group_set(NVIC_PRIGROUP_PRE2_SUB2);
-    nvic_irq_enable(EXTI1_IRQn, 2U, 0U);
-    nvic_irq_enable(EXTI5_9_IRQn , 2U, 1U);
-    nvic_irq_enable(EXTI10_15_IRQn, 2U, 3U);
+    //KEY的EXTI NVIC优先级由board_config_init统一配置。
 
 }

@@ -1,4 +1,7 @@
 #include "adc.h"
+#include "gd32f10x_adc.h"
+#include "gd32f10x_gpio.h"
+#include "gd32f10x_rcu.h"
 
 /*
     这个文件我们来实现ADC采样，在板卡中ADC采样时监测12V电池电量的手段，我们采用的是PA1
@@ -7,7 +10,10 @@
     Default: PA1
     Alternate: USART1_RTS, ADC012_IN1(5), TIMER1_CH1, 
     TIMER4_CH1(4)
+
 */
+#define ADC_PORT GPIOA
+#define ADC_PIN GPIO_PIN_1
 
 /*
     这里我们顺带复习一下什么叫做ADC,即模数传化，我们常说的电压如电池电压等电压我们叫做模拟电路，在模拟电路中，电压是连续的
@@ -27,9 +33,18 @@
     ADC_Value ≈ (V / 3.3) × (2^x - 1)
     这个结果不是简单地向上取整，而是由 ADC 硬件量化得到对应的数字编码。
     最后，ADC 硬件会自动把转换得到的数字结果写入 ADC 数据寄存器，并设置转换完成标志位。后续 CPU 就可以读取 ADC 数据寄存器，得到这次采样后的数字值。
-
 */
 void adc_init()
 {
+    /*
+        再开始写ADC之前我们先去datasheet找到我们想要的信息，我们定位到 ADC characteristics(For GD32F103xC/D/E/F/G/I/K devices)，我们是RC是符合这个的
+        我们可以看到fADCmin = 0.6,fADCmax = 14(mhz)注意我们这里不是要配置系统时钟是14mhz而是配置adc的时钟，在GD32F103xx clock tree章节我们可以分析出
+        外部晶振起振后，通分频等操作变成108MHZ到CK_AHB中，然后再进入到APB2中，这里显示APB2的分频是不固定的要自己配置，然后再分频进入到ADC中
+    */
+    rcu_periph_clock_enable(RCU_GPIOA);
+    rcu_periph_clock_enable(RCU_ADC1);
+    //关于时钟分频这种会影响全局的我们统一放在board_config中管理
 
+    //这里设置gpio为模拟输入，因为是读取电压嘛
+    gpio_init(ADC_PORT,GPIO_MODE_AIN ,GPIO_OSPEED_50MHZ, ADC_PIN);
 }

@@ -46,7 +46,7 @@ void esp12s_init()
     usart_transmit_config(USART1, USART_TRANSMIT_ENABLE);
     usart_enable(USART1);
 
-    nvic_irq_enable(USART1_IRQn, 0, 1);
+    //USART1的NVIC优先级由board_config_init统一配置
     usart_interrupt_enable(USART1, USART_INT_RBNE);
     //到目前为止，我们进行了串口的基础配置然后接下来我们要使用ESP12s的AT指令集合用于将命令发送到ESP12s进行相关的初始化
 

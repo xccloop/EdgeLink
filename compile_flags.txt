@@ -7,6 +7,7 @@
 -std=c11
 -IUser
 -IDrivers/BSP
+-IDrivers/BOARD
 -IUser/APP
 -IDrivers/CMSIS/Include
 -IDrivers/CMSIS/Device/GD/GD32F10x/Include
