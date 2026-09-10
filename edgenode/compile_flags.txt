@@ -1,0 +1,14 @@
+--target=arm-none-eabi
+--sysroot=C:/Program Files (x86)/GNU Tools ARM Embedded/5.4 2016q3/arm-none-eabi
+-mcpu=cortex-m3
+-mthumb
+-DGD32F10X_HD
+-DUSE_STDPERIPH_DRIVER
+-std=c11
+-IUser
+-IDrivers/BSP
+-IDrivers/BOARD
+-IUser/APP
+-IDrivers/CMSIS/Include
+-IDrivers/CMSIS/Device/GD/GD32F10x/Include
+-IDrivers/GD32F10x_Standard_Peripheral/Inc

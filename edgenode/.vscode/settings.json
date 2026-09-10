@@ -1,0 +1,10 @@
+{
+  "C_Cpp.default.compilerPath": "C:\\Program Files (x86)\\GNU Tools ARM Embedded\\5.4 2016q3\\bin\\arm-none-eabi-gcc.exe",
+  "C_Cpp.default.intelliSenseMode": "windows-gcc-arm",
+  "C_Cpp.default.cStandard": "c11",
+  "C_Cpp.default.cppStandard": "c++14",
+  "nasm.validate": false,
+  "files.exclude": {
+    "build": true
+  }
+}
