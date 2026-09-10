@@ -1,4 +1,6 @@
 #include "adc.h"
+#include "board_time.h"
+#include "gd32f10x.h"
 #include "gd32f10x_adc.h"
 #include "gd32f10x_gpio.h"
 #include "gd32f10x_rcu.h"
@@ -42,9 +44,59 @@ void adc_init()
         外部晶振起振后，通分频等操作变成108MHZ到CK_AHB中，然后再进入到APB2中，这里显示APB2的分频是不固定的要自己配置，然后再分频进入到ADC中
     */
     rcu_periph_clock_enable(RCU_GPIOA);
-    rcu_periph_clock_enable(RCU_ADC1);
+    rcu_periph_clock_enable(RCU_ADC0);
     //关于时钟分频这种会影响全局的我们统一放在board_config中管理
 
     //这里设置gpio为模拟输入，因为是读取电压嘛
     gpio_init(ADC_PORT,GPIO_MODE_AIN ,GPIO_OSPEED_50MHZ, ADC_PIN);
+
+    //现在我们来配置ADC独有的配置
+    //这里配置的是ADC模式,相关的宏存在于/* ADC sync mode */，我们可以跳转过去查看其注释，这里的意思是所有ADC独立工作，因为我们只用到一个ADC所以不需要很复杂
+    adc_mode_config(ADC_MODE_FREE);
+
+    //这一行用于设置连续转化模式（我们是单通道），配置好以后代表转化一次ADC以后继续转化，如果是多通道可以采用扫描模式（ADC_SCAN_MODE）
+    //这里的函数是开启ADC的特别功能而不是特指转化和扫描,但是我们的ADC服务于电池电量监测，因此无需使用连续而是一会儿来一次
+    adc_special_function_config(ADC0, ADC_CONTINUOUS_MODE ,DISABLE);
+
+    //这里配置的是最终的ADC的值是存储在寄存器的什么位置，我们查看ADC characteristics的Sampling rate的一栏发现，我们使用的ADC均为12位
+    //但是ADC的数据存储寄存器有16位（详情见GD32F10x0_usermannul -- 数据寄存器  (ADC_RDATA)）因此我们要选择讲述存储在那里的十二位
+    //从右边开始数12位就是右对齐，反之左对齐，我们这里配置右对齐
+    adc_data_alignment_config(ADC0, ADC_DATAALIGN_RIGHT);
+
+    //这里配置的是ADC的外部触发源，我们不需要，所以舍去，值得一提的是我们可以选择其余事件比如EXTI作为ADC的触发
+    //第一个是ADC0，第二个是所有通道，第三个是ADC012都关闭，详情见/* for ADC0 and ADC1 regular channel */
+    //第二个函数同样是配置外部触发源，我们这里选择开启是因为外部事件source关闭，但是我们可以自己手动创建事件这就软件进行ADC的触发，可以保留
+    adc_external_trigger_source_config(ADC0,ADC_REGULAR_CHANNEL,ADC0_1_2_EXTTRIG_REGULAR_NONE);
+    adc_external_trigger_config(ADC0, ADC_REGULAR_CHANNEL, ENABLE);
+
+    //这里配置的是规则通道序列的长度，我们现在只需要采集PA1对应的ADC通道1，因此这一轮规则转换里面只需要放1个通道
+    //注意这里最后的1不是ADC_CHANNEL_1，而是代表规则转换序列里面一共有1个转换位置
+    adc_channel_length_config(ADC0, ADC_REGULAR_CHANNEL, 1);
+
+    //这里开始配置这个唯一的规则通道，第一个参数代表我们使用ADC0，第二个参数0代表这个通道排在规则转换序列的第0位
+    //第三个参数ADC_CHANNEL_1才是真正代表采集ADC通道1，也就是PA1对应的ADC输入
+    //最后一个参数ADC_SAMPLETIME_55POINT5代表这个通道的采样时间为55.5个ADC时钟周期，用来给内部采样电容留出足够的充电时间
+    adc_regular_channel_config(ADC0,0,ADC_CHANNEL_1,ADC_SAMPLETIME_55POINT5);
+
+    //最后是使能ADC
+    adc_enable(ADC0);
+    delay_ms(1);
+    //这个函数用于使能ADC校准
+    adc_calibration_enable(ADC0);
+}
+
+uint16_t adc_data_get()
+{
+    //这里使用软件触发开始一次规则通道的ADC转换，因为我们前面没有使用定时器或者EXTI等外部事件进行触发
+    adc_software_trigger_enable(ADC0, ADC_REGULAR_CHANNEL);
+
+    //这里等待ADC转换完成，ADC_FLAG_EOC代表End Of Conversion，也就是规则通道转换完成标志位
+    //当EOC还没有被置位时就在这里等待，等ADC硬件完成采样和转换以后才继续往下执行
+    while (RESET == adc_flag_get(ADC0, ADC_FLAG_EOC))
+    {
+    }
+
+    //这里直接读取ADC规则通道的数据寄存器并返回原始值
+    //GD32F103的ADC为12位，因此正常情况下返回值范围为0~4095
+    return (uint16_t)adc_regular_data_read(ADC0);
 }
