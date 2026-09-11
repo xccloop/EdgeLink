@@ -30,7 +30,7 @@
     Remap: TIMER0_CH0_ON 
 */
 
-#define BMP280_SPI_PORT GPIOA
+#define BMP280_CS_PORT GPIOA
 #define BMP280_CS GPIO_PIN_4
 #define BMP280_STATUS_IM_UPDATE 0x01U
 #define BMP280_STATUS_MEASURING 0x08U
@@ -76,15 +76,15 @@ uint8_t bmp280_init(void)
         这也是为什么 SPI 要有半个周期的间隔：给线路上的电压足够时间稳定。
 
     */
-    gpio_bit_set(BMP280_SPI_PORT, BMP280_CS);
-    gpio_init(BMP280_SPI_PORT,GPIO_MODE_OUT_PP,GPIO_OSPEED_50MHZ,BMP280_CS);
+    gpio_bit_set(BMP280_CS_PORT, BMP280_CS);
+    gpio_init(BMP280_CS_PORT,GPIO_MODE_OUT_PP,GPIO_OSPEED_50MHZ,BMP280_CS);
     //SPI0的PA5、PA6、PA7由spi0_bus_init()统一配置，BMP280只配置自己的CS。
     //因此SPI配置移动到了spi0_bus中
 
     //CS拉低进行通讯，我们在初始化拉高防止一些特殊情况将BMP选中
     /* 修改：每次初始化先清除上一次成功状态，失败时不会保留旧校准参数。 */
     bmp280_is_initialized = 0U;
-    gpio_bit_set(BMP280_SPI_PORT, BMP280_CS);
+    gpio_bit_set(BMP280_CS_PORT, BMP280_CS);
 
     /* 修改：chip_id是本驱动的第一层运行证据；不是0x58就不继续读校准或温度。 */
     if ((bmp280_data_get(BMP280_REG_ID, &chip_id) == 0U) || (chip_id != BMP280_CHIP_ID)) {
@@ -119,7 +119,7 @@ uint8_t bmp280_init(void)
 
 static void bmp280_cs_select()
 {
-    gpio_bit_reset(BMP280_SPI_PORT, BMP280_CS);
+    gpio_bit_reset(BMP280_CS_PORT, BMP280_CS);
 }
 
 static uint8_t bmp280_cs_release(void)
@@ -128,7 +128,7 @@ static uint8_t bmp280_cs_release(void)
 
     /* 修改：最后一个SCK结束后再释放CS，保证BMP280完整接收最后一位数据。 */
     idle = spi0_bus_wait_idle();
-    gpio_bit_set(BMP280_SPI_PORT, BMP280_CS);
+    gpio_bit_set(BMP280_CS_PORT, BMP280_CS);
     return idle;
 }
 

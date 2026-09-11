@@ -26,6 +26,9 @@ static void board_nvic_config(void)
     nvic_irq_enable(EXTI1_IRQn, 2U, 0U);
     nvic_irq_enable(EXTI5_9_IRQn, 2U, 1U);
     nvic_irq_enable(EXTI10_15_IRQn, 2U, 3U);
+
+    /* CAN接受中断 */
+    nvic_irq_enable(USBD_LP_CAN0_RX0_IRQn, 3U, 0U);
 }
 
 static void board_debug_config(void)

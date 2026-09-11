@@ -14,9 +14,11 @@ LDFLAGS := $(MCU) -TOCD/linker/gd32f103rct6.ld -Wl,--gc-sections -Wl,-Map=$(BUIL
 
 DRIVER_SOURCES := Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_rcu.c \
                   Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_misc.c \
+				  Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_dbg.c \
 				  Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_gpio.c \
 				  Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_exti.c \
 				  Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_usart.c \
+				  Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_can.c \
 				  Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_spi.c
 BSP_SOURCES := $(shell powershell -NoProfile -Command "$$root = (Get-Location).Path; Get-ChildItem -LiteralPath Drivers/BSP -Filter *.c -Recurse -File | ForEach-Object { $$_.FullName.Substring($$root.Length + 1).Replace('\','/') }")
 BOARD_SOURCES := $(wildcard Drivers/BOARD/*.c)

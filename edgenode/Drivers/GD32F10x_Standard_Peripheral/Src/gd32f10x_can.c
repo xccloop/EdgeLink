@@ -33,6 +33,7 @@ OF SUCH DAMAGE.
 */
 
 #include "gd32f10x_can.h"
+#include "gd32f10x_dbg.h"
 
 #define CAN_ERROR_HANDLE(s)     do{}while(1)
     
