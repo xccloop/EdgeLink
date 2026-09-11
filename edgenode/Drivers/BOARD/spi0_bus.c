@@ -1,7 +1,13 @@
 #include "spi0_bus.h"
+#include "board_time.h"
 #include "gd32f10x_gpio.h"
 #include "gd32f10x_rcu.h"
 #include "gd32f10x_spi.h"
+
+#define SPI0_BUS_TIMEOUT_MS 10U
+#define SPI0_BUS_MAX_POLLS 100000U
+
+static uint8_t spi0_bus_faulted;
 
 /*
     由于BMP280,W25Q32使用同一总线，为了避免重复初始化，这里我们移动到单独文件
@@ -50,34 +56,98 @@ void spi0_bus_init(void)
     spi_init_handler.prescale = SPI_PSC_16;
     spi_init(SPI0, &spi_init_handler);
     spi_enable(SPI0);
+
+    /* 重新初始化SPI0是清除故障锁定、重新开始使用这条共享总线的显式操作。 */
+    spi0_bus_faulted = 0U;
 }
 
 /*
     我们在这里做SPI0的基础建设
     我们知道SPI位全双工通信，这也就意味着当主设备向从设备发送一个字节的时候，同样会得到从设备向主设备发送的一个字节，因此这个函数的逻辑我们就确定了
 */
-uint8_t spi0_tansfer_data(uint8_t data)
+static void spi0_receive_cleanup(void)
 {
-    /* 等待发送寄存器空，才能写入本次要发送的数据。 */
-    while (spi_i2s_flag_get(SPI0, SPI_FLAG_TBE) == RESET) {
+    /*
+        修改：上一次接收超时后，迟到字节可能仍留在接收寄存器。
+        旧代码不清理它，下一笔传输会把旧字节误当作新的从机回复，导致寄存器数据错位。
+    */
+    while (spi_i2s_flag_get(SPI0, SPI_FLAG_RBNE) == SET) {
+        (void)spi_i2s_data_receive(SPI0);
     }
-    spi_i2s_data_transmit(SPI0, data);
+    (void)SPI_STAT(SPI0);
+}
 
-    /* 发送数据产生8个时钟后，等待从设备回传的字节进入接收寄存器。 */
+static uint8_t spi0_wait_flag(uint32_t flag, FlagStatus expected)
+{
+    uint32_t start = board_systick_ms;
+    uint32_t polls = SPI0_BUS_MAX_POLLS;
+
+    while (spi_i2s_flag_get(SPI0, flag) != expected) {
+        /*
+            修改：旧代码无限等待硬件标志。接线、供电或SPI异常时CPU会永久停在这里，
+            主循环中的ESP、CAN、RS485、显示等后续代码都无法执行。
+        */
+        if ((board_systick_ms - start) >= SPI0_BUS_TIMEOUT_MS) {
+            return 0U;
+        }
+        /*
+            修改：若SysTick尚未启动、全局中断关闭或在中断上下文调用，旧的毫秒超时不会前进。
+            轮询次数上限不依赖中断，仍能让函数有限时间返回失败。
+        */
+        if (polls == 0U) {
+            return 0U;
+        }
+        polls--;
+    }
+    return 1U;
+}
+
+uint8_t spi0_tansfer_data(uint8_t send_data, uint8_t *receive_data)
+{
+    if ((receive_data == 0) || (spi0_bus_faulted != 0U)) {
+        /*
+            修改：若上一笔传输直到TRANS超时，SPI状态已不可信。
+            旧代码仍会继续选中下一颗设备，它可能接收残余时钟；现在拒绝后续传输，
+            必须由上层显式重新调用spi0_bus_init()后才会恢复使用。
+        */
+        return 0U;
+    }
+
+    spi0_receive_cleanup();
+
+    if (spi0_wait_flag(SPI_FLAG_TBE, SET) == 0U) {
+        return 0U;
+    }
+    spi_i2s_data_transmit(SPI0, send_data);
+
+    /*
+        修改：旧接口只能返回收到的字节，因此真数据0x00和超时返回0x00无法区分。
+        新接口以返回值表示成功/失败，并经receive_data指针带回真实接收字节。
+    */
     /*
         我们之前配置了SPI0一次发送8一次传输单位就是 8 bit，即 1 byte。SPI 每来一个时钟沿传一位数据，所以这里是8个时钟
     */
-    while (spi_i2s_flag_get(SPI0, SPI_FLAG_RBNE) == RESET) {
+    if (spi0_wait_flag(SPI_FLAG_RBNE, SET) == 0U) {
+        spi0_bus_wait_idle();
+        spi0_receive_cleanup();
+        return 0U;
     }
-    return (uint8_t)spi_i2s_data_receive(SPI0);
+    *receive_data = (uint8_t)spi_i2s_data_receive(SPI0);
+    return 1U;
 }
 
-void spi0_bus_wait_idle(void)
+uint8_t spi0_bus_wait_idle(void)
 {
+    uint8_t idle;
+
     /*
         修改：在CS拉高结束一笔事务前确认最后一个字节已发完。
         RBNE只说明接收寄存器已有数据；TRANS清零才说明SPI不再输出时钟。
     */
-    while (spi_i2s_flag_get(SPI0, SPI_FLAG_TRANS) == SET) {
+    idle = spi0_wait_flag(SPI_FLAG_TRANS, RESET);
+    if (idle == 0U) {
+        /* 结束CS前仍应释放当前从设备，但本次启动内不再允许任何后续SPI事务。 */
+        spi0_bus_faulted = 1U;
     }
+    return idle;
 }

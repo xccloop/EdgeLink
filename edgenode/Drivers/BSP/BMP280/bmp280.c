@@ -49,17 +49,18 @@ static bmp280_calib_t bmp280_calib;
 static uint8_t bmp280_is_initialized;
 
 static void bmp280_cs_select(void);
-static void bmp280_cs_release(void);
-static uint8_t bmp280_data_get(uint8_t reg);
-static void bmp280_reg_data_get(uint8_t reg, uint8_t *data, uint8_t length);
-static void bmp280_register_write(uint8_t reg, uint8_t data);
+static uint8_t bmp280_cs_release(void);
+static uint8_t bmp280_data_get(uint8_t reg, uint8_t *data);
+static uint8_t bmp280_reg_data_get(uint8_t reg, uint8_t *data, uint8_t length);
+static uint8_t bmp280_register_write(uint8_t reg, uint8_t data);
 static uint8_t bmp280_status_wait_clear(uint8_t mask, uint32_t timeout_ms);
 static uint16_t bmp280_u16_from_le(const uint8_t *data);
-static void bmp280_calibration_read(void);
+static uint8_t bmp280_calibration_read(void);
 static float bmp280_temperature_calculate(const bmp280_calib_t *calib, uint32_t temperature_raw);
 
 uint8_t bmp280_init(void)
 {
+    uint8_t chip_id;
     /*
         在此，我们来学习什么是SPI
         SPI有四根线，分别是CS,SCK,MISO,MOSI，SPI通信的时候我们称一端位主设备，一端为从设备，一个主设备能够拥有多个从设备，
@@ -86,7 +87,7 @@ uint8_t bmp280_init(void)
     gpio_bit_set(BMP280_SPI_PORT, BMP280_CS);
 
     /* 修改：chip_id是本驱动的第一层运行证据；不是0x58就不继续读校准或温度。 */
-    if (bmp280_data_get(BMP280_REG_ID) != BMP280_CHIP_ID) {
+    if ((bmp280_data_get(BMP280_REG_ID, &chip_id) == 0U) || (chip_id != BMP280_CHIP_ID)) {
         return 0U;
     }
 
@@ -94,13 +95,17 @@ uint8_t bmp280_init(void)
     if (bmp280_status_wait_clear(BMP280_STATUS_IM_UPDATE, BMP280_STATUS_TIMEOUT_MS) == 0U) {
         return 0U;
     }
-    bmp280_calibration_read();
+    if (bmp280_calibration_read() == 0U) {
+        return 0U;
+    }
 
     /*
         修改：0x23 = 温度过采样x1 + 压力跳过 + normal模式。
         复位后的ctrl_meas为0，温度测量被跳过；这里配置后0xFA~0xFC才会持续更新。
     */
-    bmp280_register_write(BMP280_REG_CTRL_MEAS, BMP280_CTRL_MEAS_TEMP_X1_NORMAL);
+    if (bmp280_register_write(BMP280_REG_CTRL_MEAS, BMP280_CTRL_MEAS_TEMP_X1_NORMAL) == 0U) {
+        return 0U;
+    }
 
     /* 修改：等待首个x1温度转换完成，避免把复位/旧数据作为第一笔有效温度。 */
     delay_ms(5U);
@@ -117,67 +122,103 @@ static void bmp280_cs_select()
     gpio_bit_reset(BMP280_SPI_PORT, BMP280_CS);
 }
 
-static void bmp280_cs_release()
+static uint8_t bmp280_cs_release(void)
 {
+    uint8_t idle;
+
     /* 修改：最后一个SCK结束后再释放CS，保证BMP280完整接收最后一位数据。 */
-    spi0_bus_wait_idle();
+    idle = spi0_bus_wait_idle();
     gpio_bit_set(BMP280_SPI_PORT, BMP280_CS);
+    return idle;
 }
 
 /*
     单寄存器读取：CS拉低后，第一字节是“读reg”的控制字节；第二个0x00只用来
     产生时钟，返回值才是reg中的数据。
 */
-static uint8_t bmp280_data_get(uint8_t reg)
+static uint8_t bmp280_data_get(uint8_t reg, uint8_t *data)
 {
-    uint8_t bmp280_return_data;
+    uint8_t ignored_data;
+    uint8_t success = 1U;
 
     bmp280_cs_select();
-    spi0_tansfer_data(reg | 0x80U);
-    bmp280_return_data = spi0_tansfer_data(0x00U);
-    bmp280_cs_release();
-    return bmp280_return_data;
+    if (spi0_tansfer_data(reg | 0x80U, &ignored_data) == 0U) {
+        success = 0U;
+    } else if (spi0_tansfer_data(0x00U, data) == 0U) {
+        success = 0U;
+    }
+
+    /* 修改：旧代码即使SPI卡住也会把某个字节当寄存器值继续计算；现在失败会向上返回。 */
+    if (bmp280_cs_release() == 0U) {
+        success = 0U;
+    }
+    return success;
 }
 
 /*
     修改：连续读只能有一对CS边界。BMP280在读命令后会自动递增地址，
     因而一个命令加length个dummy即可依次读回reg、reg+1……的数据。
 */
-static void bmp280_reg_data_get(uint8_t reg, uint8_t *data, uint8_t length)
+static uint8_t bmp280_reg_data_get(uint8_t reg, uint8_t *data, uint8_t length)
 {
     uint8_t i;
+    uint8_t ignored_data;
+    uint8_t success = 1U;
 
     bmp280_cs_select();
-    spi0_tansfer_data(reg | 0x80U);
-    for (i = 0U; i < length; i++) {
-        data[i] = spi0_tansfer_data(0x00U);
+    if (spi0_tansfer_data(reg | 0x80U, &ignored_data) == 0U) {
+        success = 0U;
     }
-    bmp280_cs_release();
+    for (i = 0U; (i < length) && (success != 0U); i++) {
+        if (spi0_tansfer_data(0x00U, &data[i]) == 0U) {
+            success = 0U;
+        }
+    }
+    if (bmp280_cs_release() == 0U) {
+        success = 0U;
+    }
+    return success;
 }
 
-static void bmp280_register_write(uint8_t reg, uint8_t data)
+static uint8_t bmp280_register_write(uint8_t reg, uint8_t data)
 {
+    uint8_t ignored_data;
+    uint8_t success = 1U;
+
     /* 修改：写操作的bit7必须为0，控制字节后紧接着发送写入的数据。 */
     bmp280_cs_select();
-    spi0_tansfer_data(reg & 0x7FU);
-    spi0_tansfer_data(data);
-    bmp280_cs_release();
+    if (spi0_tansfer_data(reg & 0x7FU, &ignored_data) == 0U) {
+        success = 0U;
+    } else if (spi0_tansfer_data(data, &ignored_data) == 0U) {
+        success = 0U;
+    }
+    if (bmp280_cs_release() == 0U) {
+        success = 0U;
+    }
+    return success;
 }
 
 static uint8_t bmp280_status_wait_clear(uint8_t mask, uint32_t timeout_ms)
 {
+    uint8_t status;
+
     /*
         修改：状态轮询有明确超时；传感器异常或接线故障时bmp280_init()会失败，
         而不是让CPU永远停在while循环里。
     */
-    while ((bmp280_data_get(BMP280_REG_STATUS) & mask) != 0U) {
+    while (1) {
+        if (bmp280_data_get(BMP280_REG_STATUS, &status) == 0U) {
+            return 0U;
+        }
+        if ((status & mask) == 0U) {
+            return 1U;
+        }
         if (timeout_ms == 0U) {
             return 0U;
         }
         delay_ms(1U);
         timeout_ms--;
     }
-    return 1U;
 }
 
 /* 这个函数是辅助calib数据移动到bmp280_calib中的。 */
@@ -186,11 +227,13 @@ static uint16_t bmp280_u16_from_le(const uint8_t *data)
     return ((uint16_t)data[1] << 8) | data[0];
 }
 
-static void bmp280_calibration_read(void)
+static uint8_t bmp280_calibration_read(void)
 {
     uint8_t calib[BMP280_CALIB_LENGTH];
 
-    bmp280_reg_data_get(BMP280_REG_CALIB_START, calib, BMP280_CALIB_LENGTH);
+    if (bmp280_reg_data_get(BMP280_REG_CALIB_START, calib, BMP280_CALIB_LENGTH) == 0U) {
+        return 0U;
+    }
     bmp280_calib.dig_T1 = bmp280_u16_from_le(&calib[0]);
     bmp280_calib.dig_T2 = (int16_t)bmp280_u16_from_le(&calib[2]);
     bmp280_calib.dig_T3 = (int16_t)bmp280_u16_from_le(&calib[4]);
@@ -203,6 +246,7 @@ static void bmp280_calibration_read(void)
     bmp280_calib.dig_P7 = (int16_t)bmp280_u16_from_le(&calib[18]);
     bmp280_calib.dig_P8 = (int16_t)bmp280_u16_from_le(&calib[20]);
     bmp280_calib.dig_P9 = (int16_t)bmp280_u16_from_le(&calib[22]);
+    return 1U;
 }
 
 /* 根据BMP280数据手册的温度补偿公式，返回单位：℃。 */
@@ -230,7 +274,10 @@ float bmp280_temperature_get(void)
     }
 
     /* 修改：0xFA、0xFB、0xFC必须作为一笔连续读取，避免在CS低时重复发读命令。 */
-    bmp280_reg_data_get(BMP280_REG_TEMP_MSB, temperature_data, 3U);
+    if (bmp280_reg_data_get(BMP280_REG_TEMP_MSB, temperature_data, 3U) == 0U) {
+        /* 修改：旧代码在传输失败后仍会拼接残缺数据并返回伪温度。 */
+        return BMP280_TEMPERATURE_ERROR;
+    }
 
     /* 修改：XLSB只有bit7..4有效，右移4位后才是adc_T的bit3..0。 */
     temperature_raw = ((uint32_t)temperature_data[0] << 12)
