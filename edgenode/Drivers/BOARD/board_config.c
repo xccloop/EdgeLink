@@ -1,4 +1,5 @@
 #include "board_config.h"
+#include "spi0_bus.h"
 #include "gd32f10x.h"
 #include "gd32f10x_gpio.h"
 #include "gd32f10x_misc.h"
@@ -53,5 +54,5 @@ void board_config_init(void)
     board_debug_config();
     board_clock_config();
     board_systick_config();
+    spi0_bus_init();
 }
-
