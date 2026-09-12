@@ -36,6 +36,41 @@
     Remap: TIMER2_CH3 
 */
 
+/*
+    这个文件把ST7789 IPS屏的刷屏过程封装成BSP层，APP只需要调用ips_init()完成一次性硬件初始化，再反复调用ips_flush_line()逐行提交RGB565像素数据，
+    不需要直接碰SPI、DMA、CS/DC或ST7789命令；底层使用SPI2的PB3(SCK)、PB5(MOSI)以及PC4(CS)、PC5(DC)、PC8(RST)、PC9(BLK)，因为240×320的RGB565全屏有153600字节，
+    若让CPU逐字节写SPI会长期占用CPU，所以用DMA1_CH1把APP准备好的行缓冲区自动搬到SPI2数据寄存器，SPI2再通过PB3/PB5发给屏幕。静态变量ips_initialized防止重复初始化
+    ，ips_dma_active表示DMA是否正在占用APP缓冲区，ips_dma_deadline_ms用于传输超时判断。ips_dma_stop()负责关闭DMA1_CH1和SPI2的DMA发送请求；
+    ips_dma_abort()在超时或DMA错误时统一收尾，清除标志、释放active并拉高CS；ips_spi_wait_tbe()等待SPI发送缓冲区为空，ips_spi_wait_idle()等待SPI移位寄存器真正空闲，
+    二者都带超时；ips_write_command_data()在一次CS有效期内先拉低DC发命令、再拉高DC发参数，最后等SPI空闲并拉高CS，所有ST7789命令都通过它发送。
+    ips_init()打开GPIOB、GPIOC、SPI2、DMA1时钟，把PB3/PB5配成复用推挽，把CS/DC/RST/BLK配成推挽输出并先设安全电平
+    ，配置SPI2为Mode0、主机、只发送、8bit、9MHz、软件NSS，配置DMA1_CH1为内存到外设、内存地址递增、8bit宽度、外设地址固定为SPI_DATA(SPI2)、高优先级，
+    然后复位ST7789并依次发送软件复位、退出睡眠、RGB565、横屏扫描、打开显示等命令，最后打开背光并置ips_initialized。ips_dma_start()在每次刷行时被调用，
+    它检查初始化状态、data指针、byte_count、DMA空闲状态，并确认整段源数据落在GD32F103RCT6的48KB SRAM范围内，同时确认SPI2不在传输，
+    然后关闭DMA通道、重设内存地址和传输数量、清除旧标志、拉低CS、拉高DC、使能SPI2的DMA发送请求和DMA1_CH1，并记录超时时间。ips_dma_poll()用于轮询本次DMA是否完成，
+    若active为0则返回IDLE，若超时或DMA错误则调用ips_dma_abort()并返回ERROR，若DMA完成标志未置位则返回BUSY，若DMA完成则先关闭DMA和SPI的DMA请求，
+    再等待SPI2的TRANS清零，只有SPI真正空闲后才清除标志、释放active、拉高CS并返回COMPLETE。ips_memory_write_begin()在DMA空闲时设置一行窗口，先检查坐标和宽高是否越界
+    ，再计算x_end/y_end，通过0x2A设置列地址、0x2B设置行地址、0x2C准备写内存。ips_flush_line()是开放给APP的唯一刷行接口，它先调用ips_dma_poll()检查上一行是否完成，
+    若BUSY则返回IPS_FLUSH_BUSY且本次data不提交，若ERROR则返回IPS_FLUSH_ERROR，若data为NULL则只确认上一行并返回IPS_FLUSH_COMPLETE，
+    若data非空则调用ips_memory_write_begin()设置一行窗口并调用ips_dma_start()启动DMA，成功返回IPS_FLUSH_ACCEPTED表示本行数据已被DMA接管，APP不能立即改写该缓冲区。
+    整个流程就是：ips_init()一次性初始化硬件和屏幕，ips_flush_line()逐行提交数据，ips_memory_write_begin()告诉屏幕写哪里，
+    ips_dma_start()启动DMA搬运像素，ips_dma_poll()检查完成、超时和错误，ips_write_command_data()负责所有命令和参数，从而让APP只管理自己的显示缓冲区，
+    而SPI2、DMA1_CH1、CS/DC、窗口命令和异常恢复全部由IPS BSP封装。
+*/
+
+/*
+    一次 DMA 传输的完整生命周期
+    以刷一行 640 字节为例：
+    把行缓冲区地址写到 DMA 的内存地址寄存器，把 640 写到传输数量寄存器。
+    你使能 SPI2 的 DMA 发送请求，再使能 DMA1_CH1。
+    SPI2 发送缓冲区空，发出第一个请求。
+    DMA 从内存读第 1 个字节，写到 SPI2 数据寄存器，内存地址加 1，数量从 640 变成 639。
+    SPI2 把这个字节移出去，缓冲区又空，再发请求。
+    DMA 搬第 2 个字节……如此重复。
+    当数量减到 0 时，DMA 硬件把“全传输完成标志”置位，这就是 DMA_FLAG_FTF。
+    如果开了中断，这时会触发中断；用的是轮询，就在 ips_dma_poll() 里查这个标志。
+*/
+
 #define IPS_SCK_PORT GPIOB
 #define IPS_SCK_PIN GPIO_PIN_3
 #define IPS_MOSI_PORT GPIOB
@@ -57,6 +92,14 @@
 static uint8_t ips_dma_active;
 static uint8_t ips_initialized;
 static uint32_t ips_dma_deadline_ms;
+
+typedef enum
+{
+    IPS_DMA_STATE_IDLE = 0U,
+    IPS_DMA_STATE_BUSY,
+    IPS_DMA_STATE_COMPLETE,
+    IPS_DMA_STATE_ERROR
+} ips_dma_state_enum;
 
 static void ips_dma_stop(void)
 {
@@ -82,10 +125,10 @@ static uint8_t ips_spi_wait_tbe(void)
     {
         if(timeout-- == 0U)
         {
-            return 0U;
+            return IPS_FAIL;
         }
     }
-    return 1U;
+    return IPS_SUCCESS;
 }
 
 static uint8_t ips_spi_wait_idle(void)
@@ -96,24 +139,24 @@ static uint8_t ips_spi_wait_idle(void)
     {
         if(timeout-- == 0U)
         {
-            return 0U;
+            return IPS_FAIL;
         }
     }
-    return 1U;
+    return IPS_SUCCESS;
 }
 
 static uint8_t ips_write_command_data(uint8_t command, const uint8_t *data, uint8_t length)
 {
     uint8_t i;
-    uint8_t success = 1U;
+    uint8_t success = IPS_SUCCESS;
 
     /* 一条命令和它的参数必须在同一次CS有效期间连续发送，DC低表示命令、DC高表示参数。 */
     gpio_bit_reset(IPS_CS_PORT, IPS_CS_PIN);
     gpio_bit_reset(IPS_DC_PORT, IPS_DC_PIN);
 
-    if(ips_spi_wait_tbe() == 0U)
+    if(ips_spi_wait_tbe() == IPS_FAIL)
     {
-        success = 0U;
+        success = IPS_FAIL;
     }
     else
     {
@@ -122,29 +165,32 @@ static uint8_t ips_write_command_data(uint8_t command, const uint8_t *data, uint
 
         for(i = 0U; i < length; i++)
         {
-            if(ips_spi_wait_tbe() == 0U)
+            if(ips_spi_wait_tbe() == IPS_FAIL)
             {
-                success = 0U;
+                success = IPS_FAIL;
                 break;
             }
             spi_i2s_data_transmit(SPI2, data[i]);
         }
     }
 
-    if(ips_spi_wait_idle() == 0U)
+    if(ips_spi_wait_idle() == IPS_FAIL)
     {
-        success = 0U;
+        success = IPS_FAIL;
     }
     gpio_bit_set(IPS_CS_PORT, IPS_CS_PIN);
     return success;
 }
 
-void ips_init(void)
+uint8_t ips_init(void)
 {
+    const uint8_t pixel_format = 0x55U;
+    const uint8_t memory_access_control = 0xA0U;
+
     /* IPS初始化会重置SPI、DMA和屏幕，DMA正在读取APP缓冲区时绝对不能重复执行。 */
     if((ips_dma_active != 0U) || (ips_initialized != 0U))
     {
-        return;
+        return ips_initialized;
     }
 
     /* SPI2负责通过PB3、PB5发送屏幕数据；GPIOB、GPIOC负责全部屏幕引脚。 */
@@ -263,25 +309,46 @@ void ips_init(void)
     gpio_bit_set(IPS_RST_PORT, IPS_RST_PIN);
     delay_ms(120U);
 
-    (void)ips_write_command_data(0x01U, 0, 0U); /* 软件复位 */
-    delay_ms(120U);
-    (void)ips_write_command_data(0x11U, 0, 0U); /* 退出睡眠 */
-    delay_ms(120U);
-
+    if(ips_write_command_data(0x01U, 0, 0U) == IPS_FAIL) /* 软件复位 */
     {
-        const uint8_t pixel_format = 0x55U;
-        const uint8_t memory_access_control = 0xA0U;
+        gpio_bit_reset(IPS_BLK_PORT, IPS_BLK_PIN);
+        return IPS_FAIL;
+    }
+    delay_ms(120U);
+    if(ips_write_command_data(0x11U, 0, 0U) == IPS_FAIL) /* 退出睡眠 */
+    {
+        gpio_bit_reset(IPS_BLK_PORT, IPS_BLK_PIN);
+        return IPS_FAIL;
+    }
+    delay_ms(120U);
 
-        (void)ips_write_command_data(0x3AU, &pixel_format, 1U); /* RGB565 */
-        (void)ips_write_command_data(0x36U, &memory_access_control, 1U); /* 横屏 */
+    if((ips_write_command_data(0x3AU, &pixel_format, 1U) == IPS_FAIL) || /* RGB565 */
+       (ips_write_command_data(0x36U, &memory_access_control, 1U) == IPS_FAIL) || /* 横屏 */
+       (ips_write_command_data(0x29U, 0, 0U) == IPS_FAIL)) /* 打开显示 */
+    {
+        gpio_bit_reset(IPS_BLK_PORT, IPS_BLK_PIN);
+        return IPS_FAIL;
     }
 
-    (void)ips_write_command_data(0x29U, 0, 0U); /* 打开显示 */
     gpio_bit_set(IPS_BLK_PORT, IPS_BLK_PIN);
     ips_initialized = 1U;
+    return IPS_SUCCESS;
 }
 
-uint8_t ips_dma_start(const uint8_t *data, uint16_t byte_count)
+/*
+    到这里ips_init()的工作已经结束：GPIO、SPI2、DMA和ST7789都已经准备好，
+    但是初始化并不能直接完成显示，因为它不知道APP下一次要画什么内容。
+
+    后续显示过程内部仍然需要把三件事情拆开处理：
+    1. ips_memory_write_begin()先告诉ST7789，这批像素要写到哪个X/Y窗口；
+    2. ips_dma_start()再让DMA从APP准备好的缓冲区中搬运实际像素字节；
+    3. ips_dma_poll()最后确认DMA和SPI是否已经发送完成。
+
+    但这三个函数只是IPS BSP内部实现一次刷行所需的步骤，不再直接开放给APP。
+    APP只需要调用ips_flush_line()提交一行数据；IPS BSP负责把“位置、数据、传输状态”
+    安全地转换成实际硬件动作。这样APP只管理自己的缓冲区，不需要直接碰SPI和DMA寄存器。
+*/
+static uint8_t ips_dma_start(const uint8_t *data, uint16_t byte_count)
 {
     uint32_t data_start = (uint32_t)data;
     uint32_t data_end;
@@ -293,20 +360,20 @@ uint8_t ips_dma_start(const uint8_t *data, uint16_t byte_count)
     if((ips_initialized == 0U) || (data == 0) || (byte_count == 0U) ||
        (byte_count > IPS_DMA_LINE_BYTES) || (ips_dma_active != 0U))
     {
-        return 0U;
+        return IPS_FAIL;
     }
 
     /* DMA不会检查指针是否有效，必须由BSP确认整段源数据都位于GD32F103RCT6的48KB SRAM中。 */
     data_end = data_start + (uint32_t)byte_count - 1U;
     if((data_start < IPS_SRAM_START) || (data_end < data_start) || (data_end > IPS_SRAM_END))
     {
-        return 0U;
+        return IPS_FAIL;
     }
 
     /* 如果SPI2本身还在发送上一笔数据，也不能让新的DMA传输插入进去。 */
     if(spi_i2s_flag_get(SPI2, SPI_FLAG_TRANS) != RESET)
     {
-        return 0U;
+        return IPS_FAIL;
     }
 
     ips_dma_stop();
@@ -328,10 +395,10 @@ uint8_t ips_dma_start(const uint8_t *data, uint16_t byte_count)
     dma_channel_enable(DMA1, DMA_CH1);
     ips_dma_active = 1U;
     ips_dma_deadline_ms = board_systick_ms + IPS_DMA_TIMEOUT_MS;
-    return 1U;
+    return IPS_SUCCESS;
 }
 
-ips_dma_state_enum ips_dma_poll(void)
+static ips_dma_state_enum ips_dma_poll(void)
 {
     if(ips_dma_active == 0U)
     {
@@ -373,7 +440,7 @@ ips_dma_state_enum ips_dma_poll(void)
     return IPS_DMA_STATE_COMPLETE;
 }
 
-uint8_t ips_memory_write_begin(uint16_t x, uint16_t y, uint16_t width, uint16_t height)
+static uint8_t ips_memory_write_begin(uint16_t x, uint16_t y, uint16_t width, uint16_t height)
 {
     uint16_t x_end;
     uint16_t y_end;
@@ -385,7 +452,7 @@ uint8_t ips_memory_write_begin(uint16_t x, uint16_t y, uint16_t width, uint16_t 
        (x >= IPS_WIDTH) || (y >= IPS_HEIGHT) ||
        (width > (IPS_WIDTH - x)) || (height > (IPS_HEIGHT - y)))
     {
-        return 0U;
+        return IPS_FAIL;
     }
 
     x_end = (uint16_t)(x + width - 1U);
@@ -401,12 +468,46 @@ uint8_t ips_memory_write_begin(uint16_t x, uint16_t y, uint16_t width, uint16_t 
     row_data[2] = (uint8_t)(y_end >> 8U);
     row_data[3] = (uint8_t)y_end;
 
-    if((ips_write_command_data(0x2AU, column_data, 4U) == 0U) ||
-       (ips_write_command_data(0x2BU, row_data, 4U) == 0U) ||
-       (ips_write_command_data(0x2CU, 0, 0U) == 0U))
+    if((ips_write_command_data(0x2AU, column_data, 4U) == IPS_FAIL) ||
+       (ips_write_command_data(0x2BU, row_data, 4U) == IPS_FAIL) ||
+       (ips_write_command_data(0x2CU, 0, 0U) == IPS_FAIL))
     {
-        return 0U;
+        return IPS_FAIL;
     }
 
-    return 1U;
+    return IPS_SUCCESS;
+}
+
+ips_flush_result_enum ips_flush_line(const uint8_t *data, uint16_t x, uint16_t y, uint16_t width)
+{
+    ips_dma_state_enum dma_state;
+
+    /*
+        APP每提交新的一行前，先由IPS检查上一行的DMA是否已经结束。
+        data为NULL时只做这一步，用于APP没有新行时确认最后一行是否已经完成。
+        返回ACCEPTED时，当前data开始被DMA使用；返回BUSY时，本次data根本没有交给DMA。
+    */
+    dma_state = ips_dma_poll();
+    if(dma_state == IPS_DMA_STATE_BUSY)
+    {
+        return IPS_FLUSH_BUSY;
+    }
+    if(dma_state == IPS_DMA_STATE_ERROR)
+    {
+        return IPS_FLUSH_ERROR;
+    }
+
+    if(data == 0)
+    {
+        return IPS_FLUSH_COMPLETE;
+    }
+
+    /* 一行像素的目标位置和数据传输必须连续完成，避免APP遗漏设置窗口或RAMWR命令。 */
+    if((ips_memory_write_begin(x, y, width, 1U) == IPS_FAIL) ||
+       (ips_dma_start(data, (uint16_t)(width * IPS_RGB565_BYTES_PER_PIXEL)) == IPS_FAIL))
+    {
+        return IPS_FLUSH_ERROR;
+    }
+
+    return IPS_FLUSH_ACCEPTED;
 }
