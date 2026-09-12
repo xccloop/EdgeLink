@@ -61,5 +61,5 @@ void esp12s_cmd_send(const char *data)
         while (RESET == usart_flag_get(USART1, USART_FLAG_TBE));
         usart_data_transmit(USART1, (uint8_t)*data);
         data++;
-}
+    }
 }

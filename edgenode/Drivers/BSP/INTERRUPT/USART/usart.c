@@ -2,165 +2,196 @@
 #include "gd32f10x.h"
 #include "gd32f10x_usart.h"
 
-/*
-    这里我们注意到我们使用volatile来修饰我们的接受数据变量，我们来细说一下vloliate是什么
-    编译器在运行的过程中偶尔会将某些变量进行优化和修改，而如果这个变量我们不希望他修改，比如接受的数据，这种修改以后会造成数据可靠性丢失的问题
-    我们就使用voliate来进行数据的修饰
-    后续要extern ch340_receive_data声明外部已经定义了这个数据，这样我们才可以确保数据是串口中断函数中来的
-*/
-volatile uint8_t ch340_receive_data = 0;
+/* USART0连接CH340，USART1连接ESP12S；中断都只取走已经到达的字节，不等待也不发送AT命令。 */
+volatile uint8_t ch340_receive_data = 0U;
 
-void  USART0_IRQHandler()
+void USART0_IRQHandler(void)
 {
-    //这里我们获取usart0的中断标志位，第二个形参代表Read Buffer Not Empty，即读取缓存器非空，说明此时有数据来了
-    if(usart_interrupt_flag_get(USART0,USART_INT_FLAG_RBNE) == SET)
+    if(usart_interrupt_flag_get(USART0, USART_INT_FLAG_RBNE) == SET)
     {
-        //调用函数接受数据
-        //串口接受是逐字节的，因此这里我们只实现将单次接受到的单个字节存储到单个字节中，后续这个数据要怎么使用是应用层考虑的问题
-        //不在本次函数讨论范围之内
         ch340_receive_data = (uint8_t)usart_data_receive(USART0);
     }
 }
 
 /*
-    这个中断函数服务于ESP12S,用于接受ESP12S发送的返回信息
-    这里我们的设想是暴露给外部接口的是AT回应的状态，我们采用流失状态机，说白了就是一步一步的往下判断到底属于什么
+    ESP可能连续返回CONNECT\r\nOK\r\n。若只保存“最近一次回应”，主循环读取CONNECT后，
+    中断可能立刻写入OK，再被主循环清掉。因此这里使用小型环形队列：
+    USART1中断只负责放入事件，APP主循环只负责按顺序取出事件。
 */
+#define ESP12S_RESPONSE_QUEUE_SIZE  8U
+#define ESP12S_RESPONSE_LINE_SIZE   32U
 
-volatile esp12s_response_t esp12s_receive_data = ESP12S_RESPONSE_NONE;
+static volatile esp12s_response_t esp12s_response_queue[ESP12S_RESPONSE_QUEUE_SIZE];
+static volatile uint8_t esp12s_response_write_index;
+static volatile uint8_t esp12s_response_read_index;
+static char esp12s_response_line[ESP12S_RESPONSE_LINE_SIZE];
+static uint8_t esp12s_response_line_length;
+static uint8_t esp12s_response_line_overflow;
 
-typedef enum
+static void esp12s_response_push(esp12s_response_t response)
 {
-    ESP12S_MATCH_IDLE = 0,
-    ESP12S_MATCH_O,
-    ESP12S_MATCH_OK,
-    ESP12S_MATCH_OK_CR,
-    ESP12S_MATCH_E,
-    ESP12S_MATCH_ER,
-    ESP12S_MATCH_ERR,
-    ESP12S_MATCH_ERRO,
-    ESP12S_MATCH_ERROR,
-    ESP12S_MATCH_ERROR_CR
-} esp12s_match_state_t;
+    uint8_t next_index = (uint8_t)(esp12s_response_write_index + 1U);
 
-static esp12s_match_state_t esp12s_match_state = ESP12S_MATCH_IDLE;
-static uint8_t esp12s_line_start = 1;
+    if(next_index >= ESP12S_RESPONSE_QUEUE_SIZE)
+    {
+        next_index = 0U;
+    }
 
-void USART1_IRQHandler()
+    /* 队列满时保留已经收到的旧事件，丢弃最新事件；初始化期间正常不会积压到8个。 */
+    if(next_index != esp12s_response_read_index)
+    {
+        esp12s_response_queue[esp12s_response_write_index] = response;
+        esp12s_response_write_index = next_index;
+    }
+}
+
+static uint8_t esp12s_response_line_equal(const char *text)
+{
+    uint8_t i = 0U;
+
+    while(text[i] != '\0')
+    {
+        if((i >= esp12s_response_line_length) || (esp12s_response_line[i] != text[i]))
+        {
+            return 0U;
+        }
+        i++;
+    }
+
+    return (i == esp12s_response_line_length) ? 1U : 0U;
+}
+
+static uint8_t esp12s_response_line_start_with(const char *text)
+{
+    uint8_t i = 0U;
+
+    while(text[i] != '\0')
+    {
+        if((i >= esp12s_response_line_length) || (esp12s_response_line[i] != text[i]))
+        {
+            return 0U;
+        }
+        i++;
+    }
+
+    return 1U;
+}
+
+/*
+    每收到一行完整AT文本，就翻译成一个事件放入队列。
+    +IPD后面跟着真实TCP负载，后续需要专门的长度解析和接收缓冲区；本阶段不把它误当AT回应。
+*/
+static void esp12s_response_line_handle(void)
+{
+    if(esp12s_response_line_equal("OK") != 0U)
+    {
+        esp12s_response_push(ESP12S_RESPONSE_OK);
+    }
+    else if(esp12s_response_line_equal("ERROR") != 0U)
+    {
+        esp12s_response_push(ESP12S_RESPONSE_ERROR);
+    }
+    else if(esp12s_response_line_equal("FAIL") != 0U)
+    {
+        esp12s_response_push(ESP12S_RESPONSE_FAIL);
+    }
+    else if(esp12s_response_line_equal("SEND OK") != 0U)
+    {
+        esp12s_response_push(ESP12S_RESPONSE_SEND_OK);
+    }
+    else if(esp12s_response_line_equal("CONNECT") != 0U)
+    {
+        esp12s_response_push(ESP12S_RESPONSE_CONNECT);
+    }
+    else if(esp12s_response_line_equal("CLOSED") != 0U)
+    {
+        esp12s_response_push(ESP12S_RESPONSE_CLOSED);
+    }
+    else if(esp12s_response_line_equal("WIFI CONNECTED") != 0U)
+    {
+        esp12s_response_push(ESP12S_RESPONSE_WIFI_CONNECTED);
+    }
+    else if(esp12s_response_line_equal("WIFI GOT IP") != 0U)
+    {
+        esp12s_response_push(ESP12S_RESPONSE_WIFI_GOT_IP);
+    }
+    else if(esp12s_response_line_equal("ready") != 0U)
+    {
+        esp12s_response_push(ESP12S_RESPONSE_READY);
+    }
+    else if(esp12s_response_line_start_with("busy") != 0U)
+    {
+        esp12s_response_push(ESP12S_RESPONSE_BUSY);
+    }
+}
+
+uint8_t esp12s_response_get(esp12s_response_t *response)
+{
+    uint8_t next_index;
+
+    if((response == 0) || (esp12s_response_read_index == esp12s_response_write_index))
+    {
+        return 0U;
+    }
+
+    *response = esp12s_response_queue[esp12s_response_read_index];
+    next_index = (uint8_t)(esp12s_response_read_index + 1U);
+    esp12s_response_read_index = (next_index >= ESP12S_RESPONSE_QUEUE_SIZE) ? 0U : next_index;
+    return 1U;
+}
+
+void esp12s_response_reset(void)
+{
+    /* 复位队列和半行状态时暂时关闭RX中断，避免中断写指针与APP同时修改。 */
+    usart_interrupt_disable(USART1, USART_INT_RBNE);
+    esp12s_response_write_index = 0U;
+    esp12s_response_read_index = 0U;
+    esp12s_response_line_length = 0U;
+    esp12s_response_line_overflow = 0U;
+    usart_interrupt_enable(USART1, USART_INT_RBNE);
+}
+
+void USART1_IRQHandler(void)
 {
     uint8_t receive_data;
 
-    if(usart_interrupt_flag_get(USART1,USART_INT_FLAG_RBNE) == SET)
+    if(usart_interrupt_flag_get(USART1, USART_INT_FLAG_RBNE) == SET)
     {
         receive_data = (uint8_t)usart_data_receive(USART1);
 
-        switch (esp12s_match_state)
+        /* CIPSEND的准备完成提示是单个'>', 不一定按照普通文本行结束。 */
+        if(receive_data == '>')
         {
-            case ESP12S_MATCH_IDLE:
-                if((esp12s_line_start != 0) && (receive_data == 'O'))
-                {
-                    esp12s_match_state = ESP12S_MATCH_O;
-                    esp12s_line_start = 0;
-                }
-                else if((esp12s_line_start != 0) && (receive_data == 'E'))
-                {
-                    esp12s_match_state = ESP12S_MATCH_E;
-                    esp12s_line_start = 0;
-                }
-                else
-                    esp12s_line_start = (receive_data == '\n');
-                break;
+            esp12s_response_push(ESP12S_RESPONSE_PROMPT);
+            return;
+        }
 
-            case ESP12S_MATCH_O:
-                if(receive_data == 'K')
-                    esp12s_match_state = ESP12S_MATCH_OK;
-                else
-                {
-                    esp12s_match_state = ESP12S_MATCH_IDLE;
-                    esp12s_line_start = (receive_data == '\n');
-                }
-                break;
+        if(receive_data == '\r')
+        {
+            return;
+        }
 
-            case ESP12S_MATCH_OK:
-                if(receive_data == '\r')
-                    esp12s_match_state = ESP12S_MATCH_OK_CR;
-                else
-                {
-                    esp12s_match_state = ESP12S_MATCH_IDLE;
-                    esp12s_line_start = (receive_data == '\n');
-                }
-                break;
+        if(receive_data == '\n')
+        {
+            if((esp12s_response_line_length != 0U) && (esp12s_response_line_overflow == 0U))
+            {
+                esp12s_response_line_handle();
+            }
 
-            case ESP12S_MATCH_OK_CR:
-                if(receive_data == '\n')
-                    esp12s_receive_data = ESP12S_RESPONSE_OK;
+            esp12s_response_line_length = 0U;
+            esp12s_response_line_overflow = 0U;
+            return;
+        }
 
-                esp12s_match_state = ESP12S_MATCH_IDLE;
-                esp12s_line_start = (receive_data == '\n');
-                break;
-
-            case ESP12S_MATCH_E:
-                if(receive_data == 'R')
-                    esp12s_match_state = ESP12S_MATCH_ER;
-                else
-                {
-                    esp12s_match_state = ESP12S_MATCH_IDLE;
-                    esp12s_line_start = (receive_data == '\n');
-                }
-                break;
-
-            case ESP12S_MATCH_ER:
-                if(receive_data == 'R')
-                    esp12s_match_state = ESP12S_MATCH_ERR;
-                else
-                {
-                    esp12s_match_state = ESP12S_MATCH_IDLE;
-                    esp12s_line_start = (receive_data == '\n');
-                }
-                break;
-
-            case ESP12S_MATCH_ERR:
-                if(receive_data == 'O')
-                    esp12s_match_state = ESP12S_MATCH_ERRO;
-                else
-                {
-                    esp12s_match_state = ESP12S_MATCH_IDLE;
-                    esp12s_line_start = (receive_data == '\n');
-                }
-                break;
-
-            case ESP12S_MATCH_ERRO:
-                if(receive_data == 'R')
-                    esp12s_match_state = ESP12S_MATCH_ERROR;
-                else
-                {
-                    esp12s_match_state = ESP12S_MATCH_IDLE;
-                    esp12s_line_start = (receive_data == '\n');
-                }
-                break;
-
-            case ESP12S_MATCH_ERROR:
-                if(receive_data == '\r')
-                    esp12s_match_state = ESP12S_MATCH_ERROR_CR;
-                else
-                {
-                    esp12s_match_state = ESP12S_MATCH_IDLE;
-                    esp12s_line_start = (receive_data == '\n');
-                }
-                break;
-
-            case ESP12S_MATCH_ERROR_CR:
-                if(receive_data == '\n')
-                    esp12s_receive_data = ESP12S_RESPONSE_ERROR;
-
-                esp12s_match_state = ESP12S_MATCH_IDLE;
-                esp12s_line_start = (receive_data == '\n');
-                break;
-
-            default:
-                esp12s_match_state = ESP12S_MATCH_IDLE;
-                esp12s_line_start = (receive_data == '\n');
-                break;
+        if(esp12s_response_line_length < (ESP12S_RESPONSE_LINE_SIZE - 1U))
+        {
+            esp12s_response_line[esp12s_response_line_length] = (char)receive_data;
+            esp12s_response_line_length++;
+        }
+        else
+        {
+            /* 超长行不是本初始化状态机需要的AT回应，丢到换行后再重新同步。 */
+            esp12s_response_line_overflow = 1U;
         }
     }
 }
