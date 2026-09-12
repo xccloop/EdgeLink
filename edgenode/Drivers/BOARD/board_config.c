@@ -33,7 +33,7 @@ static void board_nvic_config(void)
 
 static void board_debug_config(void)
 {
-    /* PA15连接KEY3，需关闭JTAG才能作为普通GPIO；SWD调试接口仍然保留。 */
+    /* PA15连接KEY3、PB3连接IPS的SPI2时钟，二者都需关闭JTAG；SWD调试接口仍然保留。 */
     rcu_periph_clock_enable(RCU_AF);
     gpio_pin_remap_config(GPIO_SWJ_SWDPENABLE_REMAP, ENABLE);
 }
