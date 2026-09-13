@@ -1,5 +1,5 @@
 #include "message.h"
-#include "Collection/collection.h"
+#include "Acquisition/collection.h"
 
 /*
     这个文件是将采集到的温度进行模型管理作为中转层他最后会给TCPframe，CANframe，Storage

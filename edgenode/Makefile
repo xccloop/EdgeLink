@@ -8,7 +8,7 @@ SIZE := "$(TOOLCHAIN)/arm-none-eabi-size.exe"
 
 MCU := -mcpu=cortex-m3 -mthumb
 DEFS := -DGD32F10X_HD -DUSE_STDPERIPH_DRIVER
-INCLUDES := -IUser -IUser/App -IUser/App/Buffer -IDrivers/BSP -IDrivers/BSP/IPS -IDrivers/BOARD -IDrivers/CMSIS/Include -IDrivers/CMSIS/Device/GD/GD32F10x/Include -IDrivers/GD32F10x_Standard_Peripheral/Inc
+INCLUDES := -IUser -IUser/App -IDrivers/BSP -IDrivers/BSP/IPS -IDrivers/BOARD -IDrivers/CMSIS/Include -IDrivers/CMSIS/Device/GD/GD32F10x/Include -IDrivers/GD32F10x_Standard_Peripheral/Inc
 CFLAGS := $(MCU) $(DEFS) $(INCLUDES) -std=c11 -g3 -Og -Wall -Wextra -ffunction-sections -fdata-sections
 LDFLAGS := $(MCU) -TOCD/linker/gd32f103rct6.ld -Wl,--gc-sections -Wl,-Map=$(BUILD_DIR)/$(PROJECT).map -specs=nano.specs -specs=nosys.specs
 
@@ -18,8 +18,9 @@ DRIVER_SOURCES := Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_rcu.c \
 				  Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_gpio.c \
 				  Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_exti.c \
 				  Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_usart.c \
-				  Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_can.c \
-				  Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_spi.c \
+			  Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_can.c \
+			  Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_adc.c \
+			  Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_spi.c \
 				  Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_dma.c
 BSP_SOURCES := $(shell powershell -NoProfile -Command "$$root = (Get-Location).Path; Get-ChildItem -LiteralPath Drivers/BSP -Filter *.c -Recurse -File | ForEach-Object { $$_.FullName.Substring($$root.Length + 1).Replace('\','/') }")
 APP_SOURCES := $(shell powershell -NoProfile -Command "$$root = (Get-Location).Path; Get-ChildItem -LiteralPath User/App -Filter *.c -Recurse -File | ForEach-Object { $$_.FullName.Substring($$root.Length + 1).Replace('\','/') }")

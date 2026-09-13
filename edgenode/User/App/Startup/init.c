@@ -7,8 +7,8 @@
 #include "CAN/can.h"
 #include "BMP280/bmp280.h"
 #include "IPS/ips.h"
-#include "Buffer/display_buffer.h"
-#include "Storage/storage.h"
+#include "Presentation/Buffer/display_buffer.h"
+#include "Output/Storage/storage.h"
 
 /*
     这个文件服务于裸机

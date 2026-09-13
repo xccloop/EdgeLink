@@ -1,6 +1,6 @@
 #include "storage.h"
 #include "GD25Q32/gd25.h"
-#include "Frame/CRC/crc.h"
+#include "Protocol/CRC/crc.h"
 #include <stdint.h>
 
 #define STORAGE_FLASH_CAPACITY_BYTES 0x00400000UL

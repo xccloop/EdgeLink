@@ -60,4 +60,5 @@ SECTIONS
 
   . = ALIGN(8);
   _end = .;
+  end = _end;
 }

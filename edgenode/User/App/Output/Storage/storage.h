@@ -2,7 +2,7 @@
 #define STORAGE_H_
 
 #include <stdint.h>
-#include "Frame/Message/message.h"
+#include "Model/message.h"
 
 #define STORAGE_TEMPERATURE_RECORD_LENGTH 9
 /*
