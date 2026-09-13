@@ -30,7 +30,7 @@
 */
 static uint8_t can0_is_initialized = 0U;
 
-void Can_init()
+uint8_t Can_init(void)
 {
     can0_is_initialized = 0U;
     rcu_periph_clock_enable(RCU_GPIOB);
@@ -117,7 +117,7 @@ void Can_init()
 
     if(can_init(CAN0,&can_init_handler) != SUCCESS)
     {
-        return;
+        return 0U;
     }
 
     can_filter_parameter_struct can_filter_handler;
@@ -136,6 +136,7 @@ void Can_init()
     */
     can_interrupt_enable(CAN0, CAN_INT_RFNE0);
     can0_is_initialized = 1U;
+    return 1U;
 }
 
 /*
