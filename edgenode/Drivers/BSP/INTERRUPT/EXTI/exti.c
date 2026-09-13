@@ -1,6 +1,7 @@
 #include "exti.h"
 #include "gd32f10x.h"
 #include "gd32f10x_exti.h"
+#include <stdio.h>
 
 //设想中key与ips形成人机交互，所以等ips进行编写完了以后我们再回到EXTI中进行
 
@@ -12,7 +13,8 @@ void EXTI1_IRQHandler()
     //这里的返回值位：typedef enum {RESET = 0, SET = !RESET} FlagStatus;
     if(exti_flag_get(EXTI_1) == SET)
     {
-
+        printf("KEY3 press\n");
+        exti_interrupt_flag_clear(EXTI_1);
     }
 }
 
@@ -20,6 +22,8 @@ void EXTI5_9_IRQHandler()
 {
     if(exti_flag_get(EXTI_8) == SET)
     {
+        printf("KEY2 press\n");
+                exti_interrupt_flag_clear(EXTI_8);
 
     }
 }
@@ -28,6 +32,8 @@ void EXTI10_15_IRQHandler()
 {
     if(exti_flag_get(EXTI_15) == SET)
     {
+        printf("KEY1 press\n");
+        exti_interrupt_flag_clear(EXTI_15);
 
     }
 }

@@ -1,9 +1,11 @@
 //这个项目位采集节点的设计，还是一样，先做硬件基础然后有了基础才可以构建应用层内容
 //我们先在BSP中实现我们要实现的外设，包括LED,KEY,ESP-12S,GD25Q32,ADC,CAN,IPS,BMP280
 
-#include "Startup/init.h"
+#include "CH340/ch340.h"
+#include "KEY/key.h"
 #include "LED/led.h"
-#include "Service/node_service.h"
+#include "board_config.h"
+#include "gd32f10x_usart.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -19,25 +21,17 @@
 
 int main()
 {
-    if(init_all() == INIT_ALL_FAIL)
-    {
-        while(1)
-        {
-        }
-    }
+    led_init();
+    ch340_init();
+    key_init();
+    board_config_init();
+
+    setvbuf(stdout, NULL, _IONBF, 0);   /* 关掉缓冲：每个字节立刻经 _write 发出 */
+
+    printf("\nEdgenode start\n");
 
     while(1)
     {
-        /*
-            开机显示
-        */
-        printf("Edgenode Start");
 
-        //led显示当前系统在运行
-        led1_toggle();
-        led2_toggle();
-
-        /* 一次调用只产生一条Message，并交给已经启用的输出分支。 */
-        node_service_run_once();
     }
 }

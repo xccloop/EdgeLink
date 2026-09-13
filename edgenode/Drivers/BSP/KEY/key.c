@@ -1,14 +1,14 @@
 #include "key.h"
-#include "gd32f10x.h"
+#include <stdio.h>
 #include "gd32f10x_gpio.h"
 #include "gd32f10x_rcu.h"
 #include "gd32f10x_exti.h"
 
 /*
     这个文件我们来进行key的相关操作，主要是检测是否按下，这三个按键都是低电平有效
-    | PC1  | KEY1 
+    | PA15 | KEY1
     | PA8  | KEY2 
-    | PA15 | KEY3 
+    | PC1  | KEY3
     
     PC1 9 I/O
     Default: PC1
@@ -25,12 +25,16 @@
     与led的简单高低输出不同，对于按键，为了后续加入freertos，我们先进行中断+标志位的方式实现
 */
 
-#define KEY1_PORT GPIOC
-#define KEY1_PIN GPIO_PIN_1
+// KEY 编号 <-> 引脚 <-> EXTI 线 的对应（本次把 KEY1 与 KEY3 对调）：
+//   KEY1 = PA15 -> EXTI15
+//   KEY2 = PA8  -> EXTI8
+//   KEY3 = PC1  -> EXTI1
+#define KEY1_PORT GPIOA
+#define KEY1_PIN GPIO_PIN_15
 #define KEY2_PORT GPIOA
 #define KEY2_PIN GPIO_PIN_8
-#define KEY3_PORT GPIOA
-#define KEY3_PIN GPIO_PIN_15
+#define KEY3_PORT GPIOC
+#define KEY3_PIN GPIO_PIN_1
 
 void key_init()
 {
@@ -91,5 +95,5 @@ void key_init()
     exti_interrupt_flag_clear(EXTI_15); 
 
     //KEY的EXTI NVIC优先级由board_config_init统一配置。
-
+    printf("\nKEY init finsh\n");
 }

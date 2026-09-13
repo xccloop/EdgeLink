@@ -70,15 +70,22 @@ void ch340_init()
 }
 
 /*
-    关于串口的发送，我们这里使用标准库printf的重定向，即编写fputc函数，函数内部我们用usart_transmit将数据发送
+    关于串口的发送，我们这里使用标准库printf的重定向，即编写wriet函数(GCC + newlib 下，printf 重定向的正确做法是实现 _write，不是 fputc。)，函数内部我们用usart_transmit将数据发送
     第二句话的while是用与确保数据发送完了也就是确定比发送数据的标志位是没有的，然后才return
 */
-int fputc(int ch, FILE *f)
-{
-    usart_data_transmit(USART0, (uint8_t)ch);
-    while(RESET == usart_flag_get(USART0, USART_FLAG_TBE));
-    return ch;
-}
+    int _write(int file, char *ptr, int len)
+    {
+        (void)file;
+        for (int i = 0; i < len; i++)
+        {
+            /* 先等“发送缓冲空”，再写进去（顺序：wait → transmit） */
+            while (RESET == usart_flag_get(USART0, USART_FLAG_TBE))
+            {
+            }
+            usart_data_transmit(USART0, (uint8_t)ptr[i]);
+        }
+        return len;   /* 必须返回实际写出的字节数，否则 printf 认为失败 */
+    }
 
 //使用重定向将串口发送很简单，我们这里为了学习手动实现该如何发送不不同长度的数据
 /*

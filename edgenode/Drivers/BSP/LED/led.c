@@ -102,3 +102,13 @@ void led2_toggle()
         gpio_bit_set(LED2_PORT, LED2_PIN);
     }
 }
+
+void led2_on()
+{
+    gpio_bit_set(LED2_PORT, LED2_PIN);
+}
+
+void led2_off()
+{
+    gpio_bit_reset(LED2_PORT, LED2_PIN);
+}
