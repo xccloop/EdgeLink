@@ -141,16 +141,17 @@ void Can_init()
 /*
     这个函数只负责发送一帧CAN标准数据帧，不规定data里面每一个字节具体代表什么。
     standard_id是11位CAN ID，data是我们想发送的原始数据，data_length是实际发送多少字节，最大8字节。
-    函数返回值是硬件分配的发送邮箱编号0、1、2；返回CAN_NOMAILBOX代表CAN没有初始化完成、参数不正确，或者三个发送邮箱都没有空位。
+    函数返回值是硬件分配的发送邮箱编号0、1、2；返回CAN0_TX_MAILBOX_NONE代表CAN没有初始化完成、参数不正确，或者三个发送邮箱都没有空位。
     注意：拿到邮箱编号只代表数据已经交给CAN硬件等待发送，不代表另一端已经收到数据。
 */
 uint8_t can0_data_send(uint16_t standard_id, const uint8_t *data, uint8_t data_length)
 {
     uint8_t i;
+    uint8_t mailbox;
     can_trasnmit_message_struct can_transmit_message;
 
     if ((can0_is_initialized == 0U) || (standard_id > CAN_SFID_MASK) || (data_length > 8U) || ((data == 0) && (data_length != 0U))) {
-        return CAN_NOMAILBOX;
+        return CAN0_TX_MAILBOX_NONE;
     }
 
     can_struct_para_init(CAN_TX_MESSAGE_STRUCT, &can_transmit_message);
@@ -163,6 +164,9 @@ uint8_t can0_data_send(uint16_t standard_id, const uint8_t *data, uint8_t data_l
         can_transmit_message.tx_data[i] = data[i];
     }
 
-    return can_message_transmit(CAN0, &can_transmit_message);
+    mailbox = can_message_transmit(CAN0, &can_transmit_message);
+
+    /* GD32库使用CAN_NOMAILBOX表示失败；APP只需要认识BSP公开的CAN0_TX_MAILBOX_NONE。 */
+    return (mailbox == CAN_NOMAILBOX) ? CAN0_TX_MAILBOX_NONE : mailbox;
 }
 
