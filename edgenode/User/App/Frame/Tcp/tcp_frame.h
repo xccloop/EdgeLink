@@ -2,7 +2,9 @@
 #define TCP_FRAME_H_
 
 #include <stdint.h>
+#include "Frame/Message/message.h"
 
-uint8_t tcp_frame_encode(uint8_t frame[16],uint16_t sequence, int32_t temperature, int8_t temperature_scale);
+/* Message提供统一业务数据；当前TCP V4协议只编码其中的温度和倍率。 */
+uint8_t tcp_frame_encode(uint8_t frame[16], uint16_t sequence, const telemetry_sample_struct *message);
 
 #endif
