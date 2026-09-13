@@ -1,2 +1,7 @@
 //这个项目位采集节点的设计，还是一样，先做硬件基础然后有了基础才可以构建应用层内容
-//我们先在BSP中实现我们要实现的外设，包括LED,KEY,ESP-12S,GD25Q32,ADC,CAN,RS485,IPS,BMP280
+//我们先在BSP中实现我们要实现的外设，包括LED,KEY,ESP-12S,GD25Q32,ADC,CAN,IPS,BMP280
+
+int main()
+{
+
+}
