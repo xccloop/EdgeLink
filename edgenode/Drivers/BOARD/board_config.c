@@ -50,6 +50,23 @@ static void board_systick_config(void)
     SysTick_Config(SystemCoreClock / 1000U);
 }
 
+static void board_spi0_device_cs_safe_state(void)
+{
+    /*
+        PA5/PA6/PA7是SPI0共享总线，而PA4和PB12分别是两颗从设备独立的片选。
+        上电后若某个CS保持浮空或低电平，未初始化的从设备也可能同时驱动MISO；
+        因此先把所有已知SPI0从设备设为未选中，再开始SPI0总线初始化。
+    */
+    rcu_periph_clock_enable(RCU_GPIOA);
+    rcu_periph_clock_enable(RCU_GPIOB);
+
+    gpio_bit_set(GPIOA, GPIO_PIN_4);
+    gpio_init(GPIOA, GPIO_MODE_OUT_PP, GPIO_OSPEED_50MHZ, GPIO_PIN_4);
+
+    gpio_bit_set(GPIOB, GPIO_PIN_12);
+    gpio_init(GPIOB, GPIO_MODE_OUT_PP, GPIO_OSPEED_50MHZ, GPIO_PIN_12);
+}
+
 void board_config_init(void)
 {
     /* 所有板级共享资源只在启动阶段配置一次。 */
@@ -57,5 +74,6 @@ void board_config_init(void)
     board_debug_config();
     board_clock_config();
     board_systick_config();
+    board_spi0_device_cs_safe_state();
     spi0_bus_init();
 }

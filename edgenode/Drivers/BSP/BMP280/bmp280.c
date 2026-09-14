@@ -40,7 +40,6 @@
 typedef struct {
     uint16_t dig_T1; int16_t dig_T2, dig_T3;
     uint16_t dig_P1; int16_t dig_P2, dig_P3, dig_P4, dig_P5, dig_P6, dig_P7, dig_P8, dig_P9;
-    int32_t  t_fine;
 } bmp280_calib_t;
 
 /* 修改：校准参数只在初始化时读取一次，后续每次读取温度直接复用。 */
@@ -56,7 +55,7 @@ static uint8_t bmp280_register_write(uint8_t reg, uint8_t data);
 static uint8_t bmp280_status_wait_clear(uint8_t mask, uint32_t timeout_ms);
 static uint16_t bmp280_u16_from_le(const uint8_t *data);
 static uint8_t bmp280_calibration_read(void);
-static float bmp280_temperature_calculate(const bmp280_calib_t *calib, uint32_t temperature_raw);
+static int32_t bmp280_temperature_centidegree_calculate(const bmp280_calib_t *calib, uint32_t temperature_raw);
 
 uint8_t bmp280_init(void)
 {
@@ -114,7 +113,7 @@ uint8_t bmp280_init(void)
     }
 
     bmp280_is_initialized = 1U;
-    return 1U;
+    return BMP280_SUCCESS;
 }
 
 static void bmp280_cs_select()
@@ -249,40 +248,51 @@ static uint8_t bmp280_calibration_read(void)
     return 1U;
 }
 
-/* 根据BMP280数据手册的温度补偿公式，返回单位：℃。 */
-static float bmp280_temperature_calculate(const bmp280_calib_t *calib, uint32_t temperature_raw)
+/*
+    根据BMP280数据手册的整数温度补偿公式计算，返回单位为0.01℃。
+    例如返回2436代表24.36℃，这正好对应BMP280_TEMPERATURE_SCALE=-2，
+    因而BSP不需要浮点数，上层可直接把数值和倍率写入Message。
+*/
+static int32_t bmp280_temperature_centidegree_calculate(const bmp280_calib_t *calib, uint32_t temperature_raw)
 {
-    float var1;
-    float var2;
+    int64_t var1;
+    int64_t var2;
+    int64_t adc_temperature;
 
-    var1 = ((float)temperature_raw / 16384.0f - (float)calib->dig_T1 / 1024.0f)
-         * (float)calib->dig_T2;
-    var2 = ((float)temperature_raw / 131072.0f - (float)calib->dig_T1 / 8192.0f);
-    var2 = var2 * var2 * (float)calib->dig_T3;
-    return (var1 + var2) / 5120.0f;
+    adc_temperature = (int32_t)temperature_raw;
+    /*
+        原始ADC值和校准系数都来自外设，异常通信时不能假定它们仍在典型范围内。
+        中间乘法先提升到int64_t，避免32位平方或乘法溢出后产生未定义的温度值。
+    */
+    var1 = (((adc_temperature >> 3) - ((int64_t)calib->dig_T1 << 1)) * (int64_t)calib->dig_T2) >> 11;
+    var2 = (((((adc_temperature >> 4) - (int32_t)calib->dig_T1) *
+             ((adc_temperature >> 4) - (int64_t)calib->dig_T1)) >> 12) *
+            (int64_t)calib->dig_T3) >> 14;
+    return ((var1 + var2) * 5 + 128) >> 8;
 }
 
-/* 这个函数是我们使用BMP280的主要功能用于读取温度。 */
-float bmp280_temperature_get(void)
+/* 这个函数是我们使用BMP280的主要功能，用固定小数结果交给上层。 */
+uint8_t bmp280_temperature_get(bmp280_temperature_t *temperature)
 {
     uint8_t temperature_data[3];
     uint32_t temperature_raw;
 
-    /* 修改：未通过bmp280_init()时不使用未验证的校准参数。 */
-    if (bmp280_is_initialized == 0U) {
-        return BMP280_TEMPERATURE_ERROR;
+    /* 修改：未通过bmp280_init()或输出地址无效时，不能伪造一笔温度结果。 */
+    if ((temperature == 0) || (bmp280_is_initialized == 0U)) {
+        return BMP280_FAIL;
     }
 
     /* 修改：0xFA、0xFB、0xFC必须作为一笔连续读取，避免在CS低时重复发读命令。 */
     if (bmp280_reg_data_get(BMP280_REG_TEMP_MSB, temperature_data, 3U) == 0U) {
         /* 修改：旧代码在传输失败后仍会拼接残缺数据并返回伪温度。 */
-        return BMP280_TEMPERATURE_ERROR;
+        return BMP280_FAIL;
     }
 
     /* 修改：XLSB只有bit7..4有效，右移4位后才是adc_T的bit3..0。 */
     temperature_raw = ((uint32_t)temperature_data[0] << 12)
                     | ((uint32_t)temperature_data[1] << 4)
                     | ((uint32_t)temperature_data[2] >> 4);
-
-    return bmp280_temperature_calculate(&bmp280_calib, temperature_raw);
+    temperature->temperature = bmp280_temperature_centidegree_calculate(&bmp280_calib, temperature_raw);
+    temperature->temperature_scale = BMP280_TEMPERATURE_SCALE;
+    return BMP280_SUCCESS;
 }

@@ -3,7 +3,6 @@
 #include "gd32f10x_gpio.h"
 #include "gd32f10x_rcu.h"
 #include "gd32f10x_usart.h"
-#include <stdio.h>
 
 /*
     这个文件我们来实现串口的实现,我们使用PA9,PA10来进行mcu与主机的通信，作为调试的串口，我们需要他具有发送任意字节和可以接受任意字节的能力

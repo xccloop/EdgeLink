@@ -4,6 +4,7 @@
 #include "board_time.h"
 #include "spi0_bus.h"
 #include <stdint.h>
+#include <stdio.h>
 
 /*
     这个文件是外置flash存储芯片的BSP，要求有负责片选、读 JEDEC ID、读状态寄存器、等待忙结束、写使能、读、页写入、扇区擦除。
@@ -68,8 +69,17 @@ uint8_t gd25_init(void)
                        (uint32_t)chip_id_raw[2];
     if(chip_id != 0xC84016)
     {
+        printf("chip_id_raw = %02X %02X %02X\r\n",
+        chip_id_raw[0], chip_id_raw[1], chip_id_raw[2]);
         return 0U;
     }
+
+    printf("chip_id_raw = %02X %02X %02X\r\n",
+       chip_id_raw[0], chip_id_raw[1], chip_id_raw[2]);
+
+/* 再打拼接后的 24 位值，补零到 6 位 */
+    printf("chip_id = 0x%06lX (%lu)\r\n",
+       (unsigned long)chip_id, (unsigned long)chip_id);
 
     /* 到这里说明SPI通信正常且芯片型号正确，后续公开读写擦函数才允许执行。 */
     gd25_ready = 1U;
