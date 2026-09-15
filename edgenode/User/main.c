@@ -4,8 +4,9 @@
 #include "CH340/ch340.h"
 #include "board_config.h"
 #include "board_time.h"
-#include "GD25Q32/gd25.h"
-#include "gd32f10x_gpio.h"
+#include "Output/Tcp/tcp.h"
+#include "ESP12S/esp12s.h"
+#include "INTERRUPT/USART/usart.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -19,72 +20,96 @@
     两路都用怕引起数据重复
 */
 
-int main()
+int main(void)
 {
-    
-    setvbuf(stdout, NULL, _IONBF, 0);   /* 关掉缓冲：每个字节立刻经 _write 发出 */
-    printf("\nEdgenode start\n");
+    esp12s_response_t response;
+    uint32_t deadline_ms;
+    uint8_t send_prompt_received;
+    uint8_t send_ok_received;
 
-    /* BOARD先建立SysTick与SPI0共享总线；BMP280随后才能开始SPI事务。 */
     board_config_init();
     ch340_init();
-    
-    gpio_bit_set(GPIOA, GPIO_PIN_4);
 
-    gd25_init();
-    
-    uint32_t address = 0x00000000UL;
-    uint8_t write_data[16] =
+    tcp_config_struct config;
+    config.wifi_ssid = "";
+    config.wifi_password = "";
+    config.server_ip = "";
+    config.server_port = 8888;
+
+    setvbuf(stdout, NULL, _IONBF, 0);
+    printf("Edgenode start\r\n");
+
+    if(tcp_init(&config) == TCP_SUCCESS)
     {
-        0x12, 0x34, 0x56, 0x78,
-        0xA5, 0x5A, 0x00, 0xFF,
-        0x11, 0x22, 0x33, 0x44,
-        0x55, 0x66, 0x77, 0x88
-    };
-    uint8_t read_data[16];
-    uint8_t i;
+        printf("TCP CONNECTED\r\n");
 
-    if (gd25_clear(address) == 0U) {
-    printf("erase fail\r\n");
-    return 0;
-    }
+        /* CIPSEND先声明后续原始负载长度；只有收到ESP的'>'提示才能发送5字节HELLO。 */
+        esp12s_response_reset();
+        esp12s_cmd_send("AT+CIPSEND=5\r\n");
+        deadline_ms = board_systick_ms + 10000U;
+        send_prompt_received = 0U;
 
-        /* 擦除验证：擦后应全为 0xFF。 */
-        if (gd25_read(address, read_data, sizeof(read_data)) == 0U) {
-            printf("erase read fail\r\n");
-            return 0;
-        }
-        for (i = 0U; i < sizeof(read_data); i++) {
-            if (read_data[i] != 0xFFU) {
-                printf("erase verify fail: index=%u data=%02X\r\n", i, read_data[i]);
-                return 0;
+        while((uint32_t)(board_systick_ms - deadline_ms) >= 0x80000000U)
+        {
+            if(esp12s_response_get(&response) != 0U)
+            {
+                if(response == ESP12S_RESPONSE_PROMPT)
+                {
+                    send_prompt_received = 1U;
+                    break;
+                }
+                if((response == ESP12S_RESPONSE_ERROR) || (response == ESP12S_RESPONSE_FAIL) ||
+                   (response == ESP12S_RESPONSE_BUSY) || (response == ESP12S_RESPONSE_CLOSED))
+                {
+                    break;
+                }
             }
         }
 
-        if (gd25_write(address, write_data, sizeof(write_data)) == 0U) {
-        printf("write fail\r\n");
-        return 0;
-    }
+        if(send_prompt_received == 0U)
+        {
+            printf("TCP TEST SEND FAILED: no CIPSEND prompt\r\n");
+        }
+        else
+        {
+            esp12s_response_reset();
+            esp12s_cmd_send("HELLO");
+            deadline_ms = board_systick_ms + 10000U;
+            send_ok_received = 0U;
 
-    if (gd25_read(address, read_data, sizeof(read_data)) == 0U) {
-        printf("read fail\r\n");
-        return 0;
-    }
+            while((uint32_t)(board_systick_ms - deadline_ms) >= 0x80000000U)
+            {
+                if(esp12s_response_get(&response) != 0U)
+                {
+                    if(response == ESP12S_RESPONSE_SEND_OK)
+                    {
+                        send_ok_received = 1U;
+                        break;
+                    }
+                    if((response == ESP12S_RESPONSE_ERROR) || (response == ESP12S_RESPONSE_FAIL) ||
+                       (response == ESP12S_RESPONSE_BUSY) || (response == ESP12S_RESPONSE_CLOSED))
+                    {
+                        break;
+                    }
+                }
+            }
 
-    for (i = 0U; i < sizeof(write_data); i++) {
-        if (read_data[i] != write_data[i]) {
-            printf("compare fail: index=%u write=%02X read=%02X\r\n",
-                i, write_data[i], read_data[i]);
-            return 0;
+            if(send_ok_received != 0U)
+            {
+                printf("TCP TEST SEND OK: HELLO\r\n");
+            }
+            else
+            {
+                printf("TCP TEST SEND FAILED: no SEND OK\r\n");
+            }
         }
     }
-
-    printf("GD25 erase/write/read PASS\r\n");
-
-
-    while(1)
+    else
     {
+        printf("TCP CONNECT FAILED\r\n");
+    }
 
+    while (1) {
         delay_ms(200);
     }
 }

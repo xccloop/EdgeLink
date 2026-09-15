@@ -18,7 +18,7 @@
 */
 
 #define TCP_AT_TIMEOUT_MS       10000U
-#define TCP_WIFI_JOIN_TIMEOUT_MS 30000U
+#define TCP_WIFI_JOIN_TIMEOUT_MS 50000U
 #define TCP_COMMAND_BUFFER_SIZE 128U
 
 static char tcp_command_buffer[TCP_COMMAND_BUFFER_SIZE];
@@ -47,9 +47,33 @@ static uint8_t tcp_wait_response(uint8_t wait_connect, uint32_t timeout_ms)
             continue;
         }
 
-        if((response == ESP12S_RESPONSE_ERROR) || (response == ESP12S_RESPONSE_FAIL) ||
-           (response == ESP12S_RESPONSE_CLOSED) || (response == ESP12S_RESPONSE_BUSY))
+        if(response == ESP12S_RESPONSE_ERROR)
         {
+            printf("ESP response: ERROR\r\n");
+            return TCP_FAIL;
+        }
+        if(response == ESP12S_RESPONSE_FAIL)
+        {
+            printf("ESP response: FAIL\r\n");
+            return TCP_FAIL;
+        }
+        if(response == ESP12S_RESPONSE_CLOSED)
+        {
+            /* MCU复位不会复位ESP，入网时可能先收到上一次TCP连接的异步关闭通知。
+               普通AT命令仍应等待本命令的OK/ERROR/FAIL；只有CIPSTART等待CONNECT时，
+               CLOSED才表示本次建连已经失败。 */
+            if(wait_connect == TCP_SUCCESS)
+            {
+                printf("ESP response: CLOSED during TCP connect\r\n");
+                return TCP_FAIL;
+            }
+
+            printf("ESP response: CLOSED ignored before TCP connect\r\n");
+            continue;
+        }
+        if(response == ESP12S_RESPONSE_BUSY)
+        {
+            printf("ESP response: BUSY\r\n");
             return TCP_FAIL;
         }
 
@@ -77,6 +101,7 @@ static uint8_t tcp_wait_response(uint8_t wait_connect, uint32_t timeout_ms)
         }
     }
 
+    printf("ESP response: TIMEOUT\r\n");
     return TCP_FAIL;
 }
 
@@ -127,6 +152,7 @@ uint8_t tcp_init(const tcp_config_struct *config)
        (config->server_ip == 0) || (config->server_port == 0U) ||
        (config->wifi_ssid[0] == '\0') || (config->server_ip[0] == '\0'))
     {
+        printf("TCP init failed: invalid WiFi or server configuration\r\n");
         return TCP_FAIL;
     }
 
@@ -134,6 +160,7 @@ uint8_t tcp_init(const tcp_config_struct *config)
        (tcp_at_text_valid(config->wifi_password) == TCP_FAIL) ||
        (tcp_at_text_valid(config->server_ip) == TCP_FAIL))
     {
+        printf("TCP init failed: configuration contains unsupported character\r\n");
         return TCP_FAIL;
     }
 
@@ -143,11 +170,13 @@ uint8_t tcp_init(const tcp_config_struct *config)
 
     if(tcp_command_send_and_wait_ok(ESP_AT_TEST, TCP_AT_TIMEOUT_MS) == TCP_FAIL)
     {
+        printf("TCP init failed: ESP-AT test command did not return OK\r\n");
         return TCP_FAIL;
     }
 
     if(tcp_command_send_and_wait_ok("AT+CWMODE=1\r\n", TCP_AT_TIMEOUT_MS) == TCP_FAIL)
     {
+        printf("TCP init failed: cannot set ESP station mode\r\n");
         return TCP_FAIL;
     }
 
@@ -157,21 +186,25 @@ uint8_t tcp_init(const tcp_config_struct *config)
     if((command_length < 0) || ((uint32_t)command_length >= sizeof(tcp_command_buffer)) ||
        (tcp_command_send_and_wait_ok(tcp_command_buffer, TCP_WIFI_JOIN_TIMEOUT_MS) == TCP_FAIL))
     {
+        printf("TCP init failed: WiFi join command failed or timed out\r\n");
         return TCP_FAIL;
     }
 
     if(tcp_command_send_and_wait_ok(ESP_AT_CIFSR, TCP_AT_TIMEOUT_MS) == TCP_FAIL)
     {
+        printf("TCP init failed: cannot query ESP network address\r\n");
         return TCP_FAIL;
     }
 
     if(tcp_command_send_and_wait_ok("AT+CIPMUX=0\r\n", TCP_AT_TIMEOUT_MS) == TCP_FAIL)
     {
+        printf("TCP init failed: cannot select single TCP connection mode\r\n");
         return TCP_FAIL;
     }
 
     if(tcp_command_send_and_wait_ok("AT+CIPMODE=0\r\n", TCP_AT_TIMEOUT_MS) == TCP_FAIL)
     {
+        printf("TCP init failed: cannot select normal TCP transmission mode\r\n");
         return TCP_FAIL;
     }
 
@@ -181,6 +214,7 @@ uint8_t tcp_init(const tcp_config_struct *config)
     if((command_length < 0) || ((uint32_t)command_length >= sizeof(tcp_command_buffer)) ||
        (tcp_connect_start_and_wait(tcp_command_buffer) == TCP_FAIL))
     {
+        printf("TCP init failed: cannot connect to TCP server\r\n");
         return TCP_FAIL;
     }
 
