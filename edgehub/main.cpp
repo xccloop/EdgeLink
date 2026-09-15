@@ -58,11 +58,13 @@ int main()
 
     if(can.init() == false)
     {
+        printf("CAN initialization failed.\n");
         return -1;
     }
 
     if(can.setnoblocking() == false)
     {
+        printf("Failed to set CAN socket non-blocking.\n");
         return -1;
     }
 
@@ -74,11 +76,13 @@ int main()
 
     if(tcpserve.init() == false)
     {
+        printf("TCP server initialization failed.\n");
         return -1;
     }
 
     if(tcpserve.setnoblocking() == false)
     {
+        printf("Failed to set TCP listen socket non-blocking.\n");
         return -1;
     }
 
@@ -86,32 +90,37 @@ int main()
 
     if(epoll.create() == -1)
     {
+        printf("epoll creation failed.\n");
         return -1;
     }
 
     if(epoll.add(tcp_fd,EPOLLIN|EPOLLET) == -1)
     {
+        printf("Failed to add TCP listen socket to epoll.\n");
         return -1;
     }
 
     if(epoll.add(can_fd,EPOLLIN|EPOLLET) == -1)
     {
+        printf("Failed to add CAN socket to epoll.\n");
         return -1;
     }
 
     //这句话的意思是将tcp_fd插入进哈希表，并且属于Tcpserve
     fd_table.emplace(tcp_fd, FdType::Tcpserve);
 
-    if(storage.open("/home/qxc/Desktop/Mini_Edgehub/data/edgehub.db") == false)
+    if(storage.open("/home/qxc/Desktop/EdgeLink/edgehub/data/edgehub.db") == false)
     {
+        printf("Failed to open SQLite database: /home/qxc/Desktop/Mini_Edgehub/data/edgehub.db\n");
         return -1;
     }
     if(storage.createTable() == false)
     {
+        printf("Failed to create or validate SQLite table.\n");
         return -1;
     }
 
-    while(1)
+    while(g_running != 0)
     {
         int nready = epoll.wait(events, EPOLLEVENT_SIZE);
         if(nready == -1)
@@ -204,6 +213,7 @@ int main()
                         fd_table.emplace(client_fd, FdType::Tcpclient);
                         //至此我们就完成了
                     }
+
                     break;
                 }
 
