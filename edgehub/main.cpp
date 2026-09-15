@@ -29,13 +29,16 @@
 static volatile sig_atomic_t g_running = 1;
 static void sig_handler(int) { g_running = 0; }
 
+/* CAN标准ID 0x200 + nodeId表示来源节点；payload固定为sequence(2) + temperature(4) + scale(1)。 */
+static constexpr uint32_t CAN_TELEMETRY_BASE_ID = 0x200U;
+static constexpr uint32_t CAN_TELEMETRY_NODE_MAX = 127U;
+static constexpr uint8_t CAN_TELEMETRY_LENGTH = 7U;
+
 int main()
 {
     signal(SIGINT, sig_handler);
     signal(SIGTERM, sig_handler);
     signal(SIGPIPE, SIG_IGN);
-
-    uint32_t can_receive_id = 0x123;
 
     //首先我们先创建客户端然后使用epoll
     TcpServe tcpserve(TCPSERVE_PORT,TCPSERVE_BACKLOG);
@@ -59,11 +62,6 @@ int main()
     }
 
     if(can.setnoblocking() == false)
-    {
-        return -1;
-    }
-
-    if(can.addFilter(can_receive_id) == false)
     {
         return -1;
     }
@@ -381,17 +379,32 @@ int main()
                             //如果收到的数据和can_frame长度相等，也就意味着收到了完整的一帧，我们对这一帧进行解析然后存储
                             if(receive_result == sizeof(can_frame))
                             {
-                                can_message.nodeId = can_frame.data[0];
+                                uint32_t can_id = can_frame.can_id & CAN_SFF_MASK;
+                                uint32_t temperature_raw;
+
+                                /* 不使用固定ID过滤：每个节点的ID不同，先接收后按遥测ID范围和DLC确认格式。 */
+                                if(((can_frame.can_id & (CAN_EFF_FLAG | CAN_RTR_FLAG | CAN_ERR_FLAG)) != 0U) ||
+                                   (can_frame.can_dlc != CAN_TELEMETRY_LENGTH) ||
+                                   (can_id <= CAN_TELEMETRY_BASE_ID) ||
+                                   (can_id > (CAN_TELEMETRY_BASE_ID + CAN_TELEMETRY_NODE_MAX)))
+                                {
+                                    continue;
+                                }
+
+                                can_message.nodeId = static_cast<uint8_t>(can_id - CAN_TELEMETRY_BASE_ID);
                                 can_message.sequence =
-                                    (static_cast<uint16_t>(can_frame.data[1]) << 8) |
-                                    static_cast<uint16_t>(can_frame.data[2]);
-                                can_message.temperature =
-                                    (static_cast<uint32_t>(can_frame.data[3]) << 24) |
-                                    (static_cast<uint32_t>(can_frame.data[4]) << 16) |
-                                    (static_cast<uint32_t>(can_frame.data[5]) << 8)  |
-                                    static_cast<uint32_t>(can_frame.data[6]);
+                                    (static_cast<uint16_t>(can_frame.data[0]) << 8) |
+                                    static_cast<uint16_t>(can_frame.data[1]);
+                                temperature_raw =
+                                    (static_cast<uint32_t>(can_frame.data[2]) << 24) |
+                                    (static_cast<uint32_t>(can_frame.data[3]) << 16) |
+                                    (static_cast<uint32_t>(can_frame.data[4]) << 8)  |
+                                    static_cast<uint32_t>(can_frame.data[5]);
+                                can_message.temperature = temperature_raw <= 0x7FFFFFFFU ?
+                                    static_cast<int32_t>(temperature_raw) :
+                                    static_cast<int32_t>(static_cast<int64_t>(temperature_raw) - 0x100000000LL);
                                 can_message.temperatureScale =
-                                    static_cast<int8_t>(can_frame.data[7]);
+                                    static_cast<int8_t>(can_frame.data[6]);
                                 can_message.receivedAtUs = frame_received_at_us();
 
                                 storage.insertMessage(can_message);
