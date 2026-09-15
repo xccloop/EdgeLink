@@ -1,8 +1,11 @@
 #ifndef ESP12S_H_
 #define ESP12S_H_
 
+#include <stdint.h>
+
 void esp12s_init();
 void esp12s_cmd_send(const char *data);
+void esp12s_data_send(const uint8_t *data, uint8_t length);
 
 //以下为ESP12S的常用AT指令
 /* 基础测试 */

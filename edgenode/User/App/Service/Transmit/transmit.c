@@ -2,7 +2,7 @@
 #include <stdint.h>
 
 #include "Protocol/Tcp/tcp_frame.h"
-#include "ESP12S/esp12s.h"
+#include "Output/Tcp/tcp.h"
 
 /*
     这一层未来负责协调TCP和CAN输出。
@@ -21,10 +21,13 @@ uint8_t tcp_frame_transmit(telemetry_sample_struct *message,uint16_t sequence)
         return TCP_TRANSMIT_FAIL;
     }
 
-    /* transmit_data尚未交给ESP12S，因此本函数必须如实返回失败。 */
-    return TCP_TRANSMIT_FAIL;
-}
+    if(tcp_send(transmit_data, sizeof(transmit_data)) == TCP_SEND_FAIL)
+    {
+        return TCP_TRANSMIT_FAIL;
+    }
 
+    return TCP_TRANSMIT_SUCCESS;
+}
 uint8_t can_frame_transmit()
 {
 

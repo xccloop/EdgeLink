@@ -3,6 +3,8 @@
 #include "INTERRUPT/USART/usart.h"
 #include "board_time.h"
 
+#include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 
 /*
@@ -144,6 +146,66 @@ static uint8_t tcp_at_text_valid(const char *text)
     return TCP_SUCCESS;
 }
 
+/*
+    CIPSEND后ESP返回单字符'>'，表示接下来可以按指定长度发送原始数据。
+*/
+static uint8_t tcp_wait_prompt(uint32_t timeout_ms)
+{
+    uint32_t deadline_ms = board_systick_ms + timeout_ms;
+    esp12s_response_t response;
+
+     while(tcp_deadline_expired(deadline_ms) == TCP_FAIL)
+    {
+        if(esp12s_response_get(&response) == 0U)
+        {
+            continue;
+        }
+
+        if(response == ESP12S_RESPONSE_PROMPT)
+        {
+            return TCP_SUCCESS;  // 收到 '>'，现在可发送 Frame
+        }
+
+        if((response == ESP12S_RESPONSE_ERROR) ||
+           (response == ESP12S_RESPONSE_FAIL) ||
+           (response == ESP12S_RESPONSE_BUSY) ||
+           (response == ESP12S_RESPONSE_CLOSED))
+        {
+            return TCP_FAIL;
+        }
+    }
+    return TCP_FAIL;//超时返回fail
+}
+
+static uint8_t tcp_wait_send_ok(uint32_t timeout_ms)
+{
+    uint32_t deadline_ms = board_systick_ms + timeout_ms;
+    esp12s_response_t response;
+
+    while(tcp_deadline_expired(deadline_ms) == TCP_FAIL)
+    {
+        if(esp12s_response_get(&response) == 0U)
+        {
+            continue;
+        }
+
+        if(response == ESP12S_RESPONSE_SEND_OK)
+        {
+            return TCP_SUCCESS;
+        }
+
+        if((response == ESP12S_RESPONSE_ERROR) ||
+           (response == ESP12S_RESPONSE_FAIL) ||
+           (response == ESP12S_RESPONSE_BUSY) ||
+           (response == ESP12S_RESPONSE_CLOSED))
+        {
+            return TCP_FAIL;
+        }
+    }
+
+    return TCP_FAIL;
+}
+
 uint8_t tcp_init(const tcp_config_struct *config)
 {
     int command_length;
@@ -225,4 +287,53 @@ uint8_t tcp_init(const tcp_config_struct *config)
 uint8_t tcp_connected_get(void)
 {
     return tcp_connected;
+}
+
+/*
+    这个函数调用BSP层接口返回供上层调用发送数据
+*/
+uint8_t tcp_send(const uint8_t *data, uint8_t length)
+{
+    int command_length;
+
+    if((data == NULL) || (length == 0U) || (tcp_connected == TCP_FAIL))
+    {
+        return TCP_SEND_FAIL;
+    }
+
+    /*
+        snprintf() 的作用是按照指定格式生成字符串，并将结果写入指定的字符数组中。
+        第一个参数 tcp_command_buffer：
+            用于保存最终生成的字符串，也就是我们的 TCP AT 指令发送缓冲区。
+        第二个参数 sizeof(tcp_command_buffer)：
+            表示缓冲区最大可写入的长度，用来防止字符串写出数组边界。
+        第三个参数 "%s%u\r\n"：
+            是字符串格式。
+            %s 用于填入字符串 ESP_AT_CIPSEND，
+            %u 用于填入无符号整数 length，
+            \r\n 是 AT 指令要求的结束符。
+    这样做我们就可以发送"AT+CIPSEND= "length""的格式了，之前我们使用定义一个只有一位的数组存储length，这是错误的
+    */
+    command_length = snprintf(tcp_command_buffer, sizeof(tcp_command_buffer),
+                              "%s%u\r\n", ESP_AT_CIPSEND, (unsigned int)length);
+    if((command_length < 0) || ((uint32_t)command_length >= sizeof(tcp_command_buffer)))
+    {
+        return TCP_SEND_FAIL;
+    }
+
+    /* 新命令开始前清除旧事件，避免上次传输残留的回应被本次误用。 */
+    esp12s_response_reset();
+    esp12s_cmd_send(tcp_command_buffer);//然后将我们拼接好的进行发送
+
+    if(tcp_wait_prompt(TCP_AT_TIMEOUT_MS) == TCP_FAIL)
+    {
+        return TCP_SEND_FAIL;
+    }
+    esp12s_data_send(data, length);
+
+    if(tcp_wait_send_ok(TCP_AT_TIMEOUT_MS) == TCP_FAIL)
+    {
+        return TCP_SEND_FAIL;
+    }
+    return TCP_SEND_SUCCESS;
 }

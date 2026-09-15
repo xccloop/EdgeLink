@@ -63,3 +63,20 @@ void esp12s_cmd_send(const char *data)
         data++;
     }
 }
+
+/*
+    这个函数负责将数据发送给esp12s，一般为调用cmd_send之后
+*/
+void esp12s_data_send(const uint8_t *data, uint8_t length)
+{
+    uint16_t index;
+
+    for(index = 0U; index < length; index++)
+    {
+        while(RESET == usart_flag_get(USART1, USART_FLAG_TBE))
+        {
+        }
+
+        usart_data_transmit(USART1, data[index]);
+    }
+}
