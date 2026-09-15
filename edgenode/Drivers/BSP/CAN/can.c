@@ -3,6 +3,7 @@
 #include "gd32f10x_gpio.h"
 #include "gd32f10x_rcu.h"
 #include "gd32f10x_can.h"
+#include <stdio.h>
 
 /*
     这个文件我们呢来编写CAN相关，通讯相关的底层我们都要实现传输+接受，我们用到的引脚是，PB8,PB9
@@ -166,7 +167,6 @@ uint8_t can0_data_send(uint16_t standard_id, const uint8_t *data, uint8_t data_l
     }
 
     mailbox = can_message_transmit(CAN0, &can_transmit_message);
-
     /* GD32库使用CAN_NOMAILBOX表示失败；APP只需要认识BSP公开的CAN0_TX_MAILBOX_NONE。 */
     return (mailbox == CAN_NOMAILBOX) ? CAN0_TX_MAILBOX_NONE : mailbox;
 }

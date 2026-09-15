@@ -4,10 +4,8 @@
 #include "CH340/ch340.h"
 #include "board_config.h"
 #include "board_time.h"
-#include "Output/Tcp/tcp.h"
-#include "ESP12S/esp12s.h"
-#include "INTERRUPT/USART/usart.h"
-
+#include "CAN/can.h"
+#include "Output/can/can_output.h"
 #include <stdint.h>
 #include <stdio.h>
 
@@ -22,92 +20,13 @@
 
 int main(void)
 {
-    esp12s_response_t response;
-    uint32_t deadline_ms;
-    uint8_t send_prompt_received;
-    uint8_t send_ok_received;
-
+    setvbuf(stdout, NULL, _IONBF, 0);
     board_config_init();
     ch340_init();
 
-    tcp_config_struct config;
-    config.wifi_ssid = "";
-    config.wifi_password = "";
-    config.server_ip = "";
-    config.server_port = 8888;
+    
 
-    setvbuf(stdout, NULL, _IONBF, 0);
     printf("Edgenode start\r\n");
-
-    if(tcp_init(&config) == TCP_SUCCESS)
-    {
-        printf("TCP CONNECTED\r\n");
-
-        /* CIPSEND先声明后续原始负载长度；只有收到ESP的'>'提示才能发送5字节HELLO。 */
-        esp12s_response_reset();
-        esp12s_cmd_send("AT+CIPSEND=5\r\n");
-        deadline_ms = board_systick_ms + 10000U;
-        send_prompt_received = 0U;
-
-        while((uint32_t)(board_systick_ms - deadline_ms) >= 0x80000000U)
-        {
-            if(esp12s_response_get(&response) != 0U)
-            {
-                if(response == ESP12S_RESPONSE_PROMPT)
-                {
-                    send_prompt_received = 1U;
-                    break;
-                }
-                if((response == ESP12S_RESPONSE_ERROR) || (response == ESP12S_RESPONSE_FAIL) ||
-                   (response == ESP12S_RESPONSE_BUSY) || (response == ESP12S_RESPONSE_CLOSED))
-                {
-                    break;
-                }
-            }
-        }
-
-        if(send_prompt_received == 0U)
-        {
-            printf("TCP TEST SEND FAILED: no CIPSEND prompt\r\n");
-        }
-        else
-        {
-            esp12s_response_reset();
-            esp12s_cmd_send("HELLO");
-            deadline_ms = board_systick_ms + 10000U;
-            send_ok_received = 0U;
-
-            while((uint32_t)(board_systick_ms - deadline_ms) >= 0x80000000U)
-            {
-                if(esp12s_response_get(&response) != 0U)
-                {
-                    if(response == ESP12S_RESPONSE_SEND_OK)
-                    {
-                        send_ok_received = 1U;
-                        break;
-                    }
-                    if((response == ESP12S_RESPONSE_ERROR) || (response == ESP12S_RESPONSE_FAIL) ||
-                       (response == ESP12S_RESPONSE_BUSY) || (response == ESP12S_RESPONSE_CLOSED))
-                    {
-                        break;
-                    }
-                }
-            }
-
-            if(send_ok_received != 0U)
-            {
-                printf("TCP TEST SEND OK: HELLO\r\n");
-            }
-            else
-            {
-                printf("TCP TEST SEND FAILED: no SEND OK\r\n");
-            }
-        }
-    }
-    else
-    {
-        printf("TCP CONNECT FAILED\r\n");
-    }
 
     while (1) {
         delay_ms(200);

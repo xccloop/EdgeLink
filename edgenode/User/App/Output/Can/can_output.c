@@ -1,6 +1,7 @@
 #include "can_output.h"
 #include "CAN/can.h"
 #include "Protocol/Can/can_frame.h"
+#include <stdio.h>
 
 /*
     这个函数完成一条Message的CAN输出。
@@ -16,11 +17,13 @@ uint8_t can_telemetry_send(uint8_t node_id, uint16_t sequence,
 
     if((node_id == 0U) || (node_id > 127U) || (message == 0))
     {
+        printf("noid id fail\r\n");
         return CAN_FRAME_FAIL;
     }
 
     if(can_frame_encode(data, sequence, message) == CAN_FRAME_FAIL)
     {
+        printf("frame encode fail\r\n");
         return CAN_FRAME_FAIL;
     }
 
