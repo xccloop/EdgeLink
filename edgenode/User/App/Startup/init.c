@@ -9,6 +9,8 @@
 #include "IPS/ips.h"
 #include "Presentation/Buffer/display_buffer.h"
 #include "Output/Storage/storage.h"
+#include "Output/TCP/tcp.h"
+#include "Config/config.h"
 
 /*
     这个文件服务于裸机
@@ -58,6 +60,11 @@ uint8_t init_all(void)
 
     /* Storage会验证GD25Q32并寻找新日志扇区，失败时不能继续追加历史数据。 */
     if(storage_init() == STORAGE_FAIL)
+    {
+        return INIT_ALL_FAIL;
+    }
+
+    if(tcp_init(config_tcp_get()) == TCP_FAIL)
     {
         return INIT_ALL_FAIL;
     }
