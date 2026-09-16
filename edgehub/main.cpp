@@ -298,6 +298,13 @@ int main()
                                         //此TCP端口只承载Telemetry；接入Storage时在这里调用Message_handle转换。
                                         //SUCCESS时解析器已经消费一整帧，继续循环可处理粘着的下一帧。
                                         Message_handle(&message, &frame);
+                                         printf("TCP telemetry received: node=%u sequence=%u "
+                                            "temperature_raw=%ld scale=%d\n",
+                                            (unsigned int)message.nodeId,
+                                            (unsigned int)message.sequence,
+                                            (long)message.temperature,
+                                            (int)message.temperatureScale);
+
                                         if(storage.isOpen() == true)
                                         {
                                             if(storage.insertMessage(message) == false)
@@ -416,6 +423,15 @@ int main()
                                 can_message.temperatureScale =
                                     static_cast<int8_t>(can_frame.data[6]);
                                 can_message.receivedAtUs = frame_received_at_us();
+
+                                printf("CAN rx: id=0x%03X node=%u seq=%u temp_raw=0x%08X temp=%d scale=%d t=%llu\r\n",
+                                    can_id,
+                                    can_message.nodeId,
+                                    can_message.sequence,
+                                    temperature_raw,
+                                    can_message.temperature,
+                                    can_message.temperatureScale,
+                                    (unsigned long long)can_message.receivedAtUs);
 
                                 storage.insertMessage(can_message);
 
