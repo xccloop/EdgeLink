@@ -2,6 +2,8 @@
 //我们先在BSP中实现我们要实现的外设，包括LED,KEY,ESP-12S,GD25Q32,ADC,CAN,IPS,BMP280
 
 #include "CH340/ch340.h"
+#include "Service/node_service.h"
+#include "Startup/init.h"
 #include "board_config.h"
 #include "board_time.h"
 #include "CAN/can.h"
@@ -21,14 +23,11 @@
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
-    board_config_init();
-    ch340_init();
-
-    
-
+    init_all();
     printf("Edgenode start\r\n");
 
     while (1) {
+        node_service_run_once();
         delay_ms(200);
     }
 }

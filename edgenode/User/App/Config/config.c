@@ -6,8 +6,8 @@ const uint8_t board_id = 0x01U;
 /* 本机测试用：EdgeHub 的局域网地址与 TCP 监听端口。 */
 static const tcp_config_struct tcp_config =
 {
-    .wifi_ssid = "",
-    .wifi_password = "",
+    .wifi_ssid = "ChinaNet-pehm",
+    .wifi_password = "yrdhziq9",
     .server_ip = "192.168.1.112",
     .server_port = 8888
 };

@@ -1,0 +1,1472 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mxfile host="Electron">
+  <diagram id="edgenode-flow" name="流程思维导图">
+    <mxGraphModel dx="2402" dy="1656" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="1200" math="0" shadow="0" adaptiveColors="auto">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontSize=24;fontStyle=1;fontColor=#1F2937;" value="EdgeNode（GD32F103RCT6）流程思维导图" vertex="1">
+          <mxGeometry height="50" width="620" x="520" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="legend" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3F4F6;strokeColor=#9CA3AF;fontColor=#374151;align=left;spacingLeft=10;" value="&lt;b&gt;状态图例&lt;/b&gt;&#xA;绿色：当前主流程已接入&#xA;黄色：模块已有但未接入主流程&#xA;红色：明确待完成&#xA;虚线：规划或未闭环路径" vertex="1">
+          <mxGeometry height="120" width="300" x="1330" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="center" parent="1" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#DAE8FC;strokeColor=#6C8EBF;strokeWidth=3;fontSize=17;fontStyle=1;" value="&lt;b&gt;EdgeNode&lt;/b&gt;&#xA;裸机采集节点" vertex="1">
+          <mxGeometry height="180" width="180" x="720" y="470" as="geometry" />
+        </mxCell>
+        <mxCell id="startup_group" parent="1" style="swimlane;startSize=32;rounded=1;fillColor=#E8F5E9;strokeColor=#82B366;fontStyle=1;fontSize=15;html=1;" value="1. 启动与硬件基础" vertex="1">
+          <mxGeometry height="310" width="580" x="40" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="main_start" parent="startup_group" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontStyle=1;" value="main() 上电入口" vertex="1">
+          <mxGeometry height="60" width="140" x="30" y="55" as="geometry" />
+        </mxCell>
+        <mxCell id="init_all" parent="startup_group" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" value="init_all()&#xA;唯一初始化编排入口" vertex="1">
+          <mxGeometry height="60" width="150" x="210" y="55" as="geometry" />
+        </mxCell>
+        <mxCell id="board_init" parent="startup_group" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" value="BOARD 最先初始化&#xA;时钟 / NVIC / SysTick / SWD / SPI0" vertex="1">
+          <mxGeometry height="80" width="150" x="400" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="bsp_init" parent="startup_group" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" value="BSP 外设初始化&#xA;CH340 / LED / KEY / ADC / CAN&#xA;BMP280 / IPS + DMA" vertex="1">
+          <mxGeometry height="85" width="180" x="120" y="165" as="geometry" />
+        </mxCell>
+        <mxCell id="storage_init" parent="startup_group" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" value="Storage 初始化&#xA;验证 GD25Q32&#xA;寻找新日志扇区" vertex="1">
+          <mxGeometry height="85" width="170" x="340" y="165" as="geometry" />
+        </mxCell>
+        <mxCell id="e_main_init" edge="1" parent="startup_group" source="main_start" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;" target="init_all">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_init_board" edge="1" parent="startup_group" source="init_all" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;" target="board_init">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_board_bsp" edge="1" parent="startup_group" source="board_init" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;" target="bsp_init">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_bsp_storage_init" edge="1" parent="startup_group" source="bsp_init" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;" target="storage_init">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="init_decision" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontStyle=1;" value="全部成功？" vertex="1">
+          <mxGeometry height="80" width="140" x="690" y="180" as="geometry" />
+        </mxCell>
+        <mxCell id="halt" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;fontColor=#7F1D1D;" value="失败：停留在 while(1)&#xA;不进入业务循环" vertex="1">
+          <mxGeometry height="70" width="190" x="900" y="180" as="geometry" />
+        </mxCell>
+        <mxCell id="runtime_group" parent="1" style="swimlane;startSize=32;rounded=1;fillColor=#E8F4F8;strokeColor=#6C8EBF;fontStyle=1;fontSize=15;html=1;" value="2. 主循环与采集调度" vertex="1">
+          <mxGeometry height="330" width="590" x="1040" y="310" as="geometry" />
+        </mxCell>
+        <mxCell id="loop" parent="runtime_group" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" value="while(1)&#xA;启动提示 + LED 翻转" vertex="1">
+          <mxGeometry height="70" width="155" x="30" y="55" as="geometry" />
+        </mxCell>
+        <mxCell id="service" parent="runtime_group" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontStyle=1;" value="node_service_run_once()&#xA;一次采集周期调度" vertex="1">
+          <mxGeometry height="70" width="165" x="220" y="55" as="geometry" />
+        </mxCell>
+        <mxCell id="period" parent="runtime_group" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" value="已到 1000 ms&#xA;采样周期？" vertex="1">
+          <mxGeometry height="80" width="140" x="420" y="50" as="geometry" />
+        </mxCell>
+        <mxCell id="collect" parent="runtime_group" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" value="message_collect()" vertex="1">
+          <mxGeometry height="60" width="150" x="80" y="180" as="geometry" />
+        </mxCell>
+        <mxCell id="bmp" parent="runtime_group" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" value="Acquisition&#xA;BMP280 读取温度&#xA;记录 sample_uptime_ms" vertex="1">
+          <mxGeometry height="80" width="170" x="270" y="170" as="geometry" />
+        </mxCell>
+        <mxCell id="message" parent="runtime_group" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontStyle=1;" value="统一 telemetry_sample&#xA;temperature&#xA;temperature_scale&#xA;sample_uptime_ms" vertex="1">
+          <mxGeometry height="100" width="110" x="465" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="e_loop_service" edge="1" parent="runtime_group" source="loop" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;" target="service">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_service_period" edge="1" parent="runtime_group" source="service" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;" target="period">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_period_collect" edge="1" parent="runtime_group" source="period" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;" target="collect" value="是">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_collect_bmp" edge="1" parent="runtime_group" source="collect" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;" target="bmp">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_bmp_message" edge="1" parent="runtime_group" source="bmp" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;" target="message">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="outputs_group" parent="1" style="swimlane;startSize=32;rounded=1;fillColor=#FFF9E6;strokeColor=#D6B656;fontStyle=1;fontSize=15;html=1;" value="3. Message 输出分支" vertex="1">
+          <mxGeometry height="350" width="980" x="650" y="720" as="geometry" />
+        </mxCell>
+        <mxCell id="storage_output" parent="outputs_group" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;strokeWidth=2;" value="&lt;b&gt;Flash Storage（已接入）&lt;/b&gt;&#xA;16 字节槽位顺序追加&#xA;载荷 + CRC32 + commit&#xA;写后读回验证" vertex="1">
+          <mxGeometry height="120" width="190" x="30" y="75" as="geometry" />
+        </mxCell>
+        <mxCell id="tcp_encode" parent="outputs_group" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" value="TCP V4 帧编码（已有）&#xA;固定 16 字节&#xA;EH / node_id / sequence&#xA;temperature / CRC32" vertex="1">
+          <mxGeometry height="130" width="190" x="270" y="65" as="geometry" />
+        </mxCell>
+        <mxCell id="tcp_output" parent="outputs_group" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;" value="ESP-AT / TCP 输出&#xA;tcp_init() 已实现但未由 init_all 调用&#xA;Transmit 尚未把帧交给 ESP12S" vertex="1">
+          <mxGeometry height="130" width="200" x="510" y="65" as="geometry" />
+        </mxCell>
+        <mxCell id="can_encode" parent="outputs_group" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" value="CAN 帧编码 + Output（已有）&#xA;ID = 0x200 + node_id&#xA;7 字节遥测负载" vertex="1">
+          <mxGeometry height="110" width="185" x="760" y="65" as="geometry" />
+        </mxCell>
+        <mxCell id="transmit_gap" parent="outputs_group" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;fontStyle=1;" value="Service/Transmit 接入待完成&#xA;当前 node_service 只调用 Storage&#xA;TCP / CAN 不报告发送成功" vertex="1">
+          <mxGeometry height="80" width="400" x="290" y="235" as="geometry" />
+        </mxCell>
+        <mxCell id="e_tcp_output" edge="1" parent="outputs_group" source="tcp_encode" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;dashed=1;endArrow=classic;" target="tcp_output">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_tcp_gap" edge="1" parent="outputs_group" source="tcp_output" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;dashed=1;endArrow=classic;" target="transmit_gap">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_can_gap" edge="1" parent="outputs_group" source="can_encode" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;dashed=1;endArrow=classic;" target="transmit_gap">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="display_group" parent="1" style="swimlane;startSize=32;rounded=1;fillColor=#FCE4EC;strokeColor=#B85450;fontStyle=1;fontSize=15;html=1;" value="4. 显示支撑（尚未进入业务显示）" vertex="1">
+          <mxGeometry height="250" width="540" x="40" y="760" as="geometry" />
+        </mxCell>
+        <mxCell id="ips" parent="display_group" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" value="IPS BSP&#xA;ST7789 / SPI2 / DMA" vertex="1">
+          <mxGeometry height="75" width="145" x="35" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="double_buffer" parent="display_group" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" value="APP 双行缓冲&#xA;FREE → READY → TRANSMITTING" vertex="1">
+          <mxGeometry height="75" width="170" x="220" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="hmi_gap" parent="display_group" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;" value="HMI / 遥测数据显示&#xA;当前 main 未调用渲染服务" vertex="1">
+          <mxGeometry height="60" width="190" x="315" y="165" as="geometry" />
+        </mxCell>
+        <mxCell id="e_ips_buffer" edge="1" parent="display_group" source="ips" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;" target="double_buffer">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_buffer_hmi" edge="1" parent="display_group" source="double_buffer" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;dashed=1;endArrow=classic;" target="hmi_gap">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_center_start" edge="1" parent="1" source="center" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;strokeWidth=2;endArrow=classic;" target="main_start" value="启动">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_storage_decision" edge="1" parent="1" source="storage_init" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;" target="init_decision">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_decision_halt" edge="1" parent="1" source="init_decision" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;fontColor=#B85450;endArrow=classic;" target="halt" value="否">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_decision_loop" edge="1" parent="1" source="init_decision" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;fontColor=#2E7D32;endArrow=classic;" target="loop" value="是">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_center_runtime" edge="1" parent="1" source="center" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;strokeWidth=2;endArrow=classic;" target="service" value="循环">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_message_storage" edge="1" parent="1" source="message" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;strokeWidth=2;endArrow=classic;" target="storage_output" value="当前调用">
+          <mxGeometry relative="1" x="0.005" y="-10" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_message_tcp" edge="1" parent="1" source="message" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;dashed=1;endArrow=classic;" target="tcp_encode" value="待接入">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_message_can" edge="1" parent="1" source="message" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;dashed=1;endArrow=classic;" target="can_encode" value="待接入">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_center_display" edge="1" parent="1" source="center" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;dashed=1;strokeWidth=2;endArrow=classic;" target="ips" value="显示">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="edgenode-detail" name="细分展开">
+    <mxGraphModel dx="1201" dy="828" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2000" pageHeight="1450" math="0" shadow="0" adaptiveColors="auto">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="d_title" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontSize=24;fontStyle=1;fontColor=#1F2937;" value="EdgeNode 细分展开：从上电、采样到每一个输出边界" vertex="1">
+          <mxGeometry height="45" width="940" x="530" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="d_boot_group" parent="1" style="swimlane;startSize=34;rounded=1;fillColor=#E8F5E9;strokeColor=#82B366;fontStyle=1;fontSize=16;html=1;" value="1. 上电与初始化：只做资源准备，不做周期业务" vertex="1">
+          <mxGeometry height="680" width="440" x="20" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="d_main" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontStyle=1;" value="&lt;b&gt;main()&lt;/b&gt;&#xA;调用 init_all()&#xA;失败后停在 while(1)" vertex="1">
+          <mxGeometry height="80" width="160" x="55" y="150" as="geometry" />
+        </mxCell>
+        <mxCell id="d_board" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" value="&lt;b&gt;board_config_init() 最先执行&lt;/b&gt;&#xA;时钟与 SysTick 毫秒计时&#xA;NVIC 与 SWD&#xA;共享 SPI0 总线" vertex="1">
+          <mxGeometry height="115" width="170" x="260" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="d_basic_bsp" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" value="&lt;b&gt;无返回状态的 BSP&lt;/b&gt;&#xA;CH340、LED、KEY、ADC&#xA;只完成外设本地准备" vertex="1">
+          <mxGeometry height="100" width="170" x="55" y="300" as="geometry" />
+        </mxCell>
+        <mxCell id="d_checked_bsp" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" value="&lt;b&gt;需要检查结果的初始化&lt;/b&gt;&#xA;Can_init()&#xA;bmp280_init()&#xA;ips_init() 与 display_buffer_init()&#xA;storage_init()" vertex="1">
+          <mxGeometry height="135" width="180" x="250" y="285" as="geometry" />
+        </mxCell>
+        <mxCell id="d_init_result" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;fontColor=#7F1D1D;" value="任一步失败&#xA;返回 INIT_ALL_FAIL&#xA;main 不进入业务循环" vertex="1">
+          <mxGeometry height="90" width="200" x="130" y="470" as="geometry" />
+        </mxCell>
+        <mxCell id="d_tcp_excluded" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" value="&lt;b&gt;TCP 不在 init_all() 中&lt;/b&gt;&#xA;tcp_init() 需要 WiFi 与服务器配置&#xA;它自己会初始化 ESP12S&#xA;避免 USART1 重复初始化" vertex="1">
+          <mxGeometry height="95" width="320" x="75" y="605" as="geometry" />
+        </mxCell>
+        <mxCell id="d_service_group" parent="1" style="swimlane;startSize=34;rounded=1;fillColor=#E8F4F8;strokeColor=#6C8EBF;fontStyle=1;fontSize=16;html=1;" value="2. 采样调度：Service 决定何时产生一条 Message" vertex="1">
+          <mxGeometry height="680" width="520" x="480" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="d_loop" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontStyle=1;" value="&lt;b&gt;while(1)&lt;/b&gt;&#xA;启动提示&#xA;LED1 与 LED2 翻转&#xA;调用 node_service_run_once()" vertex="1">
+          <mxGeometry height="105" width="185" x="515" y="140" as="geometry" />
+        </mxCell>
+        <mxCell id="d_time_gate" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" value="&lt;b&gt;时间门&lt;/b&gt;&#xA;读取 board_systick_ms&#xA;now - last &lt; 1000 ms&#xA;直接返回，不采样不写 Flash" vertex="1">
+          <mxGeometry height="125" width="195" x="750" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="d_sample_mark" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" value="&lt;b&gt;到期后先记录本轮时刻&lt;/b&gt;&#xA;即使随后采样或存储失败&#xA;也不会在紧循环内无限重试" vertex="1">
+          <mxGeometry height="100" width="210" x="550" y="315" as="geometry" />
+        </mxCell>
+        <mxCell id="d_collect" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" value="&lt;b&gt;message_collect()&lt;/b&gt;&#xA;委托 Acquisition/Collection&#xA;读取 BMP280" vertex="1">
+          <mxGeometry height="85" width="165" x="800" y="330" as="geometry" />
+        </mxCell>
+        <mxCell id="d_model" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;strokeWidth=2;fontStyle=1;" value="&lt;b&gt;telemetry_sample_struct&lt;/b&gt;&#xA;temperature：int32&#xA;temperature_scale：int8&#xA;sample_uptime_ms：uint32&#xA;只表达数据，不知道去向" vertex="1">
+          <mxGeometry height="130" width="285" x="590" y="480" as="geometry" />
+        </mxCell>
+        <mxCell id="d_service_result" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" value="返回值&#xA;1：本轮无须采样或存储成功&#xA;0：采样失败或 Storage 失败&#xA;main 当前未展示该状态" vertex="1">
+          <mxGeometry height="75" width="360" x="530" y="650" as="geometry" />
+        </mxCell>
+        <mxCell id="d_output_group" parent="1" style="swimlane;startSize=34;rounded=1;fillColor=#FFF9E6;strokeColor=#D6B656;fontStyle=1;fontSize=16;html=1;" value="3. 输出边界：同一条 Message 可以被独立消费" vertex="1">
+          <mxGeometry height="680" width="940" x="1020" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="d_can_output" parent="d_output_group" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" value="&lt;b&gt;Output/Can：已有&lt;/b&gt;&#xA;can_telemetry_send()&#xA;CAN ID = 0x200 + node_id&#xA;调用 can0_data_send() 请求邮箱&#xA;缺口：Service 提供 node_id 与 sequence 并接入" vertex="1">
+          <mxGeometry height="140" width="280" x="410" y="370" as="geometry" />
+        </mxCell>
+        <mxCell id="d_tcp_output" parent="d_output_group" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;" value="&lt;b&gt;Output/Tcp：连接已有，发送待补&lt;/b&gt;&#xA;tcp_init()：AT 测试、入网、CIPSTART&#xA;tcp_connected_get()：连接状态&#xA;缺口：CIPSEND 数据发送、重连、Service 接入" vertex="1">
+          <mxGeometry height="135" width="320" x="440" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="d_no_false_success" parent="d_output_group" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;fontStyle=1;" value="&lt;b&gt;当前禁止伪报成功&lt;/b&gt;&#xA;Transmit 的 TCP/CAN 函数在真实发送未完成前返回 FAIL&#xA;待接入能力不等于已经工作" vertex="1">
+          <mxGeometry height="80" width="630" x="150" y="555" as="geometry" />
+        </mxCell>
+        <mxCell id="d_fanout" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontStyle=1;" value="&lt;b&gt;Service 的扇出策略&lt;/b&gt;&#xA;当前：仅调用 Storage&#xA;未来：同一 Message 再交 TCP 与 CAN&#xA;各输出应独立报告成功或失败" vertex="1">
+          <mxGeometry height="110" width="230" x="1050" y="140" as="geometry" />
+        </mxCell>
+        <mxCell id="d_storage" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;strokeWidth=2;" value="&lt;b&gt;Storage：当前已接入&lt;/b&gt;&#xA;storage_temperature(message)&#xA;只追加，不把地址策略交给 main" vertex="1">
+          <mxGeometry height="95" width="240" x="1330" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="d_tcp_protocol" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" value="&lt;b&gt;Protocol/Tcp：已有&lt;/b&gt;&#xA;tcp_frame_encode()&#xA;V4 固定 16 字节&#xA;EH、版本、source、target、序号&#xA;温度、倍率、CRC32" vertex="1">
+          <mxGeometry height="135" width="300" x="1620" y="115" as="geometry" />
+        </mxCell>
+        <mxCell id="d_can_protocol" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" value="&lt;b&gt;Protocol/Can：已有&lt;/b&gt;&#xA;can_frame_encode() 只填充数据&#xA;[sequence 2][temperature 4][scale 1]&#xA;不直接访问 CAN BSP" vertex="1">
+          <mxGeometry height="120" width="280" x="1055" y="385" as="geometry" />
+        </mxCell>
+        <mxCell id="d_reliability_group" parent="1" style="swimlane;startSize=34;rounded=1;fillColor=#FCE4EC;strokeColor=#B85450;fontStyle=1;fontSize=16;html=1;" value="4. Flash 可靠性与显示边界" vertex="1">
+          <mxGeometry height="500" width="1940" x="20" y="810" as="geometry" />
+        </mxCell>
+        <mxCell id="d_slot" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" value="&lt;b&gt;Flash 槽位：16 字节&lt;/b&gt;&#xA;0 到 3：sample_uptime_ms 大端&#xA;4 到 7：temperature 大端补码&#xA;8：temperature_scale&#xA;9 到 12：前 9 字节 CRC32&#xA;13 到 14：预留 FF&#xA;15：commit" vertex="1">
+          <mxGeometry height="200" width="280" x="55" y="875" as="geometry" />
+        </mxCell>
+        <mxCell id="d_write_order" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;strokeWidth=2;" value="&lt;b&gt;一次写入事务&lt;/b&gt;&#xA;1. 新扇区先擦除 4 KiB&#xA;2. 写 9 字节载荷加 4 字节 CRC&#xA;3. 最后单独写 commit = 0x00&#xA;4. 读回比对载荷、commit、CRC" vertex="1">
+          <mxGeometry height="175" width="310" x="385" y="875" as="geometry" />
+        </mxCell>
+        <mxCell id="d_power_loss" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" value="&lt;b&gt;掉电保护语义&lt;/b&gt;&#xA;commit 保持 FF：这条记录不可信&#xA;CRC 不匹配：这条记录不可信&#xA;擦除期间掉电：启动时只选整扇区全 FF 的新区域&#xA;代价：未写满旧扇区的剩余槽位被放弃" vertex="1">
+          <mxGeometry height="200" width="390" x="750" y="865" as="geometry" />
+        </mxCell>
+        <mxCell id="d_capacity" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" value="&lt;b&gt;容量与停止条件&lt;/b&gt;&#xA;4 MiB，从 0x000000 顺序追加&#xA;每扇区 4 KiB = 256 个槽位&#xA;写至末尾不回绕，防止覆盖历史&#xA;写入或验证失败：storage_ready 清零" vertex="1">
+          <mxGeometry height="175" width="300" x="1190" y="875" as="geometry" />
+        </mxCell>
+        <mxCell id="d_display" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;" value="&lt;b&gt;Presentation：当前未接入 Service&lt;/b&gt;&#xA;IPS BSP：ST7789、SPI2、DMA&#xA;Buffer：FREE 到 READY 到 TRANSMITTING&#xA;未来 HMI 只消费 Message 与系统状态&#xA;HMI 不直接读取 BMP280、Flash 或 TCP" vertex="1">
+          <mxGeometry height="175" width="370" x="1540" y="875" as="geometry" />
+        </mxCell>
+        <mxCell id="d_verify" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontStyle=1;" value="&lt;b&gt;验证边界&lt;/b&gt;&#xA;当前：clean build 已生成 ELF 与 BIN&#xA;未证明：Flash 掉电、CAN 总线、TCP 上报、IPS 显示、端到端链路&#xA;编译成功不等于硬件与现场运行成功" vertex="1">
+          <mxGeometry height="100" width="800" x="600" y="1135" as="geometry" />
+        </mxCell>
+        <mxCell id="de_main_board" edge="1" parent="1" source="d_main" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;" target="d_board">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de_board_basic" edge="1" parent="1" source="d_board" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;" target="d_basic_bsp">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de_basic_checked" edge="1" parent="1" source="d_basic_bsp" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;" target="d_checked_bsp">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de_checked_result" edge="1" parent="1" source="d_checked_bsp" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;endArrow=classic;" target="d_init_result">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de_loop_gate" edge="1" parent="1" source="d_loop" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;" target="d_time_gate">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de_gate_mark" edge="1" parent="1" source="d_time_gate" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;" target="d_sample_mark" value="到期">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de_mark_collect" edge="1" parent="1" source="d_sample_mark" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;" target="d_collect">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de_collect_model" edge="1" parent="1" source="d_collect" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;" target="d_model">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de_model_fanout" edge="1" parent="1" source="d_model" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;strokeWidth=2;endArrow=classic;" target="d_fanout">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de_fanout_storage" edge="1" parent="1" source="d_fanout" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;strokeWidth=2;endArrow=classic;" target="d_storage" value="当前">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de_fanout_tcp" edge="1" parent="1" source="d_fanout" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;dashed=1;endArrow=classic;" target="d_tcp_protocol" value="待接入">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de_tcp_output" edge="1" parent="1" source="d_tcp_protocol" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;dashed=1;endArrow=classic;" target="d_tcp_output">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de_fanout_can" edge="1" parent="1" source="d_fanout" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;dashed=1;endArrow=classic;" target="d_can_protocol" value="待接入">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de_can_output" edge="1" parent="1" source="d_can_protocol" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;" target="d_can_output">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de_storage_slot" edge="1" parent="1" source="d_storage" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;" target="d_slot">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de_slot_write" edge="1" parent="1" source="d_slot" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;" target="d_write_order">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de_write_power" edge="1" parent="1" source="d_write_order" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;" target="d_power_loss">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de_power_capacity" edge="1" parent="1" source="d_power_loss" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;" target="d_capacity">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="edgenode-files-calls" name="文件与调用关系">
+    <mxGraphModel dx="1900" dy="1350" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1950" pageHeight="1400" math="0" shadow="0" adaptiveColors="auto">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="f_title" value="EdgeNode 文件层级与函数调用关系：BOARD → BSP → APP" style="text;html=1;align=center;verticalAlign=middle;fontSize=24;fontStyle=1;fontColor=#1F2937;" vertex="1" parent="1">
+          <mxGeometry x="470" y="20" width="1000" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="f_legend" value="&lt;b&gt;箭头含义&lt;/b&gt;&#xA;实线：当前直接函数调用&#xA;虚线：中断、DMA 或待接入调用&#xA;绿色：当前运行主链&#xA;蓝色：共享资源&#xA;黄色：已有支路&#xA;红色：接收或功能缺口" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3F4F6;strokeColor=#9CA3AF;fontColor=#374151;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="1650" y="20" width="280" height="125" as="geometry" />
+        </mxCell>
+        <mxCell id="f_tree_group" value="1. 工程文件树：文件应该放在哪里" style="swimlane;startSize=34;rounded=1;fillColor=#F3F4F6;strokeColor=#6B7280;fontStyle=1;fontSize=16;html=1;" vertex="1" parent="1">
+          <mxGeometry x="20" y="90" width="420" height="1220" as="geometry" />
+        </mxCell>
+        <mxCell id="f_tree" value="&lt;b&gt;edgenode/&lt;/b&gt;&lt;br&gt;├─ Drivers/&lt;br&gt;│  ├─ BOARD/&lt;br&gt;│  │  ├─ board_config.c：全板公共策略&lt;br&gt;│  │  ├─ board_time.c：SysTick 与 delay_ms&lt;br&gt;│  │  └─ spi0_bus.c：共享 SPI0 总线&lt;br&gt;│  ├─ BSP/&lt;br&gt;│  │  ├─ BMP280/：传感器寄存器协议&lt;br&gt;│  │  ├─ GD25Q32/：Flash 命令与页写&lt;br&gt;│  │  ├─ CAN/：CAN0 初始化和原始帧发送&lt;br&gt;│  │  ├─ ESP12S/：USART1 AT 字节发送&lt;br&gt;│  │  ├─ IPS/：ST7789、SPI2、DMA&lt;br&gt;│  │  ├─ CH340、LED、KEY、ADC/&lt;br&gt;│  │  └─ INTERRUPT/：USART、CAN、EXTI ISR&lt;br&gt;│  └─ GD32 标准外设库&lt;br&gt;├─ User/&lt;br&gt;│  ├─ main.c：启动与循环调度&lt;br&gt;│  └─ App/&lt;br&gt;│     ├─ Config：稳定策略&lt;br&gt;│     ├─ Startup：初始化编排&lt;br&gt;│     ├─ Acquisition：采样封装&lt;br&gt;│     ├─ Model：统一 Message&lt;br&gt;│     ├─ Protocol：帧与 CRC&lt;br&gt;│     ├─ Output：外部副作用&lt;br&gt;│     ├─ Service：一次采样调度&lt;br&gt;│     └─ Presentation：显示缓冲与 HMI&lt;br&gt;└─ ThirdParty/：第三方渲染库" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=14;fontColor=#1F2937;spacing=10;" vertex="1" parent="1">
+          <mxGeometry x="45" y="140" width="370" height="1120" as="geometry" />
+        </mxCell>
+        <mxCell id="f_start_group" value="2. 当前主调用链：从 main 到一次 Flash 记录" style="swimlane;startSize=34;rounded=1;fillColor=#E8F5E9;strokeColor=#82B366;fontStyle=1;fontSize=16;html=1;" vertex="1" parent="1">
+          <mxGeometry x="465" y="90" width="810" height="650" as="geometry" />
+        </mxCell>
+        <mxCell id="f_main" value="&lt;b&gt;User/main.c&lt;/b&gt;&#xA;main()&#xA;init_all()&#xA;while(1) → node_service_run_once()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="500" y="155" width="180" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="f_startup" value="&lt;b&gt;App/Startup/init.c&lt;/b&gt;&#xA;init_all()&#xA;按依赖顺序初始化&#xA;失败即返回 INIT_ALL_FAIL" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="1">
+          <mxGeometry x="730" y="150" width="190" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="f_service" value="&lt;b&gt;App/Service/node_service.c&lt;/b&gt;&#xA;node_service_run_once()&#xA;以 SysTick 进行 1000 ms 节流&#xA;当前只扇出 Storage" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="1">
+          <mxGeometry x="970" y="150" width="250" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="f_message" value="&lt;b&gt;App/Model/message.c&lt;/b&gt;&#xA;message_collect()&#xA;把采样结果装入 telemetry_sample_struct" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="1">
+          <mxGeometry x="520" y="370" width="210" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="f_collection" value="&lt;b&gt;App/Acquisition/collection.c&lt;/b&gt;&#xA;collection_temperature_get()&#xA;bmp280_temperature_get()&#xA;写入 sample_uptime_ms 与倍率 -2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="1">
+          <mxGeometry x="780" y="350" width="235" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="f_storage" value="&lt;b&gt;App/Output/Storage/storage.c&lt;/b&gt;&#xA;storage_init()：选择全空扇区&#xA;storage_temperature()：编码、写入、提交、读回验证&#xA;storage_next_address_get()：只读调试地址" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1050" y="340" width="200" height="145" as="geometry" />
+        </mxCell>
+        <mxCell id="f_crc" value="&lt;b&gt;App/Protocol/CRC/crc.c&lt;/b&gt;&#xA;crc32_generate()&#xA;crc32_check()&#xA;Storage 与 TCP 复用同一实现" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="1">
+          <mxGeometry x="590" y="555" width="215" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="f_board_group" value="3. BOARD：共享资源只初始化一次" style="swimlane;startSize=34;rounded=1;fillColor=#E8F4F8;strokeColor=#6C8EBF;fontStyle=1;fontSize=16;html=1;" vertex="1" parent="1">
+          <mxGeometry x="1300" y="90" width="630" height="650" as="geometry" />
+        </mxCell>
+        <mxCell id="f_board_config" value="&lt;b&gt;Drivers/BOARD/board_config.c&lt;/b&gt;&#xA;board_config_init()&#xA;board_nvic_config()&#xA;board_debug_config()&#xA;board_clock_config()&#xA;board_systick_config()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1335" y="150" width="245" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="f_time" value="&lt;b&gt;Drivers/BOARD/board_time.c&lt;/b&gt;&#xA;SysTick_Handler()：每 1 ms 递增&#xA;board_systick_ms&#xA;delay_ms()：忙等辅助" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="1">
+          <mxGeometry x="1630" y="150" width="260" height="115" as="geometry" />
+        </mxCell>
+        <mxCell id="f_spi0" value="&lt;b&gt;Drivers/BOARD/spi0_bus.c&lt;/b&gt;&#xA;spi0_bus_init()&#xA;spi0_tansfer_data()&#xA;spi0_bus_wait_idle()&#xA;带毫秒超时与轮询上限&#xA;故障后锁定，显式重初始化才恢复" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1450" y="380" width="300" height="155" as="geometry" />
+        </mxCell>
+        <mxCell id="f_shared_rule" value="共享规则&#xA;PA5 SCK、PA6 MISO、PA7 MOSI&#xA;BOARD 拥有总线配置&#xA;BMP280 与 GD25Q32 只拥有各自 CS 与设备协议" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="1">
+          <mxGeometry x="1350" y="590" width="440" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="f_bsp_group" value="4. BSP：设备本地协议与硬件操作" style="swimlane;startSize=34;rounded=1;fillColor=#FFF9E6;strokeColor=#D6B656;fontStyle=1;fontSize=16;html=1;" vertex="1" parent="1">
+          <mxGeometry x="465" y="780" width="1465" height="530" as="geometry" />
+        </mxCell>
+        <mxCell id="f_bmp" value="&lt;b&gt;BSP/BMP280/bmp280.c&lt;/b&gt;&#xA;bmp280_init()&#xA;读 CHIP_ID、校准参数、配置寄存器&#xA;bmp280_temperature_get()&#xA;设备读写 → spi0_tansfer_data()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="1">
+          <mxGeometry x="500" y="850" width="255" height="135" as="geometry" />
+        </mxCell>
+        <mxCell id="f_gd25" value="&lt;b&gt;BSP/GD25Q32/gd25.c&lt;/b&gt;&#xA;gd25_init()：读取 JEDEC ID&#xA;gd25_read()、gd25_write()、gd25_clear()&#xA;写使能、忙等待、页边界约束&#xA;设备读写 → spi0_tansfer_data()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="1">
+          <mxGeometry x="800" y="835" width="280" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="f_can" value="&lt;b&gt;BSP/CAN/can.c&lt;/b&gt;&#xA;Can_init()：PB8 PB9 重映射、500 kbit/s、FIFO 中断&#xA;can0_data_send()：只收标准 ID 与原始最多 8 字节&#xA;邮箱分配成功不等于远端收到" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="1">
+          <mxGeometry x="1130" y="835" width="290" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="f_esp" value="&lt;b&gt;BSP/ESP12S/esp12s.c&lt;/b&gt;&#xA;esp12s_init()：配置 USART1&#xA;esp12s_cmd_send()：发送 AT 命令字节&#xA;实际 AT 回应由 USART1 中断解析" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="1">
+          <mxGeometry x="1470" y="850" width="230" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="f_ips" value="&lt;b&gt;BSP/IPS/ips.c&lt;/b&gt;&#xA;ips_init()：SPI2、DMA、ST7789 控制脚&#xA;ips_flush_line()：提交一行像素&#xA;由 Presentation/Buffer 调用" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="1">
+          <mxGeometry x="1740" y="850" width="160" height="125" as="geometry" />
+        </mxCell>
+        <mxCell id="f_support" value="&lt;b&gt;其余本地 BSP&lt;/b&gt;&#xA;CH340：USART0 与 fputc&#xA;LED：GPIO 开关与翻转&#xA;KEY：GPIO 与 EXTI&#xA;ADC：ADC 配置与 adc_data_get()&#xA;这些模块不应了解 Message、Flash 或协议字段" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="1">
+          <mxGeometry x="550" y="1080" width="330" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="f_irq" value="&lt;b&gt;BSP/INTERRUPT：硬件异步入口&lt;/b&gt;&#xA;USART1_IRQHandler()：把完整 AT 回应放入队列&#xA;esp12s_response_get()：TCP 层轮询取事件&#xA;USBD_LP_CAN0_RX0_IRQHandler()：仅把 FIFO0 收到的帧存入静态变量&#xA;当前尚无 APP 层 CAN 接收消费接口" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;" vertex="1" parent="1">
+          <mxGeometry x="950" y="1080" width="530" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="f_protocol" value="&lt;b&gt;APP 协议与输出支路&lt;/b&gt;&#xA;Protocol/Tcp/tcp_frame_encode()：Message → 16 字节 TCP V4&#xA;Protocol/Can/can_frame_encode()：Message → 7 字节 CAN 负载&#xA;Output/Can/can_telemetry_send()：编码后调用 can0_data_send()&#xA;Output/Tcp/tcp_init()：调用 esp12s_init() 与 AT 等待流程&#xA;Service 尚未接入 TCP 与 CAN" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;" vertex="1" parent="1">
+          <mxGeometry x="1530" y="1060" width="360" height="165" as="geometry" />
+        </mxCell>
+        <mxCell id="fe_main_startup" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;strokeWidth=2;endArrow=classic;" edge="1" source="f_main" target="f_startup" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe_main_service" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;strokeWidth=2;endArrow=classic;" edge="1" source="f_main" target="f_service" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe_start_board" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;" edge="1" source="f_startup" target="f_board_config" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe_board_time" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;" edge="1" source="f_board_config" target="f_time" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe_board_spi" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;strokeWidth=2;endArrow=classic;" edge="1" source="f_board_config" target="f_spi0" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe_service_message" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;" edge="1" source="f_service" target="f_message" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe_message_collection" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;" edge="1" source="f_message" target="f_collection" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe_service_storage" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;strokeWidth=2;endArrow=classic;" edge="1" source="f_service" target="f_storage" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe_storage_gd25" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;strokeWidth=2;endArrow=classic;" edge="1" source="f_storage" target="f_gd25" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe_collection_bmp" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;" edge="1" source="f_collection" target="f_bmp" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe_bmp_spi" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;" edge="1" source="f_bmp" target="f_spi0" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe_gd25_spi" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;" edge="1" source="f_gd25" target="f_spi0" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe_storage_crc" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;" edge="1" source="f_storage" target="f_crc" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe_protocol_can" value="待接入" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;dashed=1;endArrow=classic;" edge="1" source="f_service" target="f_can" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe_esp_irq" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;dashed=1;endArrow=classic;" edge="1" source="f_esp" target="f_irq" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe_can_irq" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;dashed=1;endArrow=classic;" edge="1" source="f_can" target="f_irq" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="1UmkDo3vhHBxrHHFitbN" name="APP 业务到硬件树">
+    <mxGraphModel dx="-2189" dy="-404" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="0" page="0" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <UserObject label="EdgeNode 应用业务&#xA;每秒采集一条温度，并分别处理" mermaidId="n:ROOT" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="EdgeNode 应用业务&#xA;每秒采集一条温度，并分别处理" id="2">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="284" x="1865" y="38" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="启动业务：上电后只执行一次" mermaidId="n:BOOT" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="启动业务：上电后只执行一次" id="3">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="54" width="268" x="636" y="161" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="User/main.c&#xA;main()" mermaidId="n:MAIN" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="User/main.c&#xA;main()" id="4">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="149" x="695" y="265" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="App/Startup/init.c&#xA;init_all()" mermaidId="n:INIT" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="App/Startup/init.c&#xA;init_all()" id="5">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="195" x="672" y="388" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="BOARD/board_config_init()&#xA;建立全局运行环境" mermaidId="n:BOARD_INIT" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9d2e9;strokeColor=#674ea7;fontColor=#351c75;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="BOARD/board_config_init()&#xA;建立全局运行环境" id="6">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9d2e9;strokeColor=#674ea7;fontColor=#351c75;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="254" x="33" y="511" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="系统时钟 / NVIC / SWD 配置" mermaidId="n:CLOCK" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9d2e9;strokeColor=#674ea7;fontColor=#351c75;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="系统时钟 / NVIC / SWD 配置" id="7">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9d2e9;strokeColor=#674ea7;fontColor=#351c75;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="54" width="262" x="8" y="663" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="BOARD/board_time.c&#xA;SysTick_Handler() → board_systick_ms" mermaidId="n:TIME" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9d2e9;strokeColor=#674ea7;fontColor=#351c75;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="BOARD/board_time.c&#xA;SysTick_Handler() → board_systick_ms" id="8">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9d2e9;strokeColor=#674ea7;fontColor=#351c75;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="339" x="320" y="653" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="各设备 BSP 初始化" mermaidId="n:BSP_INIT" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=light-dark(#ECECFF,#1f2020);strokeColor=light-dark(#9370DB,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="各设备 BSP 初始化" id="9">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=light-dark(#ECECFF,#1f2020);strokeColor=light-dark(#9370DB,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="54" width="191" x="1208" y="521" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="BSP/BMP280&#xA;bmp280_init()" mermaidId="n:BMP_INIT" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="BSP/BMP280&#xA;bmp280_init()" id="10">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="161" x="709" y="653" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="BSP/GD25Q32&#xA;gd25q32_init()" mermaidId="n:FLASH_INIT" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="BSP/GD25Q32&#xA;gd25q32_init()" id="11">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="164" x="923" y="653" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="BSP/CAN&#xA;can0_init()" mermaidId="n:CAN_INIT" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="BSP/CAN&#xA;can0_init()" id="12">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="138" x="1137" y="653" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="BSP/ESP12S&#xA;esp12s_init()" mermaidId="n:ESP_INIT" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="BSP/ESP12S&#xA;esp12s_init()" id="13">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="152" x="1325" y="653" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="BSP/IPS&#xA;ips_init()" mermaidId="n:IPS_INIT" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="BSP/IPS&#xA;ips_init()" id="14">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="124" x="1527" y="653" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="BSP/LED / KEY / ADC / CH340" mermaidId="n:IO_INIT" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="BSP/LED / KEY / ADC / CH340" id="15">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="54" width="274" x="1701" y="663" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="BSP/SPI0&#xA;spi0_bus_init()" mermaidId="n:SPI0_INIT_A" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="BSP/SPI0&#xA;spi0_bus_init()" id="16">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="165" x="707" y="776" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="BSP/SPI0&#xA;spi0_bus_init()" mermaidId="n:SPI0_INIT_B" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="BSP/SPI0&#xA;spi0_bus_init()" id="17">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="165" x="922" y="776" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="BSP/SPI2 + DMA&#xA;显示专用总线" mermaidId="n:SPI2_INIT" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="BSP/SPI2 + DMA&#xA;显示专用总线" id="18">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="172" x="1503" y="776" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="周期业务：main() 的 while(1)" mermaidId="n:LOOP" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="周期业务：main() 的 while(1)" id="19">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="54" width="271" x="2718" y="161" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="App/Service/node_service.c&#xA;node_service_run_once()" mermaidId="n:SERVICE" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="App/Service/node_service.c&#xA;node_service_run_once()" id="20">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="263" x="2722" y="265" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="App/Config&#xA;NODE_SAMPLE_PERIOD_MS = 1000" mermaidId="n:PERIOD" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="App/Config&#xA;NODE_SAMPLE_PERIOD_MS = 1000" id="21">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="301" x="1679" y="388" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="BOARD/board_systick_ms()&#xA;用 SysTick 判断是否到 1 秒" mermaidId="n:TICK" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9d2e9;strokeColor=#674ea7;fontColor=#351c75;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="BOARD/board_systick_ms()&#xA;用 SysTick 判断是否到 1 秒" id="22">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9d2e9;strokeColor=#674ea7;fontColor=#351c75;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="254" x="1703" y="511" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="App/Model/message.c&#xA;message_collect()" mermaidId="n:COLLECT" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="App/Model/message.c&#xA;message_collect()" id="23">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="220" x="2904" y="388" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="App/Acquisition/temperature.c&#xA;temperature_collect()" mermaidId="n:ACQUIRE" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#cfe2f3;strokeColor=#3d85c6;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="App/Acquisition/temperature.c&#xA;temperature_collect()" id="24">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#cfe2f3;strokeColor=#3d85c6;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="287" x="2011" y="511" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="BSP/BMP280&#xA;bmp280_get_temperature()" mermaidId="n:BMP_READ" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="BSP/BMP280&#xA;bmp280_get_temperature()" id="25">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="259" x="2025" y="653" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="BMP280 寄存器读写协议&#xA;独立 CS：PA4" mermaidId="n:BMP_REG" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="BMP280 寄存器读写协议&#xA;独立 CS：PA4" id="26">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="231" x="2039" y="776" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="BSP/SPI0&#xA;spi0_tansfer_data()" mermaidId="n:SPI0_XFER_A" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="BSP/SPI0&#xA;spi0_tansfer_data()" id="27">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="200" x="2054" y="899" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="硬件：SPI0&#xA;PA5 / PA6 / PA7" mermaidId="n:SPI0_HW_A" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9e1f2;strokeColor=#4f81bd;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="硬件：SPI0&#xA;PA5 / PA6 / PA7" id="28">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9e1f2;strokeColor=#4f81bd;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="171" x="2069" y="1022" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="App/Model/message.h&#xA;telemetry_t：node_id、sequence、temperature" mermaidId="n:TELEMETRY" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="App/Model/message.h&#xA;telemetry_t：node_id、sequence、temperature" id="29">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="408" x="3523" y="511" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="存储支线：当前已接入" mermaidId="n:STORE_BIZ" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="存储支线：当前已接入" id="30">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="54" width="220" x="2581" y="663" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="App/Output/Storage/storage.c&#xA;storage_temperature()" mermaidId="n:STORE" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="App/Output/Storage/storage.c&#xA;storage_temperature()" id="31">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="283" x="2550" y="776" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="将 telemetry 编码为&#xA;16 字节 Flash 记录" mermaidId="n:RECORD" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="将 telemetry 编码为&#xA;16 字节 Flash 记录" id="32">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="205" x="2305" y="899" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="App/Protocol/CRC/crc.c&#xA;crc32_calculate()" mermaidId="n:CRC" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#cfe2f3;strokeColor=#3d85c6;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="App/Protocol/CRC/crc.c&#xA;crc32_calculate()" id="33">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#cfe2f3;strokeColor=#3d85c6;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="236" x="2290" y="1022" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="先写有效载荷和 CRC&#xA;最后写 commit=0x00" mermaidId="n:COMMIT" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="先写有效载荷和 CRC&#xA;最后写 commit=0x00" id="34">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="208" x="3090" y="899" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="BSP/GD25Q32&#xA;gd25q32_page_program()" mermaidId="n:FLASH_WRITE" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="BSP/GD25Q32&#xA;gd25q32_page_program()" id="35">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="242" x="2857" y="1022" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="新扇区开始前&#xA;gd25q32_sector_erase()" mermaidId="n:ERASE" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="新扇区开始前&#xA;gd25q32_sector_erase()" id="36">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="231" x="2576" y="1022" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="GD25Q32 指令协议&#xA;独立 CS：PB12" mermaidId="n:FLASH_PROTO" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="GD25Q32 指令协议&#xA;独立 CS：PB12" id="37">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="194" x="2806" y="1145" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="BSP/SPI0&#xA;spi0_tansfer_data()" mermaidId="n:SPI0_XFER_B" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="BSP/SPI0&#xA;spi0_tansfer_data()" id="38">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="200" x="2803" y="1268" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="硬件：SPI0&#xA;PA5 / PA6 / PA7（与 BMP280 共享）" mermaidId="n:SPI0_HW_B" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9e1f2;strokeColor=#4f81bd;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="硬件：SPI0&#xA;PA5 / PA6 / PA7（与 BMP280 共享）" id="39">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9e1f2;strokeColor=#4f81bd;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="315" x="2745" y="1391" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="回读 + CRC + commit 校验&#xA;掉电写一半的记录视为无效" mermaidId="n:VERIFY" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="回读 + CRC + commit 校验&#xA;掉电写一半的记录视为无效" id="40">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9ead3;strokeColor=#6aa84f;fontColor=#1e3d1e;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="252" x="3149" y="1022" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="BSP/GD25Q32&#xA;gd25q32_read_data()" mermaidId="n:FLASH_READ" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="BSP/GD25Q32&#xA;gd25q32_read_data()" id="41">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="212" x="3169" y="1145" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="TCP 发送支线" mermaidId="n:TCP_BIZ" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fce5cd;strokeColor=#cc4125;fontColor=#85200c;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;dashed=1;dashPattern=5 3;fixDash=1;" mermaidBaseValue="TCP 发送支线" id="42">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fce5cd;strokeColor=#cc4125;fontColor=#85200c;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;dashed=1;dashPattern=5 3;fixDash=1;" vertex="1">
+            <mxGeometry height="54" width="156" x="3502" y="663" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="App/Service/Transmit&#xA;tcp_telemetry_transmit()" mermaidId="n:TCP_SERVICE" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#cfe2f3;strokeColor=#3d85c6;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="App/Service/Transmit&#xA;tcp_telemetry_transmit()" id="43">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#cfe2f3;strokeColor=#3d85c6;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="243" x="3459" y="776" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="App/Protocol/Tcp&#xA;tcp_frame_encode()" mermaidId="n:TCP_FRAME" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#cfe2f3;strokeColor=#3d85c6;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="App/Protocol/Tcp&#xA;tcp_frame_encode()" id="44">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#cfe2f3;strokeColor=#3d85c6;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="206" x="3477" y="899" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="App/Output/Tcp&#xA;tcp_telemetry_send()" mermaidId="n:TCP_OUTPUT" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#cfe2f3;strokeColor=#3d85c6;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="App/Output/Tcp&#xA;tcp_telemetry_send()" id="45">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#cfe2f3;strokeColor=#3d85c6;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="216" x="3472" y="1022" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="BSP/ESP12S&#xA;esp12s_at_cmd_send() / CIPSEND" mermaidId="n:ESP_AT" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="BSP/ESP12S&#xA;esp12s_at_cmd_send() / CIPSEND" id="46">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="299" x="3431" y="1145" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="BSP/USART1&#xA;PA2 / PA3" mermaidId="n:USART1" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="BSP/USART1&#xA;PA2 / PA3" id="47">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="148" x="3506" y="1268" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="硬件：ESP-12S → Wi-Fi → TCP" mermaidId="n:ESP_HW" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9e1f2;strokeColor=#4f81bd;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="硬件：ESP-12S → Wi-Fi → TCP" id="48">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9e1f2;strokeColor=#4f81bd;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="54" width="279" x="3441" y="1401" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="EdgeHub：接收、解析、SQLite" mermaidId="n:HUB" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9e1f2;strokeColor=#4f81bd;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="EdgeHub：接收、解析、SQLite" id="49">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9e1f2;strokeColor=#4f81bd;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="54" width="281" x="3440" y="1514" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="CAN 发送支线" mermaidId="n:CAN_BIZ" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fce5cd;strokeColor=#cc4125;fontColor=#85200c;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;dashed=1;dashPattern=5 3;fixDash=1;" mermaidBaseValue="CAN 发送支线" id="50">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fce5cd;strokeColor=#cc4125;fontColor=#85200c;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;dashed=1;dashPattern=5 3;fixDash=1;" vertex="1">
+            <mxGeometry height="54" width="158" x="3795" y="663" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="App/Service/Transmit&#xA;can_telemetry_transmit()" mermaidId="n:CAN_SERVICE" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#cfe2f3;strokeColor=#3d85c6;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="App/Service/Transmit&#xA;can_telemetry_transmit()" id="51">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#cfe2f3;strokeColor=#3d85c6;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="245" x="3752" y="776" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="App/Protocol/Can&#xA;can_frame_encode()" mermaidId="n:CAN_FRAME" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#cfe2f3;strokeColor=#3d85c6;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="App/Protocol/Can&#xA;can_frame_encode()" id="52">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#cfe2f3;strokeColor=#3d85c6;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="208" x="3770" y="899" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="App/Output/Can&#xA;can_telemetry_send()" mermaidId="n:CAN_OUTPUT" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#cfe2f3;strokeColor=#3d85c6;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="App/Output/Can&#xA;can_telemetry_send()" id="53">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#cfe2f3;strokeColor=#3d85c6;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="217" x="3766" y="1022" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="BSP/CAN&#xA;can0_data_send()" mermaidId="n:CAN_SEND" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="BSP/CAN&#xA;can0_data_send()" id="54">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="187" x="3781" y="1145" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="硬件：CAN0 PB8 / PB9&#xA;CAN 收发器 → 总线" mermaidId="n:CAN_HW" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9e1f2;strokeColor=#4f81bd;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="硬件：CAN0 PB8 / PB9&#xA;CAN 收发器 → 总线" id="55">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9e1f2;strokeColor=#4f81bd;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="221" x="3764" y="1268" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="本地显示支线" mermaidId="n:HMI_BIZ" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fce5cd;strokeColor=#cc4125;fontColor=#85200c;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;dashed=1;dashPattern=5 3;fixDash=1;" mermaidBaseValue="本地显示支线" id="56">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fce5cd;strokeColor=#cc4125;fontColor=#85200c;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;dashed=1;dashPattern=5 3;fixDash=1;" vertex="1">
+            <mxGeometry height="54" width="156" x="4103" y="663" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="App/Presentation/Hmi&#xA;将 telemetry 转换为显示内容" mermaidId="n:HMI" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#cfe2f3;strokeColor=#3d85c6;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="App/Presentation/Hmi&#xA;将 telemetry 转换为显示内容" id="57">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#cfe2f3;strokeColor=#3d85c6;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="269" x="4047" y="776" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="App/Presentation/Buffer&#xA;display_buffer_service()" mermaidId="n:BUFFER" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#cfe2f3;strokeColor=#3d85c6;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="App/Presentation/Buffer&#xA;display_buffer_service()" id="58">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#cfe2f3;strokeColor=#3d85c6;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="239" x="4062" y="899" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="BSP/IPS&#xA;ips_flush_line()" mermaidId="n:IPS_FLUSH" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="BSP/IPS&#xA;ips_flush_line()" id="59">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#fff2cc;strokeColor=#bf9000;fontColor=#5b4500;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="73" width="170" x="4096" y="1022" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="硬件：SPI2 + DMA → ST7789 屏幕" mermaidId="n:SPI2_HW" mermaidBaseStyle="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9e1f2;strokeColor=#4f81bd;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" mermaidBaseValue="硬件：SPI2 + DMA → ST7789 屏幕" id="60">
+          <mxCell parent="1" style="html=1;whiteSpace=wrap;strokeWidth=1;fillColor=#d9e1f2;strokeColor=#4f81bd;fontColor=#17365d;fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontSize=16;" vertex="1">
+            <mxGeometry height="54" width="298" x="4032" y="1155" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:ROOT-&gt;BOOT#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0;exitY=0.6;entryX=0.5;entryY=0;" mermaidBaseValue="" id="61">
+          <mxCell edge="1" parent="1" source="2" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0;exitY=0.6;entryX=0.5;entryY=0;" target="3">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="770" y="136" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:BOOT-&gt;MAIN#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="62">
+          <mxCell edge="1" parent="1" source="3" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="4">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:MAIN-&gt;INIT#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="63">
+          <mxCell edge="1" parent="1" source="4" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="5">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:INIT-&gt;BOARD_INIT#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0;exitY=0.63;entryX=0.5;entryY=0;" mermaidBaseValue="" id="64">
+          <mxCell edge="1" parent="1" source="5" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0;exitY=0.63;entryX=0.5;entryY=0;" target="6">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="160" y="486" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:BOARD_INIT-&gt;CLOCK#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.46;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="65">
+          <mxCell edge="1" parent="1" source="6" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.46;exitY=1;entryX=0.5;entryY=0;" target="7">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="139" y="619" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:BOARD_INIT-&gt;TIME#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=1;exitY=0.88;entryX=0.5;entryY=0;" mermaidBaseValue="" id="66">
+          <mxCell edge="1" parent="1" source="6" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=1;exitY=0.88;entryX=0.5;entryY=0;" target="8">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="490" y="619" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:INIT-&gt;BSP_INIT#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=1;exitY=0.66;entryX=0.5;entryY=0;" mermaidBaseValue="" id="67">
+          <mxCell edge="1" parent="1" source="5" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=1;exitY=0.66;entryX=0.5;entryY=0;" target="9">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="1303" y="486" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:BSP_INIT-&gt;BMP_INIT#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0;exitY=0.74;entryX=0.5;entryY=0;" mermaidBaseValue="" id="68">
+          <mxCell edge="1" parent="1" source="9" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0;exitY=0.74;entryX=0.5;entryY=0;" target="10">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="790" y="619" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:BSP_INIT-&gt;FLASH_INIT#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0;exitY=0.91;entryX=0.5;entryY=0;" mermaidBaseValue="" id="69">
+          <mxCell edge="1" parent="1" source="9" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0;exitY=0.91;entryX=0.5;entryY=0;" target="11">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="1005" y="619" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:BSP_INIT-&gt;CAN_INIT#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.3;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="70">
+          <mxCell edge="1" parent="1" source="9" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.3;exitY=1;entryX=0.5;entryY=0;" target="12">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="1206" y="619" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:BSP_INIT-&gt;ESP_INIT#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.69;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="71">
+          <mxCell edge="1" parent="1" source="9" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.69;exitY=1;entryX=0.5;entryY=0;" target="13">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="1401" y="619" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:BSP_INIT-&gt;IPS_INIT#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=1;exitY=0.93;entryX=0.5;entryY=0;" mermaidBaseValue="" id="72">
+          <mxCell edge="1" parent="1" source="9" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=1;exitY=0.93;entryX=0.5;entryY=0;" target="14">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="1589" y="619" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:BSP_INIT-&gt;IO_INIT#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=1;exitY=0.72;entryX=0.5;entryY=0;" mermaidBaseValue="" id="73">
+          <mxCell edge="1" parent="1" source="9" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=1;exitY=0.72;entryX=0.5;entryY=0;" target="15">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="1838" y="619" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:BMP_INIT-&gt;SPI0_INIT_A#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="74">
+          <mxCell edge="1" parent="1" source="10" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="16">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:FLASH_INIT-&gt;SPI0_INIT_B#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="75">
+          <mxCell edge="1" parent="1" source="11" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="17">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:IPS_INIT-&gt;SPI2_INIT#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="76">
+          <mxCell edge="1" parent="1" source="14" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="18">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:ROOT-&gt;LOOP#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=1;exitY=0.64;entryX=0.5;entryY=0;" mermaidBaseValue="" id="77">
+          <mxCell edge="1" parent="1" source="2" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=1;exitY=0.64;entryX=0.5;entryY=0;" target="19">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="2854" y="136" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:LOOP-&gt;SERVICE#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="78">
+          <mxCell edge="1" parent="1" source="19" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="20">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:SERVICE-&gt;PERIOD#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0;exitY=0.6;entryX=0.5;entryY=0;" mermaidBaseValue="" id="79">
+          <mxCell edge="1" parent="1" source="20" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0;exitY=0.6;entryX=0.5;entryY=0;" target="21">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="1830" y="363" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:PERIOD-&gt;TICK#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="80">
+          <mxCell edge="1" parent="1" source="21" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="22">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:SERVICE-&gt;COLLECT#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.86;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="81">
+          <mxCell edge="1" parent="1" source="20" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.86;exitY=1;entryX=0.5;entryY=0;" target="23">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="3014" y="363" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:COLLECT-&gt;ACQUIRE#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0;exitY=0.6;entryX=0.5;entryY=0;" mermaidBaseValue="" id="82">
+          <mxCell edge="1" parent="1" source="23" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0;exitY=0.6;entryX=0.5;entryY=0;" target="24">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="2154" y="486" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:ACQUIRE-&gt;BMP_READ#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="83">
+          <mxCell edge="1" parent="1" source="24" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="25">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:BMP_READ-&gt;BMP_REG#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="84">
+          <mxCell edge="1" parent="1" source="25" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="26">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:BMP_REG-&gt;SPI0_XFER_A#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="85">
+          <mxCell edge="1" parent="1" source="26" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="27">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:SPI0_XFER_A-&gt;SPI0_HW_A#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="86">
+          <mxCell edge="1" parent="1" source="27" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="28">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:COLLECT-&gt;TELEMETRY#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=1;exitY=0.63;entryX=0.5;entryY=0;" mermaidBaseValue="" id="87">
+          <mxCell edge="1" parent="1" source="23" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=1;exitY=0.63;entryX=0.5;entryY=0;" target="29">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="3727" y="486" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:TELEMETRY-&gt;STORE_BIZ#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0;exitY=0.68;entryX=0.5;entryY=0;" mermaidBaseValue="" id="88">
+          <mxCell edge="1" parent="1" source="29" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0;exitY=0.68;entryX=0.5;entryY=0;" target="30">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="2691" y="619" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:STORE_BIZ-&gt;STORE#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="89">
+          <mxCell edge="1" parent="1" source="30" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="31">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:STORE-&gt;RECORD#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0;exitY=0.92;entryX=0.5;entryY=0;" mermaidBaseValue="" id="90">
+          <mxCell edge="1" parent="1" source="31" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0;exitY=0.92;entryX=0.5;entryY=0;" target="32">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="2408" y="874" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:RECORD-&gt;CRC#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="91">
+          <mxCell edge="1" parent="1" source="32" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="33">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:STORE-&gt;COMMIT#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=1;exitY=0.74;entryX=0.5;entryY=0;" mermaidBaseValue="" id="92">
+          <mxCell edge="1" parent="1" source="31" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=1;exitY=0.74;entryX=0.5;entryY=0;" target="34">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="3194" y="874" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:COMMIT-&gt;FLASH_WRITE#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0;exitY=0.9;entryX=0.5;entryY=0;" mermaidBaseValue="" id="93">
+          <mxCell edge="1" parent="1" source="34" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0;exitY=0.9;entryX=0.5;entryY=0;" target="35">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="2978" y="997" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:STORE-&gt;ERASE#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="94">
+          <mxCell edge="1" parent="1" source="31" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="36">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:FLASH_WRITE-&gt;FLASH_PROTO#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.73;entryY=0;" mermaidBaseValue="" id="95">
+          <mxCell edge="1" parent="1" source="35" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.73;entryY=0;" target="37">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="2978" y="1120" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:ERASE-&gt;FLASH_PROTO#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0;entryY=0.11;" mermaidBaseValue="" id="96">
+          <mxCell edge="1" parent="1" source="36" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0;entryY=0.11;" target="37">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="2691" y="1120" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:FLASH_PROTO-&gt;SPI0_XFER_B#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="97">
+          <mxCell edge="1" parent="1" source="37" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="38">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:SPI0_XFER_B-&gt;SPI0_HW_B#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="98">
+          <mxCell edge="1" parent="1" source="38" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="39">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:COMMIT-&gt;VERIFY#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.73;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="99">
+          <mxCell edge="1" parent="1" source="34" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.73;exitY=1;entryX=0.5;entryY=0;" target="40">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="3275" y="997" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:VERIFY-&gt;FLASH_READ#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="100">
+          <mxCell edge="1" parent="1" source="40" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="41">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="待接入" mermaidId="e:TELEMETRY-&gt;TCP_BIZ#0" mermaidBaseStyle="curved=1;dashed=1;dashPattern=2 3;fixDash=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);html=1;fontSize=16;labelBackgroundColor=light-dark(#E8E8E88D,#2a2a2a8D);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontColor=light-dark(#333333,#cccccc);exitX=0.31;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="待接入" id="101">
+          <mxCell edge="1" parent="1" source="29" style="curved=1;dashed=1;dashPattern=2 3;fixDash=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);html=1;fontSize=16;labelBackgroundColor=light-dark(#E8E8E88D,#2a2a2a8D);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontColor=light-dark(#333333,#cccccc);exitX=0.31;exitY=1;entryX=0.5;entryY=0;" target="42">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="3580" y="619" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:TCP_BIZ-&gt;TCP_SERVICE#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="102">
+          <mxCell edge="1" parent="1" source="42" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="43">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:TCP_SERVICE-&gt;TCP_FRAME#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="103">
+          <mxCell edge="1" parent="1" source="43" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="44">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:TCP_FRAME-&gt;TCP_OUTPUT#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="104">
+          <mxCell edge="1" parent="1" source="44" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="45">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:TCP_OUTPUT-&gt;ESP_AT#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="105">
+          <mxCell edge="1" parent="1" source="45" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="46">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:ESP_AT-&gt;USART1#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="106">
+          <mxCell edge="1" parent="1" source="46" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="47">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:USART1-&gt;ESP_HW#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="107">
+          <mxCell edge="1" parent="1" source="47" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="48">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:ESP_HW-&gt;HUB#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="108">
+          <mxCell edge="1" parent="1" source="48" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="49">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="待接入" mermaidId="e:TELEMETRY-&gt;CAN_BIZ#0" mermaidBaseStyle="curved=1;dashed=1;dashPattern=2 3;fixDash=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);html=1;fontSize=16;labelBackgroundColor=light-dark(#E8E8E88D,#2a2a2a8D);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontColor=light-dark(#333333,#cccccc);exitX=0.69;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="待接入" id="109">
+          <mxCell edge="1" parent="1" source="29" style="curved=1;dashed=1;dashPattern=2 3;fixDash=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);html=1;fontSize=16;labelBackgroundColor=light-dark(#E8E8E88D,#2a2a2a8D);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontColor=light-dark(#333333,#cccccc);exitX=0.69;exitY=1;entryX=0.5;entryY=0;" target="50">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="3874" y="619" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:CAN_BIZ-&gt;CAN_SERVICE#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="110">
+          <mxCell edge="1" parent="1" source="50" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="51">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:CAN_SERVICE-&gt;CAN_FRAME#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="111">
+          <mxCell edge="1" parent="1" source="51" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="52">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:CAN_FRAME-&gt;CAN_OUTPUT#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="112">
+          <mxCell edge="1" parent="1" source="52" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="53">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:CAN_OUTPUT-&gt;CAN_SEND#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="113">
+          <mxCell edge="1" parent="1" source="53" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="54">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:CAN_SEND-&gt;CAN_HW#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="114">
+          <mxCell edge="1" parent="1" source="54" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="55">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="规划中" mermaidId="e:TELEMETRY-&gt;HMI_BIZ#0" mermaidBaseStyle="curved=1;dashed=1;dashPattern=2 3;fixDash=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);html=1;fontSize=16;labelBackgroundColor=light-dark(#E8E8E88D,#2a2a2a8D);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontColor=light-dark(#333333,#cccccc);exitX=1;exitY=0.93;entryX=0.5;entryY=0;" mermaidBaseValue="规划中" id="115">
+          <mxCell edge="1" parent="1" source="29" style="curved=1;dashed=1;dashPattern=2 3;fixDash=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);html=1;fontSize=16;labelBackgroundColor=light-dark(#E8E8E88D,#2a2a2a8D);fontFamily=Trebuchet MS,Verdana,Arial,sans-serif;fontColor=light-dark(#333333,#cccccc);exitX=1;exitY=0.93;entryX=0.5;entryY=0;" target="56">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="4181" y="619" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:HMI_BIZ-&gt;HMI#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="116">
+          <mxCell edge="1" parent="1" source="56" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="57">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:HMI-&gt;BUFFER#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="117">
+          <mxCell edge="1" parent="1" source="57" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="58">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:BUFFER-&gt;IPS_FLUSH#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="118">
+          <mxCell edge="1" parent="1" source="58" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="59">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="" mermaidId="e:IPS_FLUSH-&gt;SPI2_HW#0" mermaidBaseStyle="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" mermaidBaseValue="" id="119">
+          <mxCell edge="1" parent="1" source="59" style="curved=1;startArrow=none;endArrow=block;endSize=7;strokeColor=light-dark(#333333,#cccccc);exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="60">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points" />
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <mxCell id="120" parent="1" style="text;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=18;fontColor=light-dark(#333333,#cccccc);fontFamily=trebuchet ms,verdana,arial,sans-serif;" value="EdgeNode 从 APP 业务到底层的依赖树" vertex="1">
+          <mxGeometry height="25" width="4330" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="edgenode-tcp-call" name="TCP 调用细节（平铺索引）">
+    <mxGraphModel dx="2400" dy="1500" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2400" pageHeight="1400" math="0" shadow="0" adaptiveColors="auto">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="tcp_title" value="EdgeNode TCP 函数调用图：ESP-AT 单连接建连与当前发送边界" style="text;html=1;align=center;verticalAlign=middle;fontSize=24;fontStyle=1;fontColor=#1F2937;" vertex="1" parent="1"><mxGeometry x="450" y="20" width="1320" height="50" as="geometry" /></mxCell>
+        <mxCell id="tcp_legend" value="绿色：已实现的函数调用&#xa;红色虚线：当前未接入或明确返回失败&#xa;橙色：等待、超时或失败分支" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3F4F6;strokeColor=#9CA3AF;align=left;spacingLeft=10;" vertex="1" parent="1"><mxGeometry x="1840" y="25" width="400" height="90" as="geometry" /></mxCell>
+        <mxCell id="tcp_lane_app" value="APP / Output-Tcp：调用者与 AT 顺序编排" style="swimlane;horizontal=1;startSize=34;fillColor=#E8F4F8;strokeColor=#6C8EBF;fontStyle=1;html=1;" vertex="1" parent="1"><mxGeometry x="0" y="110" width="2300" height="180" as="geometry" /></mxCell>
+        <mxCell id="tcp_main" value="main() / init_all()&#xa;当前不调用 tcp_init()&#xa;避免无配置时重复初始化 USART1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="tcp_lane_app"><mxGeometry x="120" y="55" width="180" height="70" as="geometry" /></mxCell>
+        <mxCell id="tcp_caller" value="配置调用者（待接入）&#xa;tcp_config_struct&#xa;SSID / 密码 / Hub IP / 端口" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;" vertex="1" parent="tcp_lane_app"><mxGeometry x="360" y="55" width="180" height="70" as="geometry" /></mxCell>
+        <mxCell id="tcp_init_node" value="tcp_init(config)&#xa;校验空指针、空文本、端口&#xa;校验引号 / CR / LF" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontStyle=1;" vertex="1" parent="tcp_lane_app"><mxGeometry x="600" y="45" width="190" height="80" as="geometry" /></mxCell>
+        <mxCell id="tcp_fail_config" value="TCP_FAIL&#xa;打印配置错误&#xa;不初始化 ESP" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FCE4EC;strokeColor=#B85450;" vertex="1" parent="tcp_lane_app"><mxGeometry x="870" y="55" width="160" height="70" as="geometry" /></mxCell>
+        <mxCell id="tcp_esp_init" value="esp12s_init()&#xa;配置 USART1、RBNE 中断&#xa;tcp_connected = FAIL" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="tcp_lane_app"><mxGeometry x="1100" y="45" width="190" height="80" as="geometry" /></mxCell>
+        <mxCell id="tcp_lane_commands" value="AT 命令链：前一条成功才进入下一条" style="swimlane;horizontal=1;startSize=34;fillColor=#E8F5E9;strokeColor=#82B366;fontStyle=1;html=1;" vertex="1" parent="1"><mxGeometry x="0" y="300" width="2300" height="180" as="geometry" /></mxCell>
+        <mxCell id="tcp_at" value="AT&#xa;ESP_AT_TEST" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="tcp_lane_commands"><mxGeometry x="120" y="55" width="140" height="60" as="geometry" /></mxCell>
+        <mxCell id="tcp_mode" value="AT+CWMODE=1&#xa;Station 模式" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="tcp_lane_commands"><mxGeometry x="340" y="55" width="150" height="60" as="geometry" /></mxCell>
+        <mxCell id="tcp_join" value="snprintf() 组装&#xa;AT+CWJAP=&quot;SSID&quot;,&quot;PWD&quot;&#xa;50 s 超时" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="tcp_lane_commands"><mxGeometry x="570" y="40" width="190" height="90" as="geometry" /></mxCell>
+        <mxCell id="tcp_cifsr" value="AT+CIFSR&#xa;查询网络地址" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="tcp_lane_commands"><mxGeometry x="840" y="55" width="150" height="60" as="geometry" /></mxCell>
+        <mxCell id="tcp_mux" value="AT+CIPMUX=0&#xa;单连接模式" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="tcp_lane_commands"><mxGeometry x="1070" y="55" width="150" height="60" as="geometry" /></mxCell>
+        <mxCell id="tcp_ipmode" value="AT+CIPMODE=0&#xa;普通发送模式" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="tcp_lane_commands"><mxGeometry x="1300" y="55" width="150" height="60" as="geometry" /></mxCell>
+        <mxCell id="tcp_start" value="snprintf() 组装&#xa;AT+CIPSTART=&quot;TCP&quot;,IP,port&#xa;需 CONNECT + OK" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="tcp_lane_commands"><mxGeometry x="1530" y="40" width="200" height="90" as="geometry" /></mxCell>
+        <mxCell id="tcp_connected" value="tcp_connected = SUCCESS&#xa;tcp_init() 返回 SUCCESS" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontStyle=1;" vertex="1" parent="tcp_lane_commands"><mxGeometry x="1810" y="50" width="190" height="70" as="geometry" /></mxCell>
+        <mxCell id="tcp_lane_wait" value="命令执行公共路径：阻塞等待，但 USART1 / SysTick 中断仍运行" style="swimlane;horizontal=1;startSize=34;fillColor=#FFF9E6;strokeColor=#D6B656;fontStyle=1;html=1;" vertex="1" parent="1"><mxGeometry x="0" y="490" width="2300" height="180" as="geometry" /></mxCell>
+        <mxCell id="tcp_cmd_wait" value="tcp_command_send_and_wait_ok()&#xa;esp12s_response_reset()&#xa;esp12s_cmd_send(command)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="tcp_lane_wait"><mxGeometry x="170" y="45" width="220" height="80" as="geometry" /></mxCell>
+        <mxCell id="tcp_connect_wait" value="tcp_connect_start_and_wait()&#xa;reset + send CIPSTART&#xa;要求 CONNECT 和 OK" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="tcp_lane_wait"><mxGeometry x="490" y="45" width="220" height="80" as="geometry" /></mxCell>
+        <mxCell id="tcp_wait" value="tcp_wait_response()&#xa;deadline = systick + timeout&#xa;循环取回应队列" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontStyle=1;" vertex="1" parent="tcp_lane_wait"><mxGeometry x="820" y="45" width="190" height="80" as="geometry" /></mxCell>
+        <mxCell id="tcp_rsp" value="esp12s_response_get()&#xa;无完整回应：继续等待" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="tcp_lane_wait"><mxGeometry x="1110" y="55" width="180" height="60" as="geometry" /></mxCell>
+        <mxCell id="tcp_decide" value="回应类型？" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="tcp_lane_wait"><mxGeometry x="1390" y="40" width="140" height="90" as="geometry" /></mxCell>
+        <mxCell id="tcp_wait_ok" value="普通命令：OK 即成功&#xa;CIPSTART：CONNECT + OK&#xa;否则持续等待" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="tcp_lane_wait"><mxGeometry x="1640" y="45" width="190" height="80" as="geometry" /></mxCell>
+        <mxCell id="tcp_wait_fail" value="ERROR / FAIL / BUSY&#xa;CIPSTART 中 CLOSED&#xa;或超时 → TCP_FAIL" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FCE4EC;strokeColor=#B85450;" vertex="1" parent="tcp_lane_wait"><mxGeometry x="1930" y="45" width="190" height="80" as="geometry" /></mxCell>
+        <mxCell id="tcp_lane_irq" value="ESP12S BSP / USART1 中断：把逐字符串口数据归纳为回应事件" style="swimlane;horizontal=1;startSize=34;fillColor=#F5F5F5;strokeColor=#666666;fontStyle=1;html=1;" vertex="1" parent="1"><mxGeometry x="0" y="680" width="2300" height="180" as="geometry" /></mxCell>
+        <mxCell id="tcp_usart_irq" value="USART1_IRQHandler()&#xa;RBNE 逐字符接收" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="tcp_lane_irq"><mxGeometry x="220" y="55" width="170" height="60" as="geometry" /></mxCell>
+        <mxCell id="tcp_parse_rsp" value="usart.c 私有解析&#xa;识别 OK / ERROR / FAIL&#xa;CONNECT / CLOSED / BUSY" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="tcp_lane_irq"><mxGeometry x="520" y="45" width="210" height="80" as="geometry" /></mxCell>
+        <mxCell id="tcp_queue" value="回应队列&#xa;防止 CONNECT 与 OK&#xa;连续到达时相互覆盖" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="tcp_lane_irq"><mxGeometry x="870" y="45" width="190" height="80" as="geometry" /></mxCell>
+        <mxCell id="tcp_ipd" value="+IPD TCP 负载&#xa;当前不混入 AT 回应&#xa;长度解析与接收缓冲待实现" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;" vertex="1" parent="tcp_lane_irq"><mxGeometry x="1260" y="45" width="210" height="80" as="geometry" /></mxCell>
+        <mxCell id="tcp_lane_send" value="遥测发送支路：协议编码已完成，ESP-AT 载荷发送尚未接入" style="swimlane;horizontal=1;startSize=34;fillColor=#FCE4EC;strokeColor=#B85450;fontStyle=1;html=1;" vertex="1" parent="1"><mxGeometry x="0" y="870" width="2300" height="180" as="geometry" /></mxCell>
+        <mxCell id="tcp_service_gap" value="node_service_run_once()&#xa;当前仅调用 Storage&#xa;未调用 tcp_frame_transmit()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;" vertex="1" parent="tcp_lane_send"><mxGeometry x="160" y="45" width="210" height="80" as="geometry" /></mxCell>
+        <mxCell id="tcp_transmit" value="tcp_frame_transmit(message, sequence)&#xa;待从 Service 接入" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="tcp_lane_send"><mxGeometry x="510" y="55" width="200" height="60" as="geometry" /></mxCell>
+        <mxCell id="tcp_encode" value="tcp_frame_encode(frame[16], ...)&#xa;EH / V4 / nodeId / sequence&#xa;温度、倍率、CRC32" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="tcp_lane_send"><mxGeometry x="850" y="45" width="220" height="80" as="geometry" /></mxCell>
+        <mxCell id="tcp_payload_gap" value="缺少 CIPSEND / 原始 16B 写入&#xa;未调用 esp12s_cmd_send()&#xa;函数当前固定返回 FAIL" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;fontStyle=1;" vertex="1" parent="tcp_lane_send"><mxGeometry x="1220" y="45" width="230" height="80" as="geometry" /></mxCell>
+        <mxCell id="tcp_hub_gap" value="EdgeHub TCP 接收&#xa;当前此仓库未形成运行闭环" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;" vertex="1" parent="tcp_lane_send"><mxGeometry x="1610" y="55" width="200" height="60" as="geometry" /></mxCell>
+        <mxCell id="te1" edge="1" parent="1" source="tcp_main" target="tcp_caller" value="未接入" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te2" edge="1" parent="1" source="tcp_caller" target="tcp_init_node" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te3" edge="1" parent="1" source="tcp_init_node" target="tcp_fail_config" value="非法" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te4" edge="1" parent="1" source="tcp_init_node" target="tcp_esp_init" value="合法" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te5" edge="1" parent="1" source="tcp_esp_init" target="tcp_at" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te6" edge="1" parent="1" source="tcp_at" target="tcp_mode" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te7" edge="1" parent="1" source="tcp_mode" target="tcp_join" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te8" edge="1" parent="1" source="tcp_join" target="tcp_cifsr" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te9" edge="1" parent="1" source="tcp_cifsr" target="tcp_mux" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te10" edge="1" parent="1" source="tcp_mux" target="tcp_ipmode" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te11" edge="1" parent="1" source="tcp_ipmode" target="tcp_start" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te12" edge="1" parent="1" source="tcp_start" target="tcp_connected" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te13" edge="1" parent="1" source="tcp_at" target="tcp_cmd_wait" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te14" edge="1" parent="1" source="tcp_start" target="tcp_connect_wait" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te15" edge="1" parent="1" source="tcp_cmd_wait" target="tcp_wait" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te16" edge="1" parent="1" source="tcp_connect_wait" target="tcp_wait" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te17" edge="1" parent="1" source="tcp_wait" target="tcp_rsp" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te18" edge="1" parent="1" source="tcp_rsp" target="tcp_decide" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te19" edge="1" parent="1" source="tcp_decide" target="tcp_wait_ok" value="成功" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te20" edge="1" parent="1" source="tcp_decide" target="tcp_wait_fail" value="失败 / 超时" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te21" edge="1" parent="1" source="tcp_usart_irq" target="tcp_parse_rsp" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te22" edge="1" parent="1" source="tcp_parse_rsp" target="tcp_queue" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te23" edge="1" parent="1" source="tcp_queue" target="tcp_rsp" value="取事件" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te24" edge="1" parent="1" source="tcp_service_gap" target="tcp_transmit" value="待接入" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te25" edge="1" parent="1" source="tcp_transmit" target="tcp_encode" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te26" edge="1" parent="1" source="tcp_encode" target="tcp_payload_gap" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="te27" edge="1" parent="1" source="tcp_payload_gap" target="tcp_hub_gap" value="未发生" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="edgenode-storage-call" name="Storage 调用细节（平铺索引）">
+    <mxGraphModel dx="2400" dy="1700" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2400" pageHeight="1600" math="0" shadow="0" adaptiveColors="auto">
+      <root>
+        <mxCell id="0" /><mxCell id="1" parent="0" />
+        <mxCell id="st_title" value="EdgeNode Storage 函数调用图：GD25Q32 历史顺序追加、commit-last 与读回验证" style="text;html=1;align=center;verticalAlign=middle;fontSize=24;fontStyle=1;fontColor=#1F2937;" vertex="1" parent="1"><mxGeometry x="390" y="20" width="1420" height="50" as="geometry" /></mxCell>
+        <mxCell id="st_legend" value="绿色：当前已接入主流程&#xa;橙色：检查 / 保护 / 失败锁定&#xa;蓝色：SPI0 与 GD25Q32 BSP 边界&#xa;不回绕、不复用历史扇区" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3F4F6;strokeColor=#9CA3AF;align=left;spacingLeft=10;" vertex="1" parent="1"><mxGeometry x="1840" y="20" width="400" height="100" as="geometry" /></mxCell>
+        <mxCell id="st_lane_boot" value="启动恢复：只寻找完整擦除扇区；不在启动时擦除，不续写旧扇区" style="swimlane;horizontal=1;startSize=34;fillColor=#E8F5E9;strokeColor=#82B366;fontStyle=1;html=1;" vertex="1" parent="1"><mxGeometry x="0" y="120" width="2300" height="180" as="geometry" /></mxCell>
+        <mxCell id="st_main" value="main() → init_all()&#xa;BOARD / BSP 先完成&#xa;共享 SPI0 可用" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="st_lane_boot"><mxGeometry x="120" y="45" width="180" height="80" as="geometry" /></mxCell>
+        <mxCell id="st_init" value="storage_init()&#xa;storage_ready = 0&#xa;next = 0x000000" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontStyle=1;" vertex="1" parent="st_lane_boot"><mxGeometry x="400" y="45" width="180" height="80" as="geometry" /></mxCell>
+        <mxCell id="st_gdinit" value="gd25_init()&#xa;PB12 CS 安全初始化&#xa;0x9F 读取 JEDEC ID&#xa;仅 C8 40 16 才 ready" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="st_lane_boot"><mxGeometry x="690" y="35" width="210" height="100" as="geometry" /></mxCell>
+        <mxCell id="st_sector_loop" value="for 0x000000 → 0x3FFFFF&#xa;步长 4 KiB&#xa;storage_sector_is_erased(address)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="st_lane_boot"><mxGeometry x="1030" y="45" width="220" height="80" as="geometry" /></mxCell>
+        <mxCell id="st_scan" value="每槽 16 B：gd25_read()&#xa;逐字节确认全为 0xFF&#xa;避免擦除中掉电的混合扇区" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="st_lane_boot"><mxGeometry x="1370" y="35" width="230" height="100" as="geometry" /></mxCell>
+        <mxCell id="st_ready" value="发现完整空扇区&#xa;保存 storage_next_address&#xa;storage_ready = 1&#xa;返回 SUCCESS" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontStyle=1;" vertex="1" parent="st_lane_boot"><mxGeometry x="1730" y="35" width="200" height="100" as="geometry" /></mxCell>
+        <mxCell id="st_boot_fail" value="ID 错误、读取失败&#xa;或无完整空扇区&#xa;返回 FAIL → init_all 失败" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FCE4EC;strokeColor=#B85450;" vertex="1" parent="st_lane_boot"><mxGeometry x="2010" y="45" width="180" height="80" as="geometry" /></mxCell>
+        <mxCell id="st_lane_runtime" value="周期业务：当前唯一已接入的 Message 输出分支" style="swimlane;horizontal=1;startSize=34;fillColor=#E8F4F8;strokeColor=#6C8EBF;fontStyle=1;html=1;" vertex="1" parent="1"><mxGeometry x="0" y="310" width="2300" height="180" as="geometry" /></mxCell>
+        <mxCell id="st_service" value="node_service_run_once()&#xa;1000 ms 周期门控" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="st_lane_runtime"><mxGeometry x="120" y="55" width="180" height="60" as="geometry" /></mxCell>
+        <mxCell id="st_collect" value="message_collect()&#xa;collection_temperature_get()&#xa;构建 telemetry_sample" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="st_lane_runtime"><mxGeometry x="410" y="45" width="210" height="80" as="geometry" /></mxCell>
+        <mxCell id="st_temperature" value="storage_temperature(message)&#xa;公开保存入口" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontStyle=1;" vertex="1" parent="st_lane_runtime"><mxGeometry x="750" y="55" width="200" height="60" as="geometry" /></mxCell>
+        <mxCell id="st_guard" value="storage_ready？ message 非空？&#xa;next ≤ 4 MiB - 16？" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="st_lane_runtime"><mxGeometry x="1080" y="40" width="160" height="90" as="geometry" /></mxCell>
+        <mxCell id="st_runtime_fail" value="FAIL&#xa;拒绝野指针 / 未初始化&#xa;容量满时 ready = 0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FCE4EC;strokeColor=#B85450;" vertex="1" parent="st_lane_runtime"><mxGeometry x="1370" y="45" width="190" height="80" as="geometry" /></mxCell>
+        <mxCell id="st_lane_write" value="写入 16 字节槽位：先载荷+CRC，最后 commit，再读回验证" style="swimlane;horizontal=1;startSize=34;fillColor=#FFF9E6;strokeColor=#D6B656;fontStyle=1;html=1;" vertex="1" parent="1"><mxGeometry x="0" y="500" width="2300" height="180" as="geometry" /></mxCell>
+        <mxCell id="st_erase_gate" value="next % 4 KiB == 0？&#xa;是：该扇区首次写入" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="st_lane_write"><mxGeometry x="140" y="40" width="160" height="90" as="geometry" /></mxCell>
+        <mxCell id="st_erase" value="gd25_clear(next)&#xa;0x20 扇区擦除&#xa;仅当前新扇区一次" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="st_lane_write"><mxGeometry x="410" y="45" width="180" height="80" as="geometry" /></mxCell>
+        <mxCell id="st_encode" value="storage_record_encode()&#xa;message_encode()：9 B 载荷&#xa;crc32_generate()：4 B CRC&#xa;commit 保持 FF" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="st_lane_write"><mxGeometry x="700" y="35" width="220" height="100" as="geometry" /></mxCell>
+        <mxCell id="st_write_data" value="gd25_write(next, data, 13)&#xa;写载荷 + CRC&#xa;不跨 256 B 页" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="st_lane_write"><mxGeometry x="1040" y="45" width="200" height="80" as="geometry" /></mxCell>
+        <mxCell id="st_write_commit" value="gd25_write(next + 15, 0x00, 1)&#xa;commit-last&#xa;掉电的未提交记录无效" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontStyle=1;" vertex="1" parent="st_lane_write"><mxGeometry x="1360" y="45" width="230" height="80" as="geometry" /></mxCell>
+        <mxCell id="st_verify" value="storage_record_verify()&#xa;gd25_read(16 B)&#xa;比对 0..12、commit=0&#xa;crc32_check()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="st_lane_write"><mxGeometry x="1720" y="35" width="220" height="100" as="geometry" /></mxCell>
+        <mxCell id="st_lock" value="擦除 / 写 / commit / 校验&#xa;任一步失败：ready = 0&#xa;本次启动不再写该槽位" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FCE4EC;strokeColor=#B85450;fontStyle=1;" vertex="1" parent="st_lane_write"><mxGeometry x="2040" y="35" width="210" height="100" as="geometry" /></mxCell>
+        <mxCell id="st_lane_bsp" value="GD25Q32 BSP 与共享 SPI0：每个公开读/写/擦都先守住设备状态与时序" style="swimlane;horizontal=1;startSize=34;fillColor=#F5F5F5;strokeColor=#666666;fontStyle=1;html=1;" vertex="1" parent="1"><mxGeometry x="0" y="690" width="2300" height="180" as="geometry" /></mxCell>
+        <mxCell id="st_gdread" value="gd25_read()&#xa;ready / 地址 / 长度检查&#xa;gd25_wait_busy()&#xa;0x03 + 24-bit 地址" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="st_lane_bsp"><mxGeometry x="120" y="35" width="205" height="100" as="geometry" /></mxCell>
+        <mxCell id="st_gdwrite" value="gd25_write()&#xa;ready / 页边界检查&#xa;wait_busy() → write_enable()&#xa;0x02 + 地址 + 数据" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="st_lane_bsp"><mxGeometry x="450" y="35" width="215" height="100" as="geometry" /></mxCell>
+        <mxCell id="st_gdclear" value="gd25_clear()&#xa;扇区地址对齐检查&#xa;wait_busy() → write_enable()&#xa;0x20 + 地址" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="st_lane_bsp"><mxGeometry x="790" y="35" width="215" height="100" as="geometry" /></mxCell>
+        <mxCell id="st_wel" value="gd25_write_enable()&#xa;0x06 → 0x05&#xa;确认 WEL = 1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="st_lane_bsp"><mxGeometry x="1140" y="45" width="180" height="80" as="geometry" /></mxCell>
+        <mxCell id="st_wip" value="gd25_wait_busy()&#xa;反复 0x05 查询 WIP&#xa;500 ms 与轮询上限保护" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="st_lane_bsp"><mxGeometry x="1450" y="45" width="200" height="80" as="geometry" /></mxCell>
+        <mxCell id="st_spi" value="gd25_cs_select/release()&#xa;spi0_tansfer_data()&#xa;spi0_bus_wait_idle()&#xa;SPI0：PA5 / PA6 / PA7" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontStyle=1;" vertex="1" parent="st_lane_bsp"><mxGeometry x="1780" y="35" width="220" height="100" as="geometry" /></mxCell>
+        <mxCell id="st_chip" value="GD25Q32 4 MiB NOR Flash&#xa;256 B 页 / 4 KiB 扇区&#xa;PB12 片选" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#E1D5E7;strokeColor=#9673A6;" vertex="1" parent="st_lane_bsp"><mxGeometry x="2100" y="45" width="150" height="80" as="geometry" /></mxCell>
+        <mxCell id="st_lane_advance" value="成功后的地址推进与容量语义：从 0x00 起一直向下写，不隐式回绕或回收" style="swimlane;horizontal=1;startSize=34;fillColor=#FCE4EC;strokeColor=#B85450;fontStyle=1;html=1;" vertex="1" parent="1"><mxGeometry x="0" y="880" width="2300" height="150" as="geometry" /></mxCell>
+        <mxCell id="st_advance" value="校验成功后&#xa;非末槽：next += 16&#xa;下一记录继续同扇区" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="st_lane_advance"><mxGeometry x="420" y="45" width="210" height="70" as="geometry" /></mxCell>
+        <mxCell id="st_last" value="最后一个槽位写完&#xa;next = 0x400000&#xa;ready = 0&#xa;不回绕覆盖历史" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FCE4EC;strokeColor=#B85450;fontStyle=1;" vertex="1" parent="st_lane_advance"><mxGeometry x="830" y="35" width="200" height="90" as="geometry" /></mxCell>
+        <mxCell id="st_next_get" value="storage_next_address_get()&#xa;仅返回 RAM 中本次地址&#xa;不读 Flash、不改变状态" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="st_lane_advance"><mxGeometry x="1240" y="45" width="220" height="70" as="geometry" /></mxCell>
+        <mxCell id="se1" edge="1" parent="1" source="st_main" target="st_init" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se2" edge="1" parent="1" source="st_init" target="st_gdinit" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se3" edge="1" parent="1" source="st_gdinit" target="st_sector_loop" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se4" edge="1" parent="1" source="st_sector_loop" target="st_scan" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se5" edge="1" parent="1" source="st_scan" target="st_ready" value="全 FF" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se6" edge="1" parent="1" source="st_gdinit" target="st_boot_fail" value="失败" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se7" edge="1" parent="1" source="st_sector_loop" target="st_boot_fail" value="耗尽" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se8" edge="1" parent="1" source="st_service" target="st_collect" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se9" edge="1" parent="1" source="st_collect" target="st_temperature" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se10" edge="1" parent="1" source="st_temperature" target="st_guard" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se11" edge="1" parent="1" source="st_guard" target="st_runtime_fail" value="否" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se12" edge="1" parent="1" source="st_guard" target="st_erase_gate" value="是" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se13" edge="1" parent="1" source="st_erase_gate" target="st_erase" value="是" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se14" edge="1" parent="1" source="st_erase" target="st_encode" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se15" edge="1" parent="1" source="st_erase_gate" target="st_encode" value="否" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se16" edge="1" parent="1" source="st_encode" target="st_write_data" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se17" edge="1" parent="1" source="st_write_data" target="st_write_commit" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se18" edge="1" parent="1" source="st_write_commit" target="st_verify" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se19" edge="1" parent="1" source="st_erase" target="st_lock" value="失败" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se20" edge="1" parent="1" source="st_write_data" target="st_lock" value="失败" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se21" edge="1" parent="1" source="st_write_commit" target="st_lock" value="失败" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se22" edge="1" parent="1" source="st_verify" target="st_lock" value="失败" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se23" edge="1" parent="1" source="st_write_data" target="st_gdwrite" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se24" edge="1" parent="1" source="st_write_commit" target="st_gdwrite" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se25" edge="1" parent="1" source="st_erase" target="st_gdclear" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se26" edge="1" parent="1" source="st_verify" target="st_gdread" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se27" edge="1" parent="1" source="st_scan" target="st_gdread" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se28" edge="1" parent="1" source="st_gdwrite" target="st_wip" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se29" edge="1" parent="1" source="st_gdwrite" target="st_wel" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se30" edge="1" parent="1" source="st_gdclear" target="st_wip" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se31" edge="1" parent="1" source="st_gdclear" target="st_wel" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se32" edge="1" parent="1" source="st_gdread" target="st_spi" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se33" edge="1" parent="1" source="st_gdwrite" target="st_spi" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se34" edge="1" parent="1" source="st_gdclear" target="st_spi" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se35" edge="1" parent="1" source="st_spi" target="st_chip" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#9673A6;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se36" edge="1" parent="1" source="st_verify" target="st_advance" value="成功" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se37" edge="1" parent="1" source="st_advance" target="st_last" value="末槽" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="se38" edge="1" parent="1" source="st_advance" target="st_next_get" value="观察" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="edgenode-tcp-tree" name="TCP：流程树 + 调用树">
+    <mxGraphModel dx="2100" dy="1300" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2100" pageHeight="1200" math="0" shadow="0" adaptiveColors="auto">
+      <root>
+        <mxCell id="0" /><mxCell id="1" parent="0" />
+        <mxCell id="tt_title" value="TCP：业务流程树 与 代码函数调用树" style="text;html=1;align=center;verticalAlign=middle;fontSize=24;fontStyle=1;fontColor=#1F2937;" vertex="1" parent="1"><mxGeometry x="550" y="20" width="1000" height="45" as="geometry" /></mxCell>
+        <mxCell id="tt_note" value="上半不写代码：解释一条数据如何到达 EdgeHub。下半只写函数：解释源码当前如何协作。&#xa;红色虚线表示当前尚未接入，不代表已完成链路。" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3F4F6;strokeColor=#9CA3AF;align=left;spacingLeft=10;" vertex="1" parent="1"><mxGeometry x="1450" y="20" width="570" height="60" as="geometry" /></mxCell>
+        <mxCell id="tt_flow_box" value="① 业务流程树（不包含函数名）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F4F8;strokeColor=#6C8EBF;fontStyle=1;fontSize=17;align=left;spacingLeft=12;" vertex="1" parent="1"><mxGeometry x="30" y="100" width="2040" height="360" as="geometry" /></mxCell>
+        <mxCell id="tt_flow_root" value="EdgeNode 温度上报&#xa;目标：GD32 → Wi-Fi → TCP → EdgeHub" style="ellipse;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="100" y="240" width="190" height="90" as="geometry" /></mxCell>
+        <mxCell id="tt_flow_sample" value="1. 产生遥测数据&#xa;BMP280 温度 + 倍率&#xa;形成统一 Message" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="1"><mxGeometry x="410" y="150" width="190" height="80" as="geometry" /></mxCell>
+        <mxCell id="tt_flow_encode" value="2. 编码为固定 TCP V4 帧&#xa;16 B：帧头、节点、序号、温度、CRC32" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="1"><mxGeometry x="710" y="150" width="230" height="80" as="geometry" /></mxCell>
+        <mxCell id="tt_flow_join" value="A. 建立链路&#xa;ESP-12S 加入 Wi-Fi&#xa;与 Hub:port 建立单 TCP 连接" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="1"><mxGeometry x="410" y="310" width="190" height="80" as="geometry" /></mxCell>
+        <mxCell id="tt_flow_send" value="3. 请求发送长度&#xa;ESP-AT CIPSEND&#xa;再写入原始 16 B 帧" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="1060" y="150" width="200" height="80" as="geometry" /></mxCell>
+        <mxCell id="tt_flow_network" value="4. 局域网 TCP 字节流&#xa;无消息边界&#xa;断线后需要恢复策略" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;" vertex="1" parent="1"><mxGeometry x="1380" y="150" width="190" height="80" as="geometry" /></mxCell>
+        <mxCell id="tt_flow_hub" value="5. EdgeHub&#xa;缓冲、完整帧校验、解析&#xa;持久化与查询" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;" vertex="1" parent="1"><mxGeometry x="1680" y="150" width="190" height="80" as="geometry" /></mxCell>
+        <mxCell id="tt_flow_fail" value="失败分支&#xa;配置非法 / AT ERROR / BUSY / 超时 / CLOSED&#xa;当前 tcp_init() 立即返回失败；未实现重连服务" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FCE4EC;strokeColor=#B85450;" vertex="1" parent="1"><mxGeometry x="1050" y="310" width="300" height="80" as="geometry" /></mxCell>
+        <mxCell id="tt_code_box" value="② 函数调用树（只描述当前源码真实调用与缺口）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF9E6;strokeColor=#D6B656;fontStyle=1;fontSize=17;align=left;spacingLeft=12;" vertex="1" parent="1"><mxGeometry x="30" y="500" width="2040" height="590" as="geometry" /></mxCell>
+        <mxCell id="tt_code_root" value="TCP 模块" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="100" y="760" width="150" height="70" as="geometry" /></mxCell>
+        <mxCell id="tt_code_entry" value="tcp_init(config)&#xa;当前：没有 main / init_all 调用者" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="390" y="600" width="220" height="70" as="geometry" /></mxCell>
+        <mxCell id="tt_code_valid" value="tcp_at_text_valid()&#xa;拒绝引号、CR、LF" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="1"><mxGeometry x="730" y="550" width="170" height="60" as="geometry" /></mxCell>
+        <mxCell id="tt_code_esp" value="esp12s_init()&#xa;配置 USART1 + RBNE IRQ" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="1"><mxGeometry x="730" y="650" width="180" height="60" as="geometry" /></mxCell>
+        <mxCell id="tt_code_cmd" value="tcp_command_send_and_wait_ok()&#xa;AT / CWMODE / CWJAP / CIFSR / CIPMUX / CIPMODE" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="1"><mxGeometry x="730" y="750" width="250" height="70" as="geometry" /></mxCell>
+        <mxCell id="tt_code_connect" value="tcp_connect_start_and_wait()&#xa;CIPSTART 专用&#xa;要求 CONNECT + OK" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="1"><mxGeometry x="730" y="860" width="200" height="70" as="geometry" /></mxCell>
+        <mxCell id="tt_code_sendcmd" value="esp12s_response_reset()&#xa;esp12s_cmd_send()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="1"><mxGeometry x="1080" y="720" width="180" height="60" as="geometry" /></mxCell>
+        <mxCell id="tt_code_wait" value="tcp_wait_response()&#xa;超时循环取回应&#xa;成功：OK 或 CONNECT+OK&#xa;失败：ERROR / FAIL / BUSY / CLOSED" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="1080" y="830" width="240" height="100" as="geometry" /></mxCell>
+        <mxCell id="tt_code_irq" value="USART1_IRQHandler()&#xa;usart.c 私有解析&#xa;回应队列 → esp12s_response_get()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="1"><mxGeometry x="1450" y="830" width="220" height="80" as="geometry" /></mxCell>
+        <mxCell id="tt_code_tx" value="tcp_frame_transmit()&#xa;tcp_frame_encode(frame[16], ...)&#xa;当前没有调用 ESP 发送，固定返回 FAIL" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="390" y="970" width="270" height="70" as="geometry" /></mxCell>
+        <mxCell id="tte1" edge="1" parent="1" source="tt_flow_root" target="tt_flow_sample" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="tte2" edge="1" parent="1" source="tt_flow_sample" target="tt_flow_encode" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="tte3" edge="1" parent="1" source="tt_flow_root" target="tt_flow_join" value="并行准备" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="tte4" edge="1" parent="1" source="tt_flow_encode" target="tt_flow_send" value="待补齐" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="tte5" edge="1" parent="1" source="tt_flow_join" target="tt_flow_send" value="连接成功后" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="tte6" edge="1" parent="1" source="tt_flow_send" target="tt_flow_network" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="tte7" edge="1" parent="1" source="tt_flow_network" target="tt_flow_hub" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="tte8" edge="1" parent="1" source="tt_flow_join" target="tt_flow_fail" value="失败" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="tte9" edge="1" parent="1" source="tt_code_root" target="tt_code_entry" value="初始化树" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;dashed=1;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="tte10" edge="1" parent="1" source="tt_code_entry" target="tt_code_valid" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="tte11" edge="1" parent="1" source="tt_code_entry" target="tt_code_esp" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="tte12" edge="1" parent="1" source="tt_code_entry" target="tt_code_cmd" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="tte13" edge="1" parent="1" source="tt_code_entry" target="tt_code_connect" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="tte14" edge="1" parent="1" source="tt_code_cmd" target="tt_code_sendcmd" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="tte15" edge="1" parent="1" source="tt_code_sendcmd" target="tt_code_wait" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="tte16" edge="1" parent="1" source="tt_code_connect" target="tt_code_wait" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="tte17" edge="1" parent="1" source="tt_code_irq" target="tt_code_wait" value="回应事件" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="tte18" edge="1" parent="1" source="tt_code_root" target="tt_code_tx" value="发送树（未接入）" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="edgenode-storage-tree" name="Storage：流程树 + 调用树">
+    <mxGraphModel dx="2100" dy="1300" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2100" pageHeight="1200" math="0" shadow="0" adaptiveColors="auto">
+      <root>
+        <mxCell id="0" /><mxCell id="1" parent="0" />
+        <mxCell id="stt_title" value="Storage：业务流程树 与 代码函数调用树" style="text;html=1;align=center;verticalAlign=middle;fontSize=24;fontStyle=1;fontColor=#1F2937;" vertex="1" parent="1"><mxGeometry x="500" y="20" width="1100" height="45" as="geometry" /></mxCell>
+        <mxCell id="stt_note" value="上半讲“一条温度历史为何可信”；下半讲“Storage 与 GD25Q32 函数怎么工作”。&#xa;绿色为主链已接入；红色为故障后的保护性停止，而不是自动重试。" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3F4F6;strokeColor=#9CA3AF;align=left;spacingLeft=10;" vertex="1" parent="1"><mxGeometry x="1440" y="20" width="580" height="60" as="geometry" /></mxCell>
+        <mxCell id="stt_flow_box" value="① 业务流程树（不包含函数名）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F4F8;strokeColor=#6C8EBF;fontStyle=1;fontSize=17;align=left;spacingLeft=12;" vertex="1" parent="1"><mxGeometry x="30" y="100" width="2040" height="360" as="geometry" /></mxCell>
+        <mxCell id="stt_flow_root" value="温度历史记录&#xa;从 0x000000 起&#xa;顺序追加" style="ellipse;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="100" y="240" width="170" height="90" as="geometry" /></mxCell>
+        <mxCell id="stt_flow_boot" value="A. 上电恢复&#xa;确认芯片身份&#xa;只找“整扇区全 FF”的新位置" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="1"><mxGeometry x="400" y="150" width="200" height="80" as="geometry" /></mxCell>
+        <mxCell id="stt_flow_abandon" value="旧的未满扇区不续写&#xa;擦除中掉电造成的未知区域也放弃&#xa;以少量容量换恢复安全" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="1"><mxGeometry x="720" y="150" width="230" height="80" as="geometry" /></mxCell>
+        <mxCell id="stt_flow_sample" value="B. 每秒产生一条&#xa;温度、倍率、采样时刻" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="1"><mxGeometry x="400" y="310" width="190" height="70" as="geometry" /></mxCell>
+        <mxCell id="stt_flow_slot" value="1. 准备 16 B 槽位&#xa;9 B 载荷 + 4 B CRC32&#xa;commit 保持 FF" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="1"><mxGeometry x="1060" y="150" width="210" height="80" as="geometry" /></mxCell>
+        <mxCell id="stt_flow_erase" value="2. 新 4 KiB 扇区首次写入前擦除&#xa;同扇区的后续 256 条不重复擦除" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="1"><mxGeometry x="1060" y="300" width="230" height="80" as="geometry" /></mxCell>
+        <mxCell id="stt_flow_commit" value="3. 先写载荷+CRC&#xa;最后写 commit=0x00&#xa;未提交槽位不算有效记录" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="1"><mxGeometry x="1400" y="150" width="210" height="80" as="geometry" /></mxCell>
+        <mxCell id="stt_flow_verify" value="4. 整槽读回&#xa;逐字节比对 + commit + CRC32 校验&#xa;成功才前移 16 B" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;" vertex="1" parent="1"><mxGeometry x="1720" y="150" width="210" height="80" as="geometry" /></mxCell>
+        <mxCell id="stt_flow_fail" value="失败保护&#xa;擦除 / 写 / commit / 校验任一失败&#xa;本次启动锁定 Storage，不原地重试&#xa;容量满也不回绕覆盖历史" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FCE4EC;strokeColor=#B85450;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="1500" y="310" width="280" height="90" as="geometry" /></mxCell>
+        <mxCell id="stt_code_box" value="② 函数调用树（只描述当前源码真实调用）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF9E6;strokeColor=#D6B656;fontStyle=1;fontSize=17;align=left;spacingLeft=12;" vertex="1" parent="1"><mxGeometry x="30" y="500" width="2040" height="590" as="geometry" /></mxCell>
+        <mxCell id="stt_code_root" value="Storage 模块" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="100" y="760" width="150" height="70" as="geometry" /></mxCell>
+        <mxCell id="stt_code_init" value="init_all() → storage_init()&#xa;启动初始化树" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="390" y="590" width="210" height="70" as="geometry" /></mxCell>
+        <mxCell id="stt_code_gdinit" value="gd25_init()&#xa;CS 初始化 → 0x9F → ID=C84016&#xa;通过后 gd25_ready=1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="1"><mxGeometry x="730" y="540" width="220" height="80" as="geometry" /></mxCell>
+        <mxCell id="stt_code_scan" value="storage_sector_is_erased()&#xa;循环 gd25_read(16 B)&#xa;确认 4 KiB 每字节 FF" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="1"><mxGeometry x="730" y="660" width="220" height="80" as="geometry" /></mxCell>
+        <mxCell id="stt_code_runtime" value="node_service_run_once()&#xa;message_collect()&#xa;→ storage_temperature(message)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="390" y="860" width="220" height="80" as="geometry" /></mxCell>
+        <mxCell id="stt_code_encode" value="storage_record_encode()&#xa;message_encode() + crc32_generate()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="1"><mxGeometry x="730" y="840" width="210" height="70" as="geometry" /></mxCell>
+        <mxCell id="stt_code_write" value="gd25_clear()（扇区边界）&#xa;gd25_write(13 B)&#xa;gd25_write(commit 1 B)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="1"><mxGeometry x="1050" y="830" width="220" height="80" as="geometry" /></mxCell>
+        <mxCell id="stt_code_verify" value="storage_record_verify()&#xa;gd25_read(16 B)&#xa;crc32_check()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="1"><mxGeometry x="1380" y="840" width="200" height="70" as="geometry" /></mxCell>
+        <mxCell id="stt_code_bsp" value="GD25Q32 BSP&#xa;gd25_wait_busy() / write_enable()&#xa;CS + spi0_tansfer_data() + wait_idle()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="1"><mxGeometry x="1690" y="780" width="230" height="90" as="geometry" /></mxCell>
+        <mxCell id="stt_code_lock" value="任何失败：storage_ready=0&#xa;成功：next += 16&#xa;末槽：next=4MiB 且 ready=0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FCE4EC;strokeColor=#B85450;" vertex="1" parent="1"><mxGeometry x="1690" y="940" width="230" height="70" as="geometry" /></mxCell>
+        <mxCell id="stte1" edge="1" parent="1" source="stt_flow_root" target="stt_flow_boot" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="stte2" edge="1" parent="1" source="stt_flow_boot" target="stt_flow_abandon" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="stte3" edge="1" parent="1" source="stt_flow_root" target="stt_flow_sample" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="stte4" edge="1" parent="1" source="stt_flow_sample" target="stt_flow_slot" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="stte5" edge="1" parent="1" source="stt_flow_slot" target="stt_flow_erase" value="新扇区时" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="stte6" edge="1" parent="1" source="stt_flow_slot" target="stt_flow_commit" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="stte7" edge="1" parent="1" source="stt_flow_erase" target="stt_flow_commit" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="stte8" edge="1" parent="1" source="stt_flow_commit" target="stt_flow_verify" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="stte9" edge="1" parent="1" source="stt_flow_erase" target="stt_flow_fail" value="失败" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="stte10" edge="1" parent="1" source="stt_flow_commit" target="stt_flow_fail" value="失败" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="stte11" edge="1" parent="1" source="stt_flow_verify" target="stt_flow_fail" value="失败或满" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="stte12" edge="1" parent="1" source="stt_code_root" target="stt_code_init" value="初始化树" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="stte13" edge="1" parent="1" source="stt_code_init" target="stt_code_gdinit" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="stte14" edge="1" parent="1" source="stt_code_init" target="stt_code_scan" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="stte15" edge="1" parent="1" source="stt_code_root" target="stt_code_runtime" value="记录树" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="stte16" edge="1" parent="1" source="stt_code_runtime" target="stt_code_encode" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="stte17" edge="1" parent="1" source="stt_code_encode" target="stt_code_write" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="stte18" edge="1" parent="1" source="stt_code_write" target="stt_code_verify" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="stte19" edge="1" parent="1" source="stt_code_write" target="stt_code_bsp" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="stte20" edge="1" parent="1" source="stt_code_verify" target="stt_code_lock" value="结果" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B85450;endArrow=classic;"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

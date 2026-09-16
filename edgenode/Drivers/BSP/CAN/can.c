@@ -3,7 +3,6 @@
 #include "gd32f10x_gpio.h"
 #include "gd32f10x_rcu.h"
 #include "gd32f10x_can.h"
-#include <stdio.h>
 
 /*
     这个文件我们呢来编写CAN相关，通讯相关的底层我们都要实现传输+接受，我们用到的引脚是，PB8,PB9

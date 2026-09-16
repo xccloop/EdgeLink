@@ -24,7 +24,7 @@
 
 ### 测试代码
 
-```c
+```C
 uint32_t address = 0x00000000UL;
 uint8_t write_data[16] = {
     0x12, 0x34, 0x56, 0x78,
