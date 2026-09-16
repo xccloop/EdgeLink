@@ -21,6 +21,7 @@ add_executable(Edgehub
     src/Storage.cpp
     src/Message.cpp
     src/Can.cpp
+    src/Gateruntime.cpp
 )
 
 # 为 Edgehub 链接 SQLite 库
