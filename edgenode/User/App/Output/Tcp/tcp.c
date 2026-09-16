@@ -292,7 +292,7 @@ uint8_t tcp_connected_get(void)
 /*
     这个函数调用BSP层接口返回供上层调用发送数据
 */
-uint8_t tcp_send(const uint8_t *data, uint8_t length)
+uint8_t tcp_data_send(const uint8_t *data, uint8_t length)
 {
     int command_length;
 

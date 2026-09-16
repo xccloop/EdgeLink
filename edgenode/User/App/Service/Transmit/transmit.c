@@ -21,7 +21,7 @@ uint8_t tcp_frame_transmit(telemetry_sample_struct *message,uint16_t sequence)
         return TCP_TRANSMIT_FAIL;
     }
 
-    if(tcp_send(transmit_data, sizeof(transmit_data)) == TCP_SEND_FAIL)
+    if(tcp_data_send(transmit_data, sizeof(transmit_data)) == TCP_SEND_FAIL)
     {
         return TCP_TRANSMIT_FAIL;
     }

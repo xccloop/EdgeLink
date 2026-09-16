@@ -25,6 +25,6 @@ uint8_t tcp_init(const tcp_config_struct *config);
 uint8_t tcp_connected_get(void);
 
 /* 已建连时按ESP-AT普通模式发送一段原始字节；只有收到SEND OK才报告成功。 */
-uint8_t tcp_send(const uint8_t *data, uint8_t length);
+uint8_t tcp_data_send(const uint8_t *data, uint8_t length);
 
 #endif
