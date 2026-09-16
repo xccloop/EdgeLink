@@ -3,6 +3,8 @@
 
 #include "Protocol/Tcp/tcp_frame.h"
 #include "Output/Tcp/tcp.h"
+#include "Protocol/Can/can_frame.h"
+#include "Output/Can/can_output.h"
 
 /*
     这一层未来负责协调TCP和CAN输出。
@@ -28,10 +30,13 @@ uint8_t tcp_frame_transmit(telemetry_sample_struct *message,uint16_t sequence)
 
     return TCP_TRANSMIT_SUCCESS;
 }
-uint8_t can_frame_transmit()
+
+uint8_t can_frame_transmit(uint8_t node_id,uint16_t sequence,const telemetry_sample_struct *message)
 {
+    if(can_telemetry_send(node_id, sequence, message) == CAN_FRAME_FAIL)
+    {
+        return CAN_TRANSMIT_FAIL;
+    }
 
-
-    /* CAN输出需要Message、序号和节点ID；接口补齐前不报告发送成功。 */
-    return CAN_TRANSMIT_FAIL;
+    return CAN_TRANSMIT_SUCCESS;
 }
