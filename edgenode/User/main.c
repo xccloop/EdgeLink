@@ -10,6 +10,9 @@
 #include "Output/can/can_output.h"
 #include <stdint.h>
 #include <stdio.h>
+#include "FreeRTOS.h"
+#include "task.h"
+#include "FreeRtos/Tasks/rtos_task.h"
 
 /*
     现在让我们尝试完整的数据链路，不加入HMI,RS485,FAN
@@ -24,10 +27,12 @@ int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
     init_all();
+    led_tasks_create();
     printf("Edgenode start\r\n");
 
-    while (1) {
-        node_service_run_once();
-        delay_ms(200);
+    vTaskStartScheduler();
+
+    while (1)
+    {
     }
 }

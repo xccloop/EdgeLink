@@ -15,20 +15,30 @@
 //像这种我们不希望外部去直接使用的就可以用static修饰
 static void board_nvic_config(void)
 {
-    /* 抢占优先级和子优先级各占2位，整个工程使用同一套分组。 */
-    nvic_priority_group_set(NVIC_PRIGROUP_PRE2_SUB2);
+    /*
+        在 Cortex-M FreeRTOS 工程里，把全部实现的 NVIC 优先级位用于抢占优先级，是最简单、最不容易出错的配置方式，尤其当 ISR 要调用 FreeRTOS API 时
+        FreeRTOS 的中断 API 安全规则只适合使用完整抢占优先级，我们修改为
+        4 位全部用于“谁能打断谁”，不再使用子优先级，同理下面的优先级我们也要修改，去除子优先级
+    */
+    nvic_priority_group_set(NVIC_PRIGROUP_PRE4_SUB0);
 
-    /* USART0服务CH340，USART1服务ESP12S，二者抢占优先级最高。 */
-    nvic_irq_enable(USART0_IRQn, 0U, 0U);
-    nvic_irq_enable(USART1_IRQn, 0U, 1U);
+    /*
+        USART0 服务 CH340，USART1 服务 ESP12S。
+        两者使用相同抢占优先级，因此它们之间不能互相抢占。
+    */
+    nvic_irq_enable(USART0_IRQn, 5U, 0U);
+    nvic_irq_enable(USART1_IRQn, 5U, 0U);
 
-    /* 三个按键共用抢占优先级2，通过子优先级确定同级响应顺序。 */
-    nvic_irq_enable(EXTI1_IRQn, 2U, 0U);
-    nvic_irq_enable(EXTI5_9_IRQn, 2U, 1U);
-    nvic_irq_enable(EXTI10_15_IRQn, 2U, 3U);
+    /*
+        三个按键中断优先级较低。
+        它们使用相同抢占优先级，因此彼此之间不能互相抢占。
+    */
+    nvic_irq_enable(EXTI1_IRQn, 10U, 0U);
+    nvic_irq_enable(EXTI5_9_IRQn, 10U, 0U);
+    nvic_irq_enable(EXTI10_15_IRQn, 10U, 0U);
 
     /* CAN接受中断 */
-    nvic_irq_enable(USBD_LP_CAN0_RX0_IRQn, 3U, 0U);
+    nvic_irq_enable(USBD_LP_CAN0_RX0_IRQn, 15U, 0U);
 }
 
 static void board_debug_config(void)
