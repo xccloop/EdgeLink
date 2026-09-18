@@ -5,9 +5,9 @@
 #include <cstdint>
 
 //TCP连接只承载固定格式的Telemetry，不再携带Type和可变PayloadLength。
-constexpr uint8_t FRAME_VERSION = 0x04;
-constexpr unsigned int FRAME_HEADER_LENGTH = 7;
-constexpr unsigned int FRAME_TEMPERATURE_LENGTH = 4;
+constexpr uint8_t FRAME_VERSION = 0x05;
+constexpr unsigned int FRAME_HEADER_LENGTH = 9;
+constexpr unsigned int FRAME_TEMPERATURE_LENGTH = 2;
 constexpr unsigned int FRAME_TEMPERATURE_SCALE_LENGTH = 1;
 constexpr unsigned int FRAME_TELEMETRY_LENGTH = FRAME_TEMPERATURE_LENGTH
     + FRAME_TEMPERATURE_SCALE_LENGTH;
@@ -20,11 +20,11 @@ constexpr int FRAME_PARSE_SUCCESS = 1;
 
 /*
     Magic      固定 0x45 0x48，即 EH，用于在错误数据中寻找帧头
-    Version    V4 固定 0x04；V1、V2、V3都是旧布局，不能混用
+    Version    V5 固定 0x05；旧布局不能混用
     SourceNode 发送节点号，第一版用 1 表示采集节点
     TargetNode 固定为 0，表示 EdgeHub
     Sequence   发送方递增，用于日志、去重和排错
-    Temperature      int32，大端
+    Temperature      int16，大端
     TemperatureScale int8，实际温度 = Temperature * 10^TemperatureScale
     CRC32      大端，计算范围从 Version 到 TemperatureScale，不包括 Magic 和 CRC 自身
 */
@@ -37,7 +37,7 @@ struct TcpFrameHeader
     uint8_t  version;
     uint8_t  sourceNode;
     uint8_t  targetNode;
-    uint16_t sequence;
+    uint32_t sequence;
 };
 #pragma pack(pop)
 
@@ -45,7 +45,7 @@ struct TcpFrameHeader
 struct TcpFrame
 {
     TcpFrameHeader header;
-    int32_t temperature;
+    int16_t temperature;
     int8_t temperatureScale;
     uint32_t crc32;
     int64_t receivedAtUs;    // EdgeHub完成完整帧校验时记录的Unix微秒时间戳，不属于TCP线上字节
@@ -54,5 +54,9 @@ struct TcpFrame
 //把TCP字节流中的完整固定Telemetry帧解析出来。
 int tcp_frame_parser(Ringbuffer *ringbuffer,TcpFrame *frame);
 
-static_assert(sizeof(TcpFrameHeader) == FRAME_HEADER_LENGTH, "TcpFrameHeader must be 7 bytes");
+/* ACK 与 V5 遥测同为 16 字节：EH|V5|0|node|sequence|00 00|status|CRC32。 */
+bool tcp_ack_encode(uint8_t frame[FRAME_LENGTH], uint8_t node_id,
+                    uint32_t sequence, uint8_t ack_status);
+
+static_assert(sizeof(TcpFrameHeader) == FRAME_HEADER_LENGTH, "TcpFrameHeader must be 9 bytes");
 int64_t frame_received_at_us();

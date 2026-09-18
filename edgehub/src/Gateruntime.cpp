@@ -394,7 +394,7 @@ void Gateruntime::drainTcpclient(int slot, bool &close_client)
 /*
     从指定客户端的 Ringbuffer 连续取出完整 TCP 帧，转换为 Message 并写入 SQLite。
     FRAME_PARSE_PENDING 表示半包，保留数据等待下次 recv；解析错误则请求关闭该客户端。
-    这里是 TCP 字节流进入业务层的唯一入口，之后增加 ACK/去重可从此处继续拆分。
+    只有 SQLite 已成功写入或确认该键已存在，才向这个 TCP 连接回复 ACK。
 */
 void Gateruntime::parseTcpFrames(int slot, bool &close_client)
 {
@@ -415,10 +415,17 @@ void Gateruntime::parseTcpFrames(int slot, bool &close_client)
 
             if(_storage.isOpen() == true)
             {
-                if(_storage.insertMessage(message) == false)
+                StorageInsertResult insert_result = _storage.insertMessage(message);
+                if(insert_result == StorageInsertResult::Error)
                 {
                     std::string storage_error = _storage.getLastError();
                     fprintf(stderr, "%s\n", storage_error.c_str());
+                }
+                else if(sendTcpAck(slot, message) == false)
+                {
+                    /* 非阻塞 socket 只发出部分 ACK 时关闭连接，避免后续 ACK 拼接成损坏字节流。 */
+                    close_client = true;
+                    break;
                 }
             }
             continue;
@@ -432,6 +439,30 @@ void Gateruntime::parseTcpFrames(int slot, bool &close_client)
         close_client = true;
         break;
     }
+}
+
+bool Gateruntime::sendTcpAck(int slot, const Message &message)
+{
+    uint8_t frame[FRAME_LENGTH]{};
+    if(tcp_ack_encode(frame, message.nodeId, message.sequence, 0U) == false)
+    {
+        return false;
+    }
+
+    ssize_t sent_length = clients[slot]->connection.data_send(
+        reinterpret_cast<const char *>(frame), FRAME_LENGTH);
+    return sent_length == static_cast<ssize_t>(FRAME_LENGTH);
+}
+
+bool Gateruntime::sendCanAck(const Message &message)
+{
+    uint8_t data[CAN_ACK_LENGTH]{};
+    data[0] = static_cast<uint8_t>(message.sequence >> 24);
+    data[1] = static_cast<uint8_t>(message.sequence >> 16);
+    data[2] = static_cast<uint8_t>(message.sequence >> 8);
+    data[3] = static_cast<uint8_t>(message.sequence);
+    data[4] = 0U;
+    return _can.send(CAN_ACK_BASE_ID + message.nodeId, data, CAN_ACK_LENGTH);
 }
 
 /*
@@ -474,7 +505,7 @@ bool Gateruntime::handleCan(unsigned int event_mask)
             if(receive_result == sizeof(can_frame))
             {
                 uint32_t can_id = can_frame.can_id & CAN_SFF_MASK;
-                uint32_t temperature_raw;
+                uint16_t temperature_raw;
 
                 /* 不使用固定ID过滤：每个节点的ID不同，先接收后按遥测ID范围和DLC确认格式。 */
                 if(((can_frame.can_id & (CAN_EFF_FLAG | CAN_RTR_FLAG | CAN_ERR_FLAG)) != 0U) ||
@@ -487,21 +518,21 @@ bool Gateruntime::handleCan(unsigned int event_mask)
 
                 can_message.nodeId = static_cast<uint8_t>(can_id - CAN_TELEMETRY_BASE_ID);
                 can_message.sequence =
-                    (static_cast<uint16_t>(can_frame.data[0]) << 8) |
-                    static_cast<uint16_t>(can_frame.data[1]);
+                    (static_cast<uint32_t>(can_frame.data[0]) << 24) |
+                    (static_cast<uint32_t>(can_frame.data[1]) << 16) |
+                    (static_cast<uint32_t>(can_frame.data[2]) << 8) |
+                    static_cast<uint32_t>(can_frame.data[3]);
                 temperature_raw =
-                    (static_cast<uint32_t>(can_frame.data[2]) << 24) |
-                    (static_cast<uint32_t>(can_frame.data[3]) << 16) |
-                    (static_cast<uint32_t>(can_frame.data[4]) << 8)  |
-                    static_cast<uint32_t>(can_frame.data[5]);
-                can_message.temperature = temperature_raw <= 0x7FFFFFFFU ?
-                    static_cast<int32_t>(temperature_raw) :
-                    static_cast<int32_t>(static_cast<int64_t>(temperature_raw) - 0x100000000LL);
+                    (static_cast<uint16_t>(can_frame.data[4]) << 8) |
+                    static_cast<uint16_t>(can_frame.data[5]);
+                can_message.temperature = temperature_raw <= 0x7FFFU ?
+                    static_cast<int16_t>(temperature_raw) :
+                    static_cast<int16_t>(static_cast<int32_t>(temperature_raw) - 0x10000L);
                 can_message.temperatureScale =
                     static_cast<int8_t>(can_frame.data[6]);
                 can_message.receivedAtUs = frame_received_at_us();
 
-                printf("CAN rx: id=0x%03X node=%u seq=%u temp_raw=0x%08X temp=%d scale=%d t=%llu\r\n",
+                printf("CAN rx: id=0x%03X node=%u seq=%u temp_raw=0x%04X temp=%d scale=%d t=%llu\r\n",
                     can_id,
                     can_message.nodeId,
                     can_message.sequence,
@@ -510,7 +541,17 @@ bool Gateruntime::handleCan(unsigned int event_mask)
                     can_message.temperatureScale,
                     (unsigned long long)can_message.receivedAtUs);
 
-                _storage.insertMessage(can_message);
+                StorageInsertResult insert_result = _storage.insertMessage(can_message);
+                if(insert_result == StorageInsertResult::Error)
+                {
+                    fprintf(stderr, "%s\n", _storage.getLastError().c_str());
+                }
+                else if(sendCanAck(can_message) == false)
+                {
+                    fprintf(stderr, "CAN ACK send failed: node=%u sequence=%u\n",
+                        static_cast<unsigned int>(can_message.nodeId),
+                        static_cast<unsigned int>(can_message.sequence));
+                }
 
                 continue;
             }

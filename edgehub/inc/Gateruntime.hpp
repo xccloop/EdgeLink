@@ -72,12 +72,16 @@ private:
     bool handleTcpclient(int fd,uint32_t event_mask);
     void drainTcpclient(int slot, bool &close_client);
     void parseTcpFrames(int slot, bool &close_client);
+    bool sendTcpAck(int slot, const Message &message);
+    bool sendCanAck(const Message &message);
     void closeTcpclient(int fd, int slot);
     void closeUntrackedTcpclient(int fd);
 
     bool handleCan(unsigned int event_mask);
 
-    static constexpr uint32_t CAN_TELEMETRY_BASE_ID = 0x200U;
+    static constexpr uint32_t CAN_TELEMETRY_BASE_ID = 0x280U;
+    static constexpr uint32_t CAN_ACK_BASE_ID = 0x300U;
     static constexpr uint32_t CAN_TELEMETRY_NODE_MAX = 127U;
     static constexpr uint8_t CAN_TELEMETRY_LENGTH = 7U;
+    static constexpr uint8_t CAN_ACK_LENGTH = 5U;
 };

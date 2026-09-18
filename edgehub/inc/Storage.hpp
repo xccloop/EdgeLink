@@ -2,6 +2,13 @@
 #include "Message.hpp"
 #include <string>
 
+enum class StorageInsertResult
+{
+    Inserted,
+    Duplicate,
+    Error
+};
+
 class Storage {
 public:
     // ---------- 构造与析构 ----------
@@ -27,8 +34,8 @@ public:
     bool createTable();
 
     // ---------- 核心数据操作（预编译语句） ----------
-    // 插入一条 Message 数据（返回 true 表示成功）
-    bool insertMessage(const Message& msg);
+    // 插入一条 Message；重复键表示该记录已被可靠保存，仍可安全回复 ACK。
+    StorageInsertResult insertMessage(const Message& msg);
 
     // ---------- 错误信息获取 ----------
     // 获取最后一次操作的错误描述

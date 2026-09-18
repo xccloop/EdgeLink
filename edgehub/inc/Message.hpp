@@ -7,8 +7,8 @@ struct TcpFrame;
 struct Message
 {
     uint8_t nodeId;        // 来自 sourceNode
-    uint16_t sequence;     // 用于排错、未来去重
-    int32_t temperature;
+    uint32_t sequence;     // 节点生成的递增序号，与 nodeId 一起作为去重键
+    int16_t temperature;
     int8_t temperatureScale;
     int64_t receivedAtUs;  // EdgeHub 收到且校验成功的时间
 };
