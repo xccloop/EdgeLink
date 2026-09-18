@@ -3,11 +3,16 @@
 #include "gd32f10x_gpio.h"
 #include "gd32f10x_rcu.h"
 #include "gd32f10x_spi.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include "semphr.h"
 
 #define SPI0_BUS_TIMEOUT_MS 10U
 #define SPI0_BUS_MAX_POLLS 100000U
 
 static uint8_t spi0_bus_faulted;
+static StaticSemaphore_t spi0_bus_mutex_storage;
+static SemaphoreHandle_t spi0_bus_mutex;
 
 /*
     由于BMP280,W25Q32使用同一总线，为了避免重复初始化，这里我们移动到单独文件
@@ -16,6 +21,12 @@ static uint8_t spi0_bus_faulted;
 void spi0_bus_init(void)
 {
     spi_parameter_struct spi_init_handler;
+
+    /* 运行期重配 SPI0 会打断正在进行的 CS 事务，因此恢复必须通过未来专用流程完成。 */
+    if(xTaskGetSchedulerState() == taskSCHEDULER_RUNNING)
+    {
+        return;
+    }
 
     rcu_periph_clock_enable(RCU_GPIOA);
     rcu_periph_clock_enable(RCU_SPI0);
@@ -57,8 +68,50 @@ void spi0_bus_init(void)
     spi_init(SPI0, &spi_init_handler);
     spi_enable(SPI0);
 
-    /* 重新初始化SPI0是清除故障锁定、重新开始使用这条共享总线的显式操作。 */
+    /* 启动阶段创建静态 mutex；任务开始后由它序列化两颗 SPI 从设备。 */
+    if(spi0_bus_mutex_init() == 0U)
+    {
+        spi0_bus_faulted = 1U;
+        return;
+    }
+
     spi0_bus_faulted = 0U;
+}
+
+uint8_t spi0_bus_mutex_init(void)
+{
+    if(spi0_bus_mutex != NULL)
+    {
+        return 1U;
+    }
+
+    spi0_bus_mutex = xSemaphoreCreateMutexStatic(&spi0_bus_mutex_storage);
+    return (spi0_bus_mutex != NULL) ? 1U : 0U;
+}
+
+uint8_t spi0_bus_lock(void)
+{
+    if(spi0_bus_mutex == NULL)
+    {
+        return 0U;
+    }
+
+    /* 初始化阶段还没有任务并发访问 SPI0，不应在调度器启动前阻塞。 */
+    if(xTaskGetSchedulerState() != taskSCHEDULER_RUNNING)
+    {
+        return 1U;
+    }
+
+    return (xSemaphoreTake(spi0_bus_mutex, portMAX_DELAY) == pdTRUE) ? 1U : 0U;
+}
+
+void spi0_bus_unlock(void)
+{
+    if((spi0_bus_mutex != NULL) &&
+       (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING))
+    {
+        (void)xSemaphoreGive(spi0_bus_mutex);
+    }
 }
 
 /*
@@ -108,7 +161,7 @@ uint8_t spi0_tansfer_data(uint8_t send_data, uint8_t *receive_data)
         /*
             修改：若上一笔传输直到TRANS超时，SPI状态已不可信。
             旧代码仍会继续选中下一颗设备，它可能接收残余时钟；现在拒绝后续传输，
-            必须由上层显式重新调用spi0_bus_init()后才会恢复使用。
+            本版不提供运行期恢复；必须复位后重新初始化 SPI0。
         */
         return 0U;
     }

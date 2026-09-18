@@ -41,8 +41,16 @@ static uint8_t gd25_wait_busy(void);
 
 uint8_t gd25_init(void)
 {
+    uint8_t success = 0U;
+
     /* 重新初始化时先视为不可用，只有最后验证成功才重新开放读写擦。 */
     gd25_ready = 0U;
+
+    if(spi0_bus_lock() == 0U)
+    {
+        return 0U;
+    }
+
     rcu_periph_clock_enable(RCU_GPIOB);
 
     /* 先把输出数据写成高电平，再把PB12切换为输出，避免刚切换时Flash被意外选中。 */
@@ -61,7 +69,7 @@ uint8_t gd25_init(void)
     uint8_t chip_id_raw[3];
     if((gd25_cmd_transfer(GD25Q32_CMD_READ_ID,chip_id_raw,3) == 0U))
     {
-       return 0U; 
+       goto cleanup;
     }
     /* 0x9F按顺序返回厂商、类型、容量三个字节，要拼成一个24位ID再比较。 */
     uint32_t chip_id = ((uint32_t)chip_id_raw[0] << 16U) |
@@ -71,7 +79,7 @@ uint8_t gd25_init(void)
     {
         printf("chip_id_raw = %02X %02X %02X\r\n",
         chip_id_raw[0], chip_id_raw[1], chip_id_raw[2]);
-        return 0U;
+        goto cleanup;
     }
 
     printf("chip_id_raw = %02X %02X %02X\r\n",
@@ -83,7 +91,11 @@ uint8_t gd25_init(void)
 
     /* 到这里说明SPI通信正常且芯片型号正确，后续公开读写擦函数才允许执行。 */
     gd25_ready = 1U;
-    return 1U;
+    success = 1U;
+
+cleanup:
+    spi0_bus_unlock();
+    return success;
 }
 
 static void gd25_cs_select(void)
@@ -219,9 +231,16 @@ uint8_t gd25_read(uint32_t address, uint8_t *data, uint32_t length)
     {
         return 1U;
     }
+
+    if(spi0_bus_lock() == 0U)
+    {
+        return 0U;
+    }
+
     /* 读取前先确认上一笔写擦结束，避免读到Flash内部操作期间的不确定数据。 */
     if(gd25_wait_busy() == 0U)
     {
+        spi0_bus_unlock();
         return 0U;
     }
 
@@ -247,6 +266,7 @@ uint8_t gd25_read(uint32_t address, uint8_t *data, uint32_t length)
         success = 0U;
     }
     gd25_cs_release();
+    spi0_bus_unlock();
     return success;
 }
 
@@ -261,9 +281,16 @@ uint8_t gd25_write(uint32_t address, const uint8_t *data, uint16_t length)
     {
         return 0U;
     }
+
+    if(spi0_bus_lock() == 0U)
+    {
+        return 0U;
+    }
+
     /* 等待旧操作完成并确认WEL后，才允许发送页写命令。 */
     if((gd25_wait_busy() == 0U) || (gd25_write_enable() == 0U))
     {
+        spi0_bus_unlock();
         return 0U;
     }
 
@@ -293,10 +320,13 @@ uint8_t gd25_write(uint32_t address, const uint8_t *data, uint16_t length)
     {
         /* SPI中途失败时，Flash可能已经收到前面部分数据；先等它停下来，不能马上重试。 */
         (void)gd25_wait_busy();
+        spi0_bus_unlock();
         return 0U;
     }
     /* 页写命令送完后还不能立刻继续访问，要等Flash把数据真正写进存储单元。 */
-    return gd25_wait_busy();
+    success = gd25_wait_busy();
+    spi0_bus_unlock();
+    return success;
 }
 
 uint8_t gd25_clear(uint32_t address)
@@ -308,9 +338,16 @@ uint8_t gd25_clear(uint32_t address)
     {
         return 0U;
     }
+
+    if(spi0_bus_lock() == 0U)
+    {
+        return 0U;
+    }
+
     /* 擦除同样必须先等待不忙，再发送写使能。 */
     if((gd25_wait_busy() == 0U) || (gd25_write_enable() == 0U))
     {
+        spi0_bus_unlock();
         return 0U;
     }
 
@@ -329,9 +366,11 @@ uint8_t gd25_clear(uint32_t address)
     {
         /* 命令或地址可能已经被Flash接收，先等待可能开始的擦除结束，再把失败交给上层。 */
         (void)gd25_wait_busy();
+        spi0_bus_unlock();
         return 0U;
     }
     /* CS拉高后擦除才真正开始，必须等待WIP清零才算这一笔结束。 */
-    return gd25_wait_busy();
+    success = gd25_wait_busy();
+    spi0_bus_unlock();
+    return success;
 }
-

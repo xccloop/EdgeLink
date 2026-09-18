@@ -43,7 +43,7 @@ void rtos_assert_failed(const char *file, int line);
 #define configUSE_EVENT_GROUPS	0	//暂不启用事件组
 #define configUSE_STREAM_BUFFERS	0	//暂不启用流／消息缓冲区
 #define configUSE_CO_ROUTINES	0	//不使用已过时的协程
-#define configUSE_MUTEXES	0	//单任务阶段无需互斥锁
+#define configUSE_MUTEXES	1	//启用互斥锁
 #define configUSE_TASK_NOTIFICATIONS	1	//为将来 USART/CAN 中断通知任务预留
 #define INCLUDE_vTaskDelay	1	//允许任务主动延时并进入阻塞态，任务延时时其他任务可以运行
 #define INCLUDE_xTaskDelayUntil	1	//允许使用周期延时 API

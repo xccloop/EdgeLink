@@ -60,6 +60,7 @@ static int32_t bmp280_temperature_centidegree_calculate(const bmp280_calib_t *ca
 uint8_t bmp280_init(void)
 {
     uint8_t chip_id;
+    uint8_t success = 0U;
     /*
         在此，我们来学习什么是SPI
         SPI有四根线，分别是CS,SCK,MISO,MOSI，SPI通信的时候我们称一端位主设备，一端为从设备，一个主设备能够拥有多个从设备，
@@ -75,6 +76,11 @@ uint8_t bmp280_init(void)
         这也是为什么 SPI 要有半个周期的间隔：给线路上的电压足够时间稳定。
 
     */
+    if(spi0_bus_lock() == 0U)
+    {
+        return BMP280_FAIL;
+    }
+
     gpio_bit_set(BMP280_CS_PORT, BMP280_CS);
     gpio_init(BMP280_CS_PORT,GPIO_MODE_OUT_PP,GPIO_OSPEED_50MHZ,BMP280_CS);
     //SPI0的PA5、PA6、PA7由spi0_bus_init()统一配置，BMP280只配置自己的CS。
@@ -87,15 +93,15 @@ uint8_t bmp280_init(void)
 
     /* 修改：chip_id是本驱动的第一层运行证据；不是0x58就不继续读校准或温度。 */
     if ((bmp280_data_get(BMP280_REG_ID, &chip_id) == 0U) || (chip_id != BMP280_CHIP_ID)) {
-        return 0U;
+        goto cleanup;
     }
 
     /* 修改：上电时NVM可能仍在复制校准参数，完成前不能读取0x88开始的校准数据。 */
     if (bmp280_status_wait_clear(BMP280_STATUS_IM_UPDATE, BMP280_STATUS_TIMEOUT_MS) == 0U) {
-        return 0U;
+        goto cleanup;
     }
     if (bmp280_calibration_read() == 0U) {
-        return 0U;
+        goto cleanup;
     }
 
     /*
@@ -103,17 +109,21 @@ uint8_t bmp280_init(void)
         复位后的ctrl_meas为0，温度测量被跳过；这里配置后0xFA~0xFC才会持续更新。
     */
     if (bmp280_register_write(BMP280_REG_CTRL_MEAS, BMP280_CTRL_MEAS_TEMP_X1_NORMAL) == 0U) {
-        return 0U;
+        goto cleanup;
     }
 
     /* 修改：等待首个x1温度转换完成，避免把复位/旧数据作为第一笔有效温度。 */
     delay_ms(5U);
     if (bmp280_status_wait_clear(BMP280_STATUS_MEASURING, BMP280_STATUS_TIMEOUT_MS) == 0U) {
-        return 0U;
+        goto cleanup;
     }
 
     bmp280_is_initialized = 1U;
-    return BMP280_SUCCESS;
+    success = BMP280_SUCCESS;
+
+cleanup:
+    spi0_bus_unlock();
+    return success;
 }
 
 static void bmp280_cs_select()
@@ -282,9 +292,15 @@ uint8_t bmp280_temperature_get(bmp280_temperature_t *temperature)
         return BMP280_FAIL;
     }
 
+    if(spi0_bus_lock() == 0U)
+    {
+        return BMP280_FAIL;
+    }
+
     /* 修改：0xFA、0xFB、0xFC必须作为一笔连续读取，避免在CS低时重复发读命令。 */
     if (bmp280_reg_data_get(BMP280_REG_TEMP_MSB, temperature_data, 3U) == 0U) {
         /* 修改：旧代码在传输失败后仍会拼接残缺数据并返回伪温度。 */
+        spi0_bus_unlock();
         return BMP280_FAIL;
     }
 
@@ -294,5 +310,6 @@ uint8_t bmp280_temperature_get(bmp280_temperature_t *temperature)
                     | ((uint32_t)temperature_data[2] >> 4);
     temperature->temperature = bmp280_temperature_centidegree_calculate(&bmp280_calib, temperature_raw);
     temperature->temperature_scale = BMP280_TEMPERATURE_SCALE;
+    spi0_bus_unlock();
     return BMP280_SUCCESS;
 }
