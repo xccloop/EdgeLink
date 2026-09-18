@@ -5,6 +5,6 @@
 #include "Model/message.h"
 
 /* Message提供统一业务数据；当前TCP V4协议只编码其中的温度和倍率。 */
-uint8_t tcp_frame_encode(uint8_t frame[16], uint16_t sequence, const telemetry_sample_struct *message);
+uint8_t tcp_frame_encode(uint8_t frame[16], const telemetry_sample_struct *message);
 
 #endif

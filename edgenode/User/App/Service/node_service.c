@@ -9,7 +9,6 @@
 
 static uint32_t node_service_last_sample_ms;
 static uint8_t node_service_has_sampled;
-static uint16_t sequence;
 
 
 /*
@@ -48,11 +47,10 @@ uint8_t node_service_run_once()
     }
     */
 
-    if(tcp_frame_transmit(&message,sequence) == TCP_SEND_FAIL)
+    if(tcp_frame_transmit(&message) == TCP_SEND_FAIL)
     {
         printf("tcp send fail");
         return 0u;
     }
-    sequence++;
     return 1U;
 }

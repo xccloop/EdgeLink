@@ -5,8 +5,8 @@
 #include "Model/message.h"
 
 
-uint8_t tcp_frame_transmit(telemetry_sample_struct *message,uint16_t sequence);
-uint8_t can_frame_transmit(uint8_t node_id,uint16_t sequence,const telemetry_sample_struct *message);
+uint8_t tcp_frame_transmit(const telemetry_sample_struct *message);
+uint8_t can_frame_transmit(uint8_t node_id,const telemetry_sample_struct *message);
 
 #define TCP_TRANSMIT_FAIL 0U
 #define TCP_TRANSMIT_SUCCESS 1U

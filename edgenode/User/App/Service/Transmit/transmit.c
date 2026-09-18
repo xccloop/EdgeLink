@@ -14,11 +14,11 @@
 /*
     首先我们思考一下数据传输，我们应当是传入一个message，然后回转为frame自定义帧，我们在通过AT指令发送
 */
-uint8_t tcp_frame_transmit(telemetry_sample_struct *message,uint16_t sequence)
+uint8_t tcp_frame_transmit(const telemetry_sample_struct *message)
 {
     uint8_t transmit_data[16];
 
-    if(tcp_frame_encode(transmit_data,sequence,message) == 0U)
+    if(tcp_frame_encode(transmit_data,message) == 0U)
     {
         return TCP_TRANSMIT_FAIL;
     }
@@ -31,9 +31,9 @@ uint8_t tcp_frame_transmit(telemetry_sample_struct *message,uint16_t sequence)
     return TCP_TRANSMIT_SUCCESS;
 }
 
-uint8_t can_frame_transmit(uint8_t node_id,uint16_t sequence,const telemetry_sample_struct *message)
+uint8_t can_frame_transmit(uint8_t node_id,const telemetry_sample_struct *message)
 {
-    if(can_telemetry_send(node_id, sequence, message) == CAN_FRAME_FAIL)
+    if(can_telemetry_send(node_id, message) == CAN_FRAME_FAIL)
     {
         return CAN_TRANSMIT_FAIL;
     }

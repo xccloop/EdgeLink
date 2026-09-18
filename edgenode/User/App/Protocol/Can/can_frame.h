@@ -14,7 +14,7 @@
     这里只定义CAN遥测协议，不访问CAN硬件。
     Message提供统一业务数据；编码结果交给Output/Can中的发送出口写入CAN BSP。
 */
-uint8_t can_frame_encode(uint8_t data[CAN_TELEMETRY_LENGTH], uint16_t sequence,
+uint8_t can_frame_encode(uint8_t data[CAN_TELEMETRY_LENGTH],
                          const telemetry_sample_struct *message);
 
 #endif

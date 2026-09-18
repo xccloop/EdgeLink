@@ -9,6 +9,7 @@
 #include "IPS/ips.h"
 #include "Presentation/Buffer/display_buffer.h"
 #include "Output/Storage/storage.h"
+#include "Model/message.h"
 #include "Output/TCP/tcp.h"
 #include "Config/config.h"
 
@@ -30,6 +31,8 @@
 */
 uint8_t init_all(void)
 {
+    uint32_t recovered_next_sequence;
+
     /* BOARD必须最先执行：它建立所有BSP共用的时钟、中断和SPI0。 */
     board_config_init();
 
@@ -59,7 +62,11 @@ uint8_t init_all(void)
     }
 
     /* Storage会验证GD25Q32并寻找新日志扇区，失败时不能继续追加历史数据。 */
-    if(storage_init() == STORAGE_FAIL)
+    if(storage_init(&recovered_next_sequence) == STORAGE_FAIL)
+    {
+        return INIT_ALL_FAIL;
+    }
+    if(message_sequence_init(recovered_next_sequence) == MESSAGE_FAIL)
     {
         return INIT_ALL_FAIL;
     }

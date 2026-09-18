@@ -6,7 +6,7 @@
     这个文件是采集的APP封装，由于我们只有BMP280，因此这里的采集也是只用bmp280
 */
 
-uint8_t collection_temperature_get(int32_t *temperature,
+uint8_t collection_temperature_get(int16_t *temperature,
                                    int8_t *temperature_scale,
                                    uint32_t *sample_uptime_ms)
 {

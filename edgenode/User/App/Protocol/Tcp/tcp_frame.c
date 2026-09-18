@@ -33,7 +33,7 @@
     };
 */
 
-uint8_t tcp_frame_encode(uint8_t frame[16], uint16_t sequence, const telemetry_sample_struct *message)
+uint8_t tcp_frame_encode(uint8_t frame[16], const telemetry_sample_struct *message)
 {
     uint32_t crc;
     if((frame == 0) || (message == 0))
@@ -45,13 +45,17 @@ uint8_t tcp_frame_encode(uint8_t frame[16], uint16_t sequence, const telemetry_s
     frame[2] = 0x04U;
     frame[3] = board_id;
     frame[4] = 0U;
-    frame[5] = (uint8_t)(sequence >> 8);
-    frame[6] = (uint8_t)sequence;
-    frame[7]  = (uint8_t)((uint32_t)message->temperature >> 24);
-    frame[8]  = (uint8_t)((uint32_t)message->temperature >> 16);
+
+    frame[5] = (uint8_t)(message->sequence >> 24);
+    frame[6] = (uint8_t)(message->sequence >> 16);
+    frame[7]  = (uint8_t)(message->sequence >> 8);
+    frame[8]  = (uint8_t)((uint32_t)message->sequence);
+
     frame[9]  = (uint8_t)((uint32_t)message->temperature >> 8);
     frame[10] = (uint8_t)message->temperature;
+
     frame[11] = (uint8_t)message->temperature_scale;
+    
     crc = crc32_generate(&frame[2], 10);
     frame[12] = (uint8_t)(crc >> 24);
     frame[13] = (uint8_t)(crc >> 16);

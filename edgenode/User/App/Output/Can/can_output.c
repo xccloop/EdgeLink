@@ -8,7 +8,7 @@
     节点ID决定CAN仲裁ID，协议层只负责填充7字节数据；这里再请求CAN BSP分配发送邮箱。
     这样替换CAN硬件驱动时不需要改CAN帧字段，修改协议字段时也不需要接触硬件发送逻辑。
 */
-uint8_t can_telemetry_send(uint8_t node_id, uint16_t sequence,
+uint8_t can_telemetry_send(uint8_t node_id,
                            const telemetry_sample_struct *message)
 {
     uint8_t data[CAN_TELEMETRY_LENGTH];
@@ -21,7 +21,7 @@ uint8_t can_telemetry_send(uint8_t node_id, uint16_t sequence,
         return CAN_FRAME_FAIL;
     }
 
-    if(can_frame_encode(data, sequence, message) == CAN_FRAME_FAIL)
+    if(can_frame_encode(data, message) == CAN_FRAME_FAIL)
     {
         printf("frame encode fail\r\n");
         return CAN_FRAME_FAIL;

@@ -3,329 +3,327 @@
 #include "Protocol/CRC/crc.h"
 #include <stdint.h>
 
-#define STORAGE_FLASH_CAPACITY_BYTES 0x00400000UL
-#define STORAGE_SECTOR_SIZE 4096UL
-#define STORAGE_ERASED_BYTE 0xFFU
-#define STORAGE_RECORD_CRC_OFFSET STORAGE_TEMPERATURE_RECORD_LENGTH
-#define STORAGE_RECORD_CRC_LENGTH 4U
-#define STORAGE_RECORD_DATA_LENGTH (STORAGE_TEMPERATURE_RECORD_LENGTH + STORAGE_RECORD_CRC_LENGTH)
-#define STORAGE_RECORD_COMMIT_OFFSET (STORAGE_TEMPERATURE_RECORD_SLOT_SIZE - 1U)
-#define STORAGE_RECORD_COMMIT_VALUE 0x00U
+/*
+    这个文件用于存储，主要是数据和flash的交互逻辑
+    我们先看一下整个的流程message提供了除了成功发送位之外的所有函数，因此我们需要将他解码，但是pending位只有TCP/CAN成功之后才会进行的值
+    我们规定16位如下
+    0-3 sample_uptime_ms;
+    4-7 sequence
+    8-9 tempreature_raw;
+    10 temperature_scale;
+    11-14 CRC32
+    15 pending
+    CRC用于计算前十位
+*/
+
+#define STORAGE_PENDING   0xFFU
+#define STORAGE_CONFIRMED 0x00U
+
+//定义slot大小和扫描的页数
+#define STORAGE_SLOT_SIZE          16U
+#define STORAGE_SCAN_PAGE_SIZE    256U
+
+//定义日志存储区域
+#define STORAGE_LOG_BASE_ADDRESS  0x000000UL
+#define STORAGE_LOG_END_ADDRESS   0x003BF000UL
+
+
+#define STORAGE_CRC_OFFSET        11U
+#define STORAGE_CRC_LENGTH        4U
+#define STORAGE_CRC_COVER_LENGTH  11U
+
+static uint8_t storage_scan_page[STORAGE_SCAN_PAGE_SIZE];
 
 static uint32_t storage_next_address;
 static uint8_t storage_ready;
 
-/*
-    Storage这一层位于Message和GD25Q32 BSP之间。
-    Message只负责给出一次采集结果，GD25Q32 BSP只负责按地址读、页写和扇区擦除；
-    Storage负责把两者连接起来，决定“数据写到哪里、何时擦除、掉电后哪些数据还能相信”。
-
-    本文件把4 MiB外置Flash从0x000000开始当作只追加的温度日志区域。
-    Flash的最小擦除单位是4 KiB，一个扇区中有4096 / 16 = 256个记录槽位；
-    每条记录虽然只有9字节温度数据，但槽位固定为16字节。这样槽位起始地址
-    永远是16的倍数，而16能整除256，所以一次13字节页写绝不会跨页。
-
-    一个16字节槽位的固定布局如下：
-        [0..3]   sample_uptime_ms，大端
-        [4..7]   temperature，大端补码
-        [8]      temperature_scale
-        [9..12]  前9字节的CRC32，大端
-        [13..14] 预留，保持擦除态0xFF
-        [15]     commit提交标记：0xFF表示尚未提交，0x00表示已提交
-
-    正常写入顺序必须是：先擦除新扇区 -> 写入载荷和CRC -> 最后单独写commit
-    -> 读回再校验。commit放在最后，是因为Flash只能把位从1写成0：如果写到
-    一半突然掉电，commit通常仍不是0x00，后续读取就不会把这条半写记录当有效。
-
-    掉电还可能发生在4 KiB扇区擦除期间，此时扇区内容不能相信。为避免重启后
-    误写这种扇区，storage_init()不会续写已有记录的扇区，而是只选择“整扇区
-    都是0xFF”的区域重新开始。代价是上一个未写满扇区的剩余槽位会被放弃；
-    收益是不会为了节省几个槽位而覆盖旧数据或向未知状态的Flash继续编程。
-
-    注意：本文件当前只实现追加保存和本次写后的读回验证，还没有提供历史记录
-    的读取/解码接口。未来读取接口应同时检查commit和CRC，只有两者都正确的
-    槽位才返回给业务层。
-*/
-/*
-    这个文件基于GD25Q32进行数据存储规划选择
-    我们来回顾一下流程，首先我们要将message转化成数组这样才能将数据通过SPI发送给FLASH
-    一些注意事项：单次最多一页、不能跨 256 字节、擦除必须 4 KiB 对齐；
-    Flash 不能像 RAM 一样随意改写；写入只能把位从 1 变成 0。要把数据恢复成 1，必须先擦除
-    要写入数据，需要制定一个扇区，然后擦除某一个扇区，将数据进行存储，存储地址递增，写满后换到下一个扇区以此类推，
-    所以我认为要设置一个基本的地址，比如0x00，这样做就是从0x00开始一直往下写
-*/
-
-/*
-    这个函数辅助我们将message转化为数组
-*/
-static void message_encode(uint8_t *data, const telemetry_sample_struct *message)
+static void storage_record_message_encode(uint8_t record[STORAGE_SLOT_SIZE],
+                                          const telemetry_sample_struct *message)
 {
-    uint32_t temperature;
+    record[0] = (uint8_t)(message->sample_uptime_ms >> 24);
+    record[1] = (uint8_t)(message->sample_uptime_ms >> 16);
+    record[2] = (uint8_t)(message->sample_uptime_ms >> 8);
+    record[3] = (uint8_t)message->sample_uptime_ms;
 
-    /*
-        这个函数只做一件事：把内存中的telemetry_sample_struct转换成Flash中的
-        9字节业务载荷，不直接读写Flash。
+    record[4] = (uint8_t)(message->sequence >> 24);
+    record[5] = (uint8_t)(message->sequence >> 16);
+    record[6] = (uint8_t)(message->sequence >> 8);
+    record[7] = (uint8_t)message->sequence;
 
-        之所以单独拆出编码，是因为Message结构体在RAM中的排列会受编译器对齐、
-        大小端和后续字段变化影响，不能直接把结构体地址交给gd25_write()。这里
-        明确指定每个字段占几个字节及其顺序，Storage、TCP和CAN就有一致的解释。
+    record[8] = (uint8_t)(message->temperature >> 8);
+    record[9] = (uint8_t)message->temperature;
 
-        temperature是有符号int32_t。先转成uint32_t只是为了保留它的32位补码，
-        再依次右移取字节；不能先缩窄为uint8_t，否则高24位会在写入前丢失。
-    */
+    record[10] = (uint8_t)message->temperature_scale;
 
-    /* Storage和TCP/CAN统一按大端保存多字节字段，后续读取不必针对通道转换字节序。 */
-    data[0] = (uint8_t)(message->sample_uptime_ms >> 24U);
-    data[1] = (uint8_t)(message->sample_uptime_ms >> 16U);
-    data[2] = (uint8_t)(message->sample_uptime_ms >> 8U);
-    data[3] = (uint8_t)(message->sample_uptime_ms >> 0U);
+    uint32_t crc_value = crc32_generate(record, 11);
+    record[11] = (uint8_t)(crc_value >> 24);
+    record[12] = (uint8_t)(crc_value >> 16);
+    record[13] = (uint8_t)(crc_value >> 8);
+    record[14] = (uint8_t)crc_value;
 
-    /* 先保留int32_t的全部补码位，再逐字节取出；不能在右移前缩窄为uint8_t。 */
-    temperature = (uint32_t)message->temperature;
-    data[4] = (uint8_t)(temperature >> 24U);
-    data[5] = (uint8_t)(temperature >> 16U);
-    data[6] = (uint8_t)(temperature >> 8U);
-    data[7] = (uint8_t)(temperature >> 0U);
-
-    data[8] = (uint8_t)message->temperature_scale;
+    record[15] = STORAGE_PENDING;//第一次写入不知道pending，直接赋值为ff
 }
 
-static void storage_record_encode(uint8_t *data, const telemetry_sample_struct *message)
+/*
+    这个函数寻找哪里的一个record里面是否为空
+*/
+static uint8_t storage_slot_is_empty(const uint8_t record[STORAGE_SLOT_SIZE])
 {
-    uint32_t crc;
+    uint8_t i;
 
-    /*
-        这个函数在9字节业务载荷之后补上4字节CRC32，得到本次真正要写进Flash的
-        13字节数据。CRC覆盖范围只有data[0..8]：它用于判断采集数据本身是否被
-        半写或损坏，CRC自己的4字节当然不能再参与自己的计算，commit也不参与。
-
-        CRC使用现有Frame/CRC模块，而不是Storage重新实现一份算法。这样同一个
-        工程只有一套CRC32定义，后续调试时不会出现“通信和存储CRC算法不同”的问题。
-    */
-
-    message_encode(data, message);
-    /* CRC只覆盖9字节业务载荷；CRC自身和最后的commit不参与计算。 */
-    crc = crc32_generate(data, STORAGE_TEMPERATURE_RECORD_LENGTH);
-    data[STORAGE_RECORD_CRC_OFFSET + 0U] = (uint8_t)(crc >> 24U);
-    data[STORAGE_RECORD_CRC_OFFSET + 1U] = (uint8_t)(crc >> 16U);
-    data[STORAGE_RECORD_CRC_OFFSET + 2U] = (uint8_t)(crc >> 8U);
-    data[STORAGE_RECORD_CRC_OFFSET + 3U] = (uint8_t)(crc >> 0U);
-}
-
-static uint8_t storage_sector_is_erased(uint32_t sector_address)
-{
-    uint8_t data[STORAGE_TEMPERATURE_RECORD_SLOT_SIZE];
-    uint32_t address;
-    uint32_t i;
-
-    /*
-        这个函数确认以sector_address开始的整个4 KiB扇区是否全为0xFF。
-        它逐个读取16字节槽位，再逐字节确认，而不是只读扇区开头。
-
-        原因是掉电可能发生在gd25_clear()的内部擦除过程中：此时同一扇区的某些
-        地址已变成0xFF，另一些地址仍是旧数据或未知状态。只检查一个空槽会误以为
-        扇区可写，后续页写可能失败或留下混杂数据；整扇区检查才能把它排除。
-    */
-
-    /*
-        重启恢复时必须确认整个4 KiB扇区都是擦除态，不能只检查一个16字节槽位。
-        这样即使掉电发生在扇区擦除中，也不会向状态未知的剩余区域继续写。
-    */
-    for(address = sector_address;
-        address < (sector_address + STORAGE_SECTOR_SIZE);
-        address += STORAGE_TEMPERATURE_RECORD_SLOT_SIZE)
+    for(i = 0U; i < STORAGE_SLOT_SIZE; i++)
     {
-        if(gd25_read(address, data, STORAGE_TEMPERATURE_RECORD_SLOT_SIZE) == 0U)
+        if(record[i] != 0xFFU)
+        {
+            return 0U;
+        }
+    }
+
+    return 1U;
+}
+
+/*
+    这个函数读取一个数组中的前四位，主要是为了给CRC校验做准备
+*/
+static uint32_t storage_u32_read_be(const uint8_t *data)
+{
+    return ((uint32_t)data[0] << 24U) |
+           ((uint32_t)data[1] << 16U) |
+           ((uint32_t)data[2] << 8U)  |
+           ((uint32_t)data[3]);
+}
+
+/*
+    这个函数计算一个record里面的crc是否有效
+*/
+static uint8_t storage_record_crc_is_valid(
+    const uint8_t record[STORAGE_SLOT_SIZE])
+{
+    uint32_t stored_crc;
+
+    stored_crc = storage_u32_read_be(&record[STORAGE_CRC_OFFSET]);
+
+    return crc32_check(record, STORAGE_CRC_COVER_LENGTH, stored_crc);
+}
+
+/*
+    这个函数用于将读取数据到RAM里面然后进行解析
+*/
+static uint8_t storage_scan_log(uint32_t *recovered_next_sequence)
+{
+    /*
+        page_address
+        当前正在扫描 Flash 的哪一个 256B 页面
+        slot_offset
+            当前检查这个 256B 页面里的哪个 16B record
+        sequence
+            当前 record 的 sequence
+        max_sequence
+            扫描到目前为止最大的合法 sequence
+        has_valid_record
+            到目前为止有没有发现过合法 record
+        record
+            指向当前 16B record
+    */
+    uint32_t page_address;
+    uint32_t slot_offset;
+    uint32_t sequence;
+    uint32_t max_sequence = 0U;
+    uint8_t has_valid_record = 0U;
+    const uint8_t *record;
+
+    //一次读取一页
+    for(page_address = STORAGE_LOG_BASE_ADDRESS;
+        page_address < STORAGE_LOG_END_ADDRESS;
+        page_address += STORAGE_SCAN_PAGE_SIZE)
+    {
+        //获取一页的信息，然后存储进入位于RAM的数组
+        if(gd25_read(page_address,
+                     storage_scan_page,
+                     STORAGE_SCAN_PAGE_SIZE) == 0U)
         {
             return STORAGE_FAIL;
         }
-        for(i = 0U; i < STORAGE_TEMPERATURE_RECORD_SLOT_SIZE; i++)
+
+        //16个字节一个slot所以一次处理16
+        for(slot_offset = 0U;
+            slot_offset < STORAGE_SCAN_PAGE_SIZE;
+            slot_offset += STORAGE_SLOT_SIZE)
         {
-            if(data[i] != STORAGE_ERASED_BYTE)
+            //定义record
+            record = &storage_scan_page[slot_offset];
+
+            /*
+                StorageTask 永远顺序追加。
+                因此第一个全 FF 槽位就是下一条安全写入位置。
+            */
+            //如果一个槽位全空
+            if(storage_slot_is_empty(record) != 0U)
             {
-                return STORAGE_FAIL;
+                //定义写指针位页+slot，这样就可以定位到是那一页的那一个slot，从这里往下写
+                storage_next_address = page_address + slot_offset;
+
+                /*
+                    max_sequence = 0，是因为真的找到了一条 sequence=0
+                    还是max_sequence = 0，只是因为变量初始化成0
+                */
+                if(has_valid_record != 0U)
+                {
+                    if(max_sequence == 0xFFFFFFFFUL)
+                    {
+                        return STORAGE_FAIL;
+                    }
+
+                    *recovered_next_sequence = max_sequence + 1U;
+                }
+                else
+                {
+                    *recovered_next_sequence = 0U;
+                }
+
+                return STORAGE_SUCCESS;
+            }
+
+            /*
+                非全 FF 但 CRC 错：可能是首次写入时掉电。
+                它已不能覆盖，但也不能参与 sequence 恢复。
+            */
+            if(storage_record_crc_is_valid(record) == 0U)
+            {
+                continue;
+            }
+
+            /*
+                当前定版布局：
+                [0..3] uptime
+                [4..7] sequence
+            */
+            sequence = storage_u32_read_be(&record[4]);
+
+            if((has_valid_record == 0U) ||
+               (sequence > max_sequence))
+            {
+                max_sequence = sequence;
+                has_valid_record = 1U;
             }
         }
     }
 
-    return STORAGE_SUCCESS;
+    /* 日志区没有任何全 FF 槽位，不能覆盖旧日志。 */
+    return STORAGE_FAIL;
 }
 
-static uint8_t storage_record_verify(uint32_t address, const uint8_t *data)
+/*
+    现在只验证 Flash 通信；下一步会在这里接入按 256 字节页的顺序扫描，恢复
+    下一写地址和下一 sequence。初始化过程中不擦除 Flash，也不发送 TCP/CAN。
+*/
+uint8_t storage_init(uint32_t *recovered_next_sequence)
 {
-    uint8_t verify_data[STORAGE_TEMPERATURE_RECORD_SLOT_SIZE];
-    uint32_t stored_crc;
-    uint32_t i;
-
-    /*
-        这个函数是“写后读回”步骤。它从Flash重新读取完整16字节槽位，并依次验证：
-        1. 读回的0..12字节与刚刚准备写入的数据完全一致；
-        2. 第15字节commit已经是0x00，说明提交动作完成；
-        3. 读出的CRC32能校验读出的9字节载荷。
-
-        gd25_write()返回成功只说明SPI事务和Flash忙等待正常结束，不能单独证明
-        存储单元内容正确。再读一次可以在本次运行中及时发现写错误；一旦失败，
-        上层会停止继续写同一槽位，因为NOR Flash不允许把已经写成0的位恢复为1。
-    */
-
-    if(gd25_read(address, verify_data, STORAGE_TEMPERATURE_RECORD_SLOT_SIZE) == 0U)
+    if(recovered_next_sequence == 0)
     {
         return STORAGE_FAIL;
     }
-    for(i = 0U; i < STORAGE_RECORD_DATA_LENGTH; i++)
-    {
-        if(verify_data[i] != data[i])
-        {
-            return STORAGE_FAIL;
-        }
-    }
-    stored_crc = ((uint32_t)verify_data[STORAGE_RECORD_CRC_OFFSET + 0U] << 24U) |
-                 ((uint32_t)verify_data[STORAGE_RECORD_CRC_OFFSET + 1U] << 16U) |
-                 ((uint32_t)verify_data[STORAGE_RECORD_CRC_OFFSET + 2U] << 8U) |
-                 ((uint32_t)verify_data[STORAGE_RECORD_CRC_OFFSET + 3U] << 0U);
-    if((verify_data[STORAGE_RECORD_COMMIT_OFFSET] != STORAGE_RECORD_COMMIT_VALUE) ||
-       (crc32_check(verify_data, STORAGE_TEMPERATURE_RECORD_LENGTH, stored_crc) == 0U))
-    {
-        return STORAGE_FAIL;
-    }
-    return STORAGE_SUCCESS;
-}
-
-uint8_t storage_init(void)
-{
-    uint32_t address;
-
-    /*
-        这是Storage的启动入口，必须在board_config_init()完成共享SPI0初始化后调用。
-        它先调用gd25_init()读取JEDEC ID，确认Flash型号和SPI通信正常；通过后再从
-        STORAGE_BASE_ADDRESS开始逐扇区寻找一个完整擦除的4 KiB区域。
-
-        本函数不在启动时立即擦除任何扇区，也不续写上次未满的扇区。前者避免“仅仅
-        上电就破坏历史”，后者避免“上一次正在擦除时掉电”留下的未知状态。找到的
-        地址保存在storage_next_address，真正的擦除留给第一次storage_temperature()
-        调用；如果全Flash都没有完整空扇区，保持storage_ready为0并返回失败。
-    */
 
     storage_ready = 0U;
-    storage_next_address = STORAGE_BASE_ADDRESS;
+    storage_next_address = STORAGE_LOG_BASE_ADDRESS;
+    *recovered_next_sequence = 0U;
 
     if(gd25_init() == 0U)
     {
         return STORAGE_FAIL;
     }
 
-    /*
-        重启后只选择完整4 KiB均为FF的新扇区。若上一个扇区只有部分记录，
-        其剩余槽位会被放弃而不会覆盖；这用少量容量换取了擦除中掉电后的安全性。
-        因此本版本不会在复位后续写一个已有数据的扇区。
-    */
-    for(address = STORAGE_BASE_ADDRESS;
-        address < STORAGE_FLASH_CAPACITY_BYTES;
-        address += STORAGE_SECTOR_SIZE)
-    {
-        if(storage_sector_is_erased(address) == STORAGE_SUCCESS)
-        {
-            storage_next_address = address;
-            storage_ready = 1U;
-            return STORAGE_SUCCESS;
-        }
-    }
-
-    /* 没有空槽时保持未就绪，避免后续调用回绕覆盖最早的历史数据。 */
-    return STORAGE_FAIL;
-}
-
-uint8_t storage_temperature(const telemetry_sample_struct *message)
-{
-    uint8_t data[STORAGE_RECORD_DATA_LENGTH];
-    uint8_t commit = STORAGE_RECORD_COMMIT_VALUE;
-
-    /*
-        这是APP层保存一条温度记录的公开函数。调用前必须成功执行storage_init()；
-        函数会把message编码为13字节“载荷+CRC”，写到当前槽位，最后再写commit，
-        并且读回校验。全部步骤成功后才把storage_next_address增加16，指向下一槽位。
-
-        这里的特殊情况处理如下：
-        - 未初始化、空message、地址超过4 MiB：拒绝写入，防止野指针或回绕覆盖；
-        - 当前地址正好是4 KiB边界：说明进入新扇区，先擦除一次；同一扇区后续
-          256条记录不擦除，避免每条记录都损耗一个扇区；
-        - 擦除、载荷写入、commit写入或读回校验任一步失败：立刻清storage_ready。
-          因为失败的槽位可能已经有部分0位，再次直接写会违反Flash只能1到0的规则；
-        - 写到最后一个槽位：标记为未就绪而不回绕，确保历史数据不会被自动覆盖。
-    */
-
-    if((storage_ready == 0U) || (message == 0))
+    if(storage_scan_log(recovered_next_sequence) == STORAGE_FAIL)
     {
         return STORAGE_FAIL;
     }
-    if(storage_next_address > (STORAGE_FLASH_CAPACITY_BYTES - STORAGE_TEMPERATURE_RECORD_SLOT_SIZE))
-    {
-        storage_ready = 0U;
-        return STORAGE_FAIL;
-    }
 
-    /*
-        每个4 KiB扇区首次写入前先擦除一次。扇区为Storage专属区域，
-        因此此操作不会影响其它模块的数据；同一扇区内后续256条记录不再擦除。
-    */
-    if((storage_next_address % STORAGE_SECTOR_SIZE) == 0U)
-    {
-        if(gd25_clear(storage_next_address) == 0U)
-        {
-            /* 擦除失败后该扇区内容未知，当前启动内禁止继续向它写入。 */
-            storage_ready = 0U;
-            return STORAGE_FAIL;
-        }
-    }
-
-    storage_record_encode(data, message);
-    /* 一次写入9字节载荷和4字节CRC；commit仍维持擦除态FF。 */
-    if(gd25_write(storage_next_address, data, STORAGE_RECORD_DATA_LENGTH) == 0U)
-    {
-        /* 页写失败时该槽位可能已经部分写入，不能在不擦除的情况下直接重试。 */
-        storage_ready = 0U;
-        return STORAGE_FAIL;
-    }
-
-    /* 载荷确认写完后才写提交标记；掉电时未提交的槽位会在下次初始化时被跳过。 */
-    if(gd25_write(storage_next_address + STORAGE_RECORD_COMMIT_OFFSET, &commit, 1U) == 0U)
-    {
-        storage_ready = 0U;
-        return STORAGE_FAIL;
-    }
-    if(storage_record_verify(storage_next_address, data) == STORAGE_FAIL)
-    {
-        storage_ready = 0U;
-        return STORAGE_FAIL;
-    }
-
-    if(storage_next_address == (STORAGE_FLASH_CAPACITY_BYTES - STORAGE_TEMPERATURE_RECORD_SLOT_SIZE))
-    {
-        /* 最后一个槽位已写完；不回绕覆盖历史数据。 */
-        storage_next_address = STORAGE_FLASH_CAPACITY_BYTES;
-        storage_ready = 0U;
-    }
-    else
-    {
-        storage_next_address += STORAGE_TEMPERATURE_RECORD_SLOT_SIZE;
-    }
+    storage_ready = 1U;
     return STORAGE_SUCCESS;
 }
 
-uint32_t storage_next_address_get(void)
+/*
+    这个函数用于数据采集到以后的第一次存储
+*/
+uint8_t storage_write_pending(const telemetry_sample_struct *message,
+                              uint32_t *flash_address)
 {
-    /*
-        这个函数只读出当前运行期间的下一槽位地址，不读Flash、不改变任何状态。
-        它主要给HMI、串口日志或调试器观察“本次下一条会写到哪里”；地址真正的
-        恢复仍由下一次上电后的storage_init()负责，不能把这个RAM变量当持久数据。
-    */
-    return storage_next_address;
+    uint8_t record[STORAGE_SLOT_SIZE];
+
+    if((message == 0) || (flash_address == 0) ||
+       (storage_ready == 0U))
+    {
+        return STORAGE_FAIL;
+    }
+
+    if((storage_next_address + STORAGE_SLOT_SIZE) >
+       STORAGE_LOG_END_ADDRESS)
+    {
+        return STORAGE_FAIL;
+    }
+
+    /* Message 编码成完整 pending 记录。 */
+    storage_record_message_encode(record, message);
+
+    /* 第一次：一次写完整 16 字节。 */
+    if(gd25_write(storage_next_address,
+                  record,
+                  STORAGE_SLOT_SIZE) == 0U)
+    {
+        return STORAGE_FAIL;
+    }
+
+    /* 这条记录将来收到 ACK 时要用这个地址确认。 */
+    *flash_address = storage_next_address;
+
+    /* 下一条记录写到下一个槽位。 */
+    storage_next_address += STORAGE_SLOT_SIZE;
+
+    return STORAGE_SUCCESS;
 }
 
 /*
-    现在我们就做到了数据的解码加存储
-    但是这还没有完，flash存储到关键点还在于掉电保存和写入一半掉电会怎么样
-    我们在写入的时候，虽然data只有9位，但是我们却给每一个data分配16位
-    我们完全可以用这个16位的区域加上标志位来判断，这一位是否有效
-    因此我们需要用一个状态机来描述这个
+    这个函数时将数据发送好以后判断是否发送完第二次写入数据的
 */
+uint8_t storage_confirm(uint32_t flash_address,
+                        uint32_t ack_sequence)
+{
+    uint8_t record[STORAGE_SLOT_SIZE];
+    uint8_t confirmed = STORAGE_CONFIRMED;
+    uint32_t record_sequence;
+
+    /* 先读取原记录。 */
+    if(gd25_read(flash_address, record, STORAGE_SLOT_SIZE) == 0U)
+    {
+        return STORAGE_FAIL;
+    }
+
+    /* 原记录坏了，不能确认。 */
+    if(storage_record_crc_is_valid(record) == 0U)
+    {
+        return STORAGE_FAIL;
+    }
+
+    /* Flash 格式中 sequence 在 [4..7]。 */
+    record_sequence = storage_u32_read_be(&record[4]);
+
+    /* ACK 不能确认错误地址上的另一条记录。 */
+    if(record_sequence != ack_sequence)
+    {
+        return STORAGE_FAIL;
+    }
+
+    /* 已确认，重复 ACK 直接成功。 */
+    if(record[15] == STORAGE_CONFIRMED)
+    {
+        return STORAGE_SUCCESS;
+    }
+
+    /* 第二次：只写状态字节。 */
+    if(gd25_write(flash_address + 15U, &confirmed, 1U) == 0U)
+    {
+        return STORAGE_FAIL;
+    }
+
+    return STORAGE_SUCCESS;
+}
