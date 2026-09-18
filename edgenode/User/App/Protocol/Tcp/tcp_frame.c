@@ -10,30 +10,16 @@
     然后发送就好，发送交给esp12s，我们来做封装
 */
 
-/*
-    以下为edgehub的帧协议
-    struct TcpFrameHeader
-    {
-        uint8_t  magic[2];
-        uint8_t  version;
-        uint8_t  sourceNode;
-        uint8_t  targetNode;
-        uint16_t sequence;
-    };
-    #pragma pack(pop)
+static uint32_t tcp_u32_read_be(const uint8_t *data)
+{
+    return ((uint32_t)data[0] << 24U) |
+           ((uint32_t)data[1] << 16U) |
+           ((uint32_t)data[2] << 8U) |
+           (uint32_t)data[3];
+}
 
-    //完整TCP遥测帧；它是程序内对象，不可直接把它的内存发送到 TCP。
-    struct TcpFrame
-    {
-        TcpFrameHeader header;
-        int32_t temperature;
-        int8_t temperatureScale;
-        uint32_t crc32;
-        int64_t receivedAtUs;    // EdgeHub完成完整帧校验时记录的Unix微秒时间戳，不属于TCP线上字节
-    };
-*/
-
-uint8_t tcp_frame_encode(uint8_t frame[16], const telemetry_sample_struct *message)
+uint8_t tcp_frame_encode(uint8_t frame[TCP_FRAME_LENGTH],
+                         const telemetry_sample_struct *message)
 {
     uint32_t crc;
     if((frame == 0) || (message == 0))
@@ -42,7 +28,7 @@ uint8_t tcp_frame_encode(uint8_t frame[16], const telemetry_sample_struct *messa
     }
     frame[0] = 0x45U;
     frame[1] = 0x48U;
-    frame[2] = 0x04U;
+    frame[2] = TCP_FRAME_VERSION_V5;
     frame[3] = board_id;
     frame[4] = 0U;
 
@@ -55,11 +41,44 @@ uint8_t tcp_frame_encode(uint8_t frame[16], const telemetry_sample_struct *messa
     frame[10] = (uint8_t)message->temperature;
 
     frame[11] = (uint8_t)message->temperature_scale;
-    
-    crc = crc32_generate(&frame[2], 10);
-    frame[12] = (uint8_t)(crc >> 24);
-    frame[13] = (uint8_t)(crc >> 16);
-    frame[14] = (uint8_t)(crc >> 8);
-    frame[15] = (uint8_t)crc;
+
+    crc = crc32_generate(&frame[2], TCP_FRAME_CRC_COVER_LENGTH);
+    frame[TCP_FRAME_CRC_OFFSET] = (uint8_t)(crc >> 24);
+    frame[TCP_FRAME_CRC_OFFSET + 1U] = (uint8_t)(crc >> 16);
+    frame[TCP_FRAME_CRC_OFFSET + 2U] = (uint8_t)(crc >> 8);
+    frame[TCP_FRAME_CRC_OFFSET + 3U] = (uint8_t)crc;
+    return 1U;
+}
+
+uint8_t tcp_ack_decode(const uint8_t frame[TCP_FRAME_LENGTH],
+                       uint8_t expected_node_id,
+                       uint32_t *sequence,
+                       uint8_t *ack_status)
+{
+    uint32_t received_crc;
+
+    if((frame == 0) || (sequence == 0) || (ack_status == 0) ||
+       (expected_node_id == 0U))
+    {
+        return 0U;
+    }
+
+    if((frame[0] != 0x45U) || (frame[1] != 0x48U) ||
+       (frame[2] != TCP_FRAME_VERSION_V5) ||
+       (frame[3] != 0U) || (frame[4] != expected_node_id) ||
+       (frame[9] != 0U) || (frame[10] != 0U))
+    {
+        return 0U;
+    }
+
+    received_crc = tcp_u32_read_be(&frame[TCP_FRAME_CRC_OFFSET]);
+    if((frame[11] != TCP_ACK_STATUS_SUCCESS) ||
+       (crc32_check(&frame[2], TCP_FRAME_CRC_COVER_LENGTH, received_crc) == 0U))
+    {
+        return 0U;
+    }
+
+    *sequence = tcp_u32_read_be(&frame[5]);
+    *ack_status = TCP_ACK_STATUS_SUCCESS;
     return 1U;
 }
