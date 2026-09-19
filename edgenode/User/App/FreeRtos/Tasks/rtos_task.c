@@ -7,6 +7,8 @@
 #include "Output/Storage/storage.h"
 #include "Service/Transmit/transmit.h"
 #include "Config/config.h"
+#include "Protocol/Tcp/tcp_frame.h"
+#include "Protocol/Can/can_frame.h"
 #include <stdint.h>
 #include <stdio.h>
 #include "queue.h"
@@ -137,8 +139,8 @@ static void storage_task(void *argument)
 
     /*
         2. 当前先把启动时最小的 pending 投递给 TransmitTask。
-        ACK 接收与三次失败状态机还没有接入；因此这一版不能把“已经投递”
-        当成“恢复已完成”，更不能把发送成功当成确认成功。
+        ACK 接收已经接入；但启动恢复的“三次失败后放行”和逐条继续扫描
+        仍未实现，因此不能把“已经投递”当成“恢复已完成”。
     */
     if(storage_result.has_pending != 0U)
     {
@@ -152,8 +154,8 @@ static void storage_task(void *argument)
     }
 
     /*
-        3. 当前暂时放行 CollectTask。后续加入 ACK 接收和失败事件后，
-        此处必须改为“历史 pending 确认，或连续失败三次”之后才发送 sequence。
+        3. 当前暂时放行 CollectTask。后续补齐恢复状态机后，此处必须改为
+        “历史 pending 确认，或连续失败三次”之后才发送 sequence。
     */
     xQueueSend(sequence_queue,
                &storage_result.next_sequence,
@@ -296,17 +298,131 @@ void collect_task_create(void)
     configASSERT(collect_task_handle != NULL);
 }
 
+#define TRANSMIT_ACK_WAIT_MS 1000U
+
+static void transmit_tcp_ack_queue_clear(QueueHandle_t tcp_ack_queue)
+{
+    tcp_ack_frame_t frame;
+
+    while(xQueueReceive(tcp_ack_queue, &frame, 0U) == pdPASS)
+    {
+    }
+}
+
+static void transmit_can_receive_queue_clear(QueueHandle_t can_receive_queue)
+{
+    can_receive_frame_t frame;
+
+    while(xQueueReceive(can_receive_queue, &frame, 0U) == pdPASS)
+    {
+    }
+}
+
+static uint8_t transmit_tcp_ack_wait(QueueHandle_t tcp_ack_queue,
+                                     uint32_t expected_sequence)
+{
+    TickType_t start_tick = xTaskGetTickCount();
+    TickType_t timeout_tick = pdMS_TO_TICKS(TRANSMIT_ACK_WAIT_MS);
+    tcp_ack_frame_t frame;
+    uint32_t ack_sequence;
+    uint8_t ack_status;
+
+    while((xTaskGetTickCount() - start_tick) < timeout_tick)
+    {
+        TickType_t elapsed_tick = xTaskGetTickCount() - start_tick;
+
+        /* 两次读取 tick 之间可能正好达到超时，不能让减法下溢。 */
+        if(elapsed_tick >= timeout_tick)
+        {
+            break;
+        }
+
+        if(xQueueReceive(tcp_ack_queue,
+                         &frame,
+                         timeout_tick - elapsed_tick) != pdPASS)
+        {
+            break;
+        }
+
+        if((tcp_ack_decode(frame.data, board_id, &ack_sequence, &ack_status) != 0U) &&
+           (ack_sequence == expected_sequence))
+        {
+            return 1U;
+        }
+    }
+
+    return 0U;
+}
+
+static uint8_t transmit_can_ack_wait(QueueHandle_t can_receive_queue,
+                                     uint32_t expected_sequence)
+{
+    TickType_t start_tick = xTaskGetTickCount();
+    TickType_t timeout_tick = pdMS_TO_TICKS(TRANSMIT_ACK_WAIT_MS);
+    can_receive_frame_t frame;
+    uint32_t ack_sequence;
+    uint8_t ack_status;
+
+    while((xTaskGetTickCount() - start_tick) < timeout_tick)
+    {
+        TickType_t elapsed_tick = xTaskGetTickCount() - start_tick;
+
+        /* 两次读取 tick 之间可能正好达到超时，不能让减法下溢。 */
+        if(elapsed_tick >= timeout_tick)
+        {
+            break;
+        }
+
+        if(xQueueReceive(can_receive_queue,
+                         &frame,
+                         timeout_tick - elapsed_tick) != pdPASS)
+        {
+            break;
+        }
+
+        if((can_ack_decode(frame.standard_id,
+                           frame.data,
+                           frame.data_length,
+                           board_id,
+                           &ack_sequence,
+                           &ack_status) != CAN_FRAME_FAIL) &&
+           (ack_sequence == expected_sequence))
+        {
+            return 1U;
+        }
+    }
+
+    return 0U;
+}
+
+static void transmit_storage_confirm_send(QueueHandle_t confirm_queue,
+                                          const transmit_work_item_t *transmit_work)
+{
+    storage_confirm_event_t confirm_event;
+
+    confirm_event.sequence = transmit_work->message.sequence;
+    confirm_event.flash_address = transmit_work->flash_address;
+    (void)xQueueSend(confirm_queue, &confirm_event, portMAX_DELAY);
+}
+
 static void transmit_task(void *argument)
 {
     transmit_work_item_t transmit_work;
     QueueHandle_t transmit_queue;
+    QueueHandle_t confirm_queue;
+    QueueHandle_t tcp_ack_queue;
+    QueueHandle_t can_receive_queue;
 
     (void)argument;
 
     transmit_queue =
         rtos_storage_to_transmit_queue_get();
+    confirm_queue = rtos_transmit_to_storage_confirm_queue_get();
+    tcp_ack_queue = rtos_tcp_ack_frame_queue_get();
+    can_receive_queue = rtos_can_receive_frame_queue_get();
 
-    if(transmit_queue == NULL)
+    if((transmit_queue == NULL) || (confirm_queue == NULL) ||
+       (tcp_ack_queue == NULL) || (can_receive_queue == NULL))
     {
         task_block_forever();
     }
@@ -330,14 +446,25 @@ static void transmit_task(void *argument)
                     确认正确的 Flash 槽位。
             */
 
-            /*
-                现阶段 tcp_frame_transmit() 只代表 ESP 已返回 SEND OK，
-                不是 Hub ACK。因此它成功时不能投递 confirm_event。
-                若 TCP 连发送动作都失败，才尝试 CAN 作为发送回退。
-            */
-            if(tcp_frame_transmit(&transmit_work.message) == TCP_TRANSMIT_FAIL)
+            transmit_tcp_ack_queue_clear(tcp_ack_queue);
+            if(tcp_frame_transmit(&transmit_work.message) == TCP_TRANSMIT_SUCCESS)
             {
-                (void)can_frame_transmit(board_id, &transmit_work.message);
+                if(transmit_tcp_ack_wait(tcp_ack_queue,
+                                         transmit_work.message.sequence) != 0U)
+                {
+                    transmit_storage_confirm_send(confirm_queue, &transmit_work);
+                    continue;
+                }
+            }
+
+            transmit_can_receive_queue_clear(can_receive_queue);
+            if(can_frame_transmit(board_id, &transmit_work.message) == CAN_TRANSMIT_SUCCESS)
+            {
+                if(transmit_can_ack_wait(can_receive_queue,
+                                         transmit_work.message.sequence) != 0U)
+                {
+                    transmit_storage_confirm_send(confirm_queue, &transmit_work);
+                }
             }
         }
     }

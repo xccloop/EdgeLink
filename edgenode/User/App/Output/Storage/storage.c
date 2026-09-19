@@ -375,6 +375,7 @@ uint8_t storage_confirm(uint32_t flash_address,
 {
     uint8_t record[STORAGE_SLOT_SIZE];
     uint8_t confirmed = STORAGE_CONFIRMED;
+    uint8_t status;
     uint32_t record_sequence;
 
     /* 确认事件只能指向日志区内一个完整槽位的起始地址。 */
@@ -414,6 +415,13 @@ uint8_t storage_confirm(uint32_t flash_address,
 
     /* 第二次：只写状态字节。 */
     if(gd25_write(flash_address + 15U, &confirmed, 1U) == 0U)
+    {
+        return STORAGE_FAIL;
+    }
+
+    /* 仅当读回值精确为 0x00，才可把本条记录视为 confirmed。 */
+    if((gd25_read(flash_address + 15U, &status, 1U) == 0U) ||
+       (status != STORAGE_CONFIRMED))
     {
         return STORAGE_FAIL;
     }

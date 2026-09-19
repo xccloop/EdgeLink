@@ -1,4 +1,6 @@
 #include "usart.h"
+#include "FreeRTOS.h"
+#include "FreeRtos/Queue/rtos_queue.h"
 #include "gd32f10x.h"
 #include "gd32f10x_usart.h"
 
@@ -27,6 +29,42 @@ static volatile uint8_t esp12s_response_read_index;
 static char esp12s_response_line[ESP12S_RESPONSE_LINE_SIZE];
 static uint8_t esp12s_response_line_length;
 static uint8_t esp12s_response_line_overflow;
+static uint16_t esp12s_ipd_remaining;
+static uint8_t esp12s_ipd_store_ack;
+static uint8_t esp12s_ipd_ack_index;
+static tcp_ack_frame_t esp12s_ipd_ack_frame;
+
+static uint8_t esp12s_ipd_length_get(uint16_t *length)
+{
+    uint8_t index = 0U;
+    uint16_t value = 0U;
+
+    if((length == NULL) || (esp12s_response_line_length <= 5U) ||
+       (esp12s_response_line[0] != '+') ||
+       (esp12s_response_line[1] != 'I') ||
+       (esp12s_response_line[2] != 'P') ||
+       (esp12s_response_line[3] != 'D') ||
+       (esp12s_response_line[4] != ','))
+    {
+        return 0U;
+    }
+
+    for(index = 5U; index < esp12s_response_line_length; index++)
+    {
+        if((esp12s_response_line[index] < '0') ||
+           (esp12s_response_line[index] > '9') || (value > 6553U) ||
+           ((value == 6553U) && (esp12s_response_line[index] > '5')))
+        {
+            return 0U;
+        }
+
+        value = (uint16_t)(value * 10U +
+                           (uint16_t)(esp12s_response_line[index] - '0'));
+    }
+
+    *length = value;
+    return 1U;
+}
 
 static void esp12s_response_push(esp12s_response_t response)
 {
@@ -148,16 +186,47 @@ void esp12s_response_reset(void)
     esp12s_response_read_index = 0U;
     esp12s_response_line_length = 0U;
     esp12s_response_line_overflow = 0U;
+    esp12s_ipd_remaining = 0U;
+    esp12s_ipd_store_ack = 0U;
+    esp12s_ipd_ack_index = 0U;
     usart_interrupt_enable(USART1, USART_INT_RBNE);
 }
 
 void USART1_IRQHandler(void)
 {
     uint8_t receive_data;
+    uint16_t ipd_length;
+    BaseType_t higher_priority_task_woken = pdFALSE;
 
     if(usart_interrupt_flag_get(USART1, USART_INT_FLAG_RBNE) == SET)
     {
         receive_data = (uint8_t)usart_data_receive(USART1);
+
+        /* +IPD 的负载是二进制数据，不能再按 CR/LF 或 '>' 解释。 */
+        if(esp12s_ipd_remaining != 0U)
+        {
+            if(esp12s_ipd_store_ack != 0U)
+            {
+                esp12s_ipd_ack_frame.data[esp12s_ipd_ack_index] = receive_data;
+                esp12s_ipd_ack_index++;
+            }
+
+            esp12s_ipd_remaining--;
+            if(esp12s_ipd_remaining == 0U)
+            {
+                if(esp12s_ipd_store_ack != 0U)
+                {
+                    (void)rtos_tcp_ack_frame_send_from_isr(
+                        &esp12s_ipd_ack_frame,
+                        &higher_priority_task_woken);
+                    portYIELD_FROM_ISR(higher_priority_task_woken);
+                }
+
+                esp12s_ipd_store_ack = 0U;
+                esp12s_ipd_ack_index = 0U;
+            }
+            return;
+        }
 
         /* CIPSEND的准备完成提示是单个'>', 不一定按照普通文本行结束。 */
         if(receive_data == '>')
@@ -178,6 +247,17 @@ void USART1_IRQHandler(void)
                 esp12s_response_line_handle();
             }
 
+            esp12s_response_line_length = 0U;
+            esp12s_response_line_overflow = 0U;
+            return;
+        }
+
+        /* 单连接模式下 ESP-AT 使用 +IPD,<length>:<raw payload>。 */
+        if((receive_data == ':') && (esp12s_ipd_length_get(&ipd_length) != 0U))
+        {
+            esp12s_ipd_remaining = ipd_length;
+            esp12s_ipd_store_ack = (ipd_length == TCP_FRAME_LENGTH) ? 1U : 0U;
+            esp12s_ipd_ack_index = 0U;
             esp12s_response_line_length = 0U;
             esp12s_response_line_overflow = 0U;
             return;
