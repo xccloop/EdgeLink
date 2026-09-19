@@ -48,6 +48,7 @@ void rtos_assert_failed(const char *file, int line);
 #define INCLUDE_vTaskDelay	1	//允许任务主动延时并进入阻塞态，任务延时时其他任务可以运行
 #define INCLUDE_xTaskDelayUntil	1	//允许使用周期延时 API
 #define INCLUDE_xTaskGetSchedulerState	1	//允许查询调度器是否已经启动，SysTick桥接要根据它判断该走哪条路径
+#define INCLUDE_uxTaskGetStackHighWaterMark 1//允许读取任务历史最小剩余栈，用于运行时检查栈是否接近溢出
 #define configCHECK_FOR_STACK_OVERFLOW	2	//开启较严格的栈溢出检测
 //上面的 configASSERT(x) 已经打开断言，出错后能通过 SWD 定位
 

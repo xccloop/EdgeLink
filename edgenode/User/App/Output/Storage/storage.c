@@ -20,7 +20,6 @@
 #define STORAGE_CONFIRMED 0x00U
 
 //定义slot大小和扫描的页数
-#define STORAGE_SLOT_SIZE          16U
 #define STORAGE_SCAN_PAGE_SIZE    256U
 
 //定义日志存储区域
@@ -35,6 +34,7 @@
 static uint8_t storage_scan_page[STORAGE_SCAN_PAGE_SIZE];
 
 static uint32_t storage_next_address;
+static uint8_t storage_can_append;
 static uint8_t storage_ready;
 
 static void storage_record_message_encode(uint8_t record[STORAGE_SLOT_SIZE],
@@ -94,6 +94,24 @@ static uint32_t storage_u32_read_be(const uint8_t *data)
 }
 
 /*
+    Flash 中 temperature 固定使用两个字节大端补码保存。
+    先组合为 uint16_t，正数直接转换；最高位为 1 时减去 65536，恢复负温度。
+    不能直接把 data 强转成 int16_t 指针，否则会受 CPU 对齐和字节序影响。
+*/
+static int16_t storage_i16_read_be(const uint8_t *data)
+{
+    uint16_t raw;
+
+    raw = ((uint16_t)data[0] << 8U) | (uint16_t)data[1];
+    if(raw <= 0x7FFFU)
+    {
+        return (int16_t)raw;
+    }
+
+    return (int16_t)((int32_t)raw - 0x10000L);
+}
+
+/*
     这个函数计算一个record里面的crc是否有效
 */
 static uint8_t storage_record_crc_is_valid(
@@ -107,9 +125,59 @@ static uint8_t storage_record_crc_is_valid(
 }
 
 /*
-    这个函数用于将读取数据到RAM里面然后进行解析
+    此函数只做“固定 16 字节 Storage 格式 -> 业务 Message”的字段解码。
+    调用者必须已经通过 storage_record_crc_is_valid()；这里不重复读 Flash、
+    不检查 pending 状态，也不生成 sequence。status/CRC 都是 Storage 私有字段，
+    因此不会进入 Message 或 TCP/CAN 协议。
 */
-static uint8_t storage_scan_log(uint32_t *recovered_next_sequence)
+static void storage_record_message_decode(
+    const uint8_t record[STORAGE_SLOT_SIZE],
+    telemetry_sample_struct *message)
+{
+    message->sample_uptime_ms = storage_u32_read_be(&record[0]);
+    message->sequence = storage_u32_read_be(&record[4]);
+    message->temperature = storage_i16_read_be(&record[8]);
+    message->temperature_scale = (int8_t)record[10];
+}
+
+/*
+    扫描走到第一个空槽或日志末尾时调用。
+    max_sequence 来自所有 CRC 正确记录，而不管它已确认还是 pending；这样掉电后
+    不会复用曾经写入过的 sequence。若没有有效记录，从 0 开始；若已到
+    0xFFFFFFFF，则把 can_append 清零，禁止回绕写新记录，但不影响历史 pending
+    重发和确认。
+*/
+static void storage_scan_sequence_finish(storage_init_result_t *result,
+                                         uint8_t has_valid_record,
+                                         uint32_t max_sequence)
+{
+    if(has_valid_record == 0U)
+    {
+        result->next_sequence = 0U;
+        return;
+    }
+
+    if(max_sequence == 0xFFFFFFFFUL)
+    {
+        result->next_sequence = 0xFFFFFFFFUL;
+        result->can_append = 0U;
+        return;
+    }
+
+    result->next_sequence = max_sequence + 1U;
+}
+
+/*
+    一次遍历完成 StorageTask 启动时需要的全部 Flash 恢复信息：
+    1. 第一个全 FF 槽位，作为后续顺序追加的写地址；
+    2. 最大合法 sequence，推导 next_sequence；
+    3. CRC 正确且 status != 0x00 的最小 sequence，作为首次恢复发送对象。
+
+    每次从 GD25Q32 读取 256 字节到 storage_scan_page，再在 RAM 中解析 16 个
+    固定槽位，避免每个槽位都单独发起 SPI 读取。这个函数不发送 TCP/CAN，也不
+    写 Flash；它只把扫描结果填入 result。
+*/
+static uint8_t storage_scan_log(storage_init_result_t *result)
 {
     /*
         page_address
@@ -129,6 +197,7 @@ static uint8_t storage_scan_log(uint32_t *recovered_next_sequence)
     uint32_t slot_offset;
     uint32_t sequence;
     uint32_t max_sequence = 0U;
+    uint32_t oldest_pending_sequence = 0U;
     uint8_t has_valid_record = 0U;
     const uint8_t *record;
 
@@ -155,32 +224,18 @@ static uint8_t storage_scan_log(uint32_t *recovered_next_sequence)
 
             /*
                 StorageTask 永远顺序追加。
-                因此第一个全 FF 槽位就是下一条安全写入位置。
+                因此第一个全 FF 槽位就是下一条安全写入位置；此规则依赖日志区
+                不被外部擦除，且只有 StorageTask 写入，不支持穿过空洞继续恢复。
             */
             //如果一个槽位全空
             if(storage_slot_is_empty(record) != 0U)
             {
                 //定义写指针位页+slot，这样就可以定位到是那一页的那一个slot，从这里往下写
                 storage_next_address = page_address + slot_offset;
+                result->next_write_address = storage_next_address;
+                result->can_append = 1U;
 
-                /*
-                    max_sequence = 0，是因为真的找到了一条 sequence=0
-                    还是max_sequence = 0，只是因为变量初始化成0
-                */
-                if(has_valid_record != 0U)
-                {
-                    if(max_sequence == 0xFFFFFFFFUL)
-                    {
-                        return STORAGE_FAIL;
-                    }
-
-                    *recovered_next_sequence = max_sequence + 1U;
-                }
-                else
-                {
-                    *recovered_next_sequence = 0U;
-                }
-
+                storage_scan_sequence_finish(result, has_valid_record, max_sequence);
                 return STORAGE_SUCCESS;
             }
 
@@ -206,38 +261,68 @@ static uint8_t storage_scan_log(uint32_t *recovered_next_sequence)
                 max_sequence = sequence;
                 has_valid_record = 1U;
             }
+
+            /* status 只要不是 0x00 都视为 pending，包括确认写入时掉电留下的中间值。 */
+            if(record[15] != STORAGE_CONFIRMED)
+            {
+                if((result->has_pending == 0U) ||
+                   (sequence < oldest_pending_sequence))
+                {
+                    storage_record_message_decode(record,
+                                                  &result->oldest_pending_message);
+                    result->oldest_pending_address = page_address + slot_offset;
+                    oldest_pending_sequence = sequence;
+                    result->has_pending = 1U;
+                }
+            }
         }
     }
 
-    /* 日志区没有任何全 FF 槽位，不能覆盖旧日志。 */
-    return STORAGE_FAIL;
+    /* 日志区写满后仍允许恢复、确认旧 pending；只有后续新写入会被拒绝。 */
+    storage_next_address = STORAGE_LOG_END_ADDRESS;
+    result->next_write_address = STORAGE_LOG_END_ADDRESS;
+    result->can_append = 0U;
+    storage_scan_sequence_finish(result, has_valid_record, max_sequence);
+    return STORAGE_SUCCESS;
 }
 
 /*
-    现在只验证 Flash 通信；下一步会在这里接入按 256 字节页的顺序扫描，恢复
-    下一写地址和下一 sequence。初始化过程中不擦除 Flash，也不发送 TCP/CAN。
+    Storage 的初始化入口：先完成 GD25Q32 初始化，再调用 storage_scan_log()。
+    成功后 storage_ready 与 storage_can_append 才会生效，其他 Storage API 才可
+    调用。它不擦除 Flash、不发送 TCP/CAN；将来 StorageTask 取得 result 后，
+    自己决定先投递 oldest_pending_message 还是放行 CollectTask。
 */
-uint8_t storage_init(uint32_t *recovered_next_sequence)
+uint8_t storage_init(storage_init_result_t *result)
 {
-    if(recovered_next_sequence == 0)
+    if(result == 0)
     {
         return STORAGE_FAIL;
     }
 
     storage_ready = 0U;
     storage_next_address = STORAGE_LOG_BASE_ADDRESS;
-    *recovered_next_sequence = 0U;
+    storage_can_append = 0U;
+    result->next_sequence = 0U;
+    result->next_write_address = STORAGE_LOG_BASE_ADDRESS;
+    result->can_append = 0U;
+    result->has_pending = 0U;
+    result->oldest_pending_address = STORAGE_LOG_BASE_ADDRESS;
+    result->oldest_pending_message.sample_uptime_ms = 0U;
+    result->oldest_pending_message.sequence = 0U;
+    result->oldest_pending_message.temperature = 0;
+    result->oldest_pending_message.temperature_scale = 0;
 
     if(gd25_init() == 0U)
     {
         return STORAGE_FAIL;
     }
 
-    if(storage_scan_log(recovered_next_sequence) == STORAGE_FAIL)
+    if(storage_scan_log(result) == STORAGE_FAIL)
     {
         return STORAGE_FAIL;
     }
 
+    storage_can_append = result->can_append;
     storage_ready = 1U;
     return STORAGE_SUCCESS;
 }
@@ -251,7 +336,7 @@ uint8_t storage_write_pending(const telemetry_sample_struct *message,
     uint8_t record[STORAGE_SLOT_SIZE];
 
     if((message == 0) || (flash_address == 0) ||
-       (storage_ready == 0U))
+       (storage_ready == 0U) || (storage_can_append == 0U))
     {
         return STORAGE_FAIL;
     }
@@ -291,6 +376,14 @@ uint8_t storage_confirm(uint32_t flash_address,
     uint8_t record[STORAGE_SLOT_SIZE];
     uint8_t confirmed = STORAGE_CONFIRMED;
     uint32_t record_sequence;
+
+    /* 确认事件只能指向日志区内一个完整槽位的起始地址。 */
+    if((storage_ready == 0U) ||
+       (flash_address > (STORAGE_LOG_END_ADDRESS - STORAGE_SLOT_SIZE)) ||
+       (((flash_address - STORAGE_LOG_BASE_ADDRESS) % STORAGE_SLOT_SIZE) != 0U))
+    {
+        return STORAGE_FAIL;
+    }
 
     /* 先读取原记录。 */
     if(gd25_read(flash_address, record, STORAGE_SLOT_SIZE) == 0U)

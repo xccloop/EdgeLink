@@ -8,10 +8,6 @@
 #include "BMP280/bmp280.h"
 #include "IPS/ips.h"
 #include "Presentation/Buffer/display_buffer.h"
-#include "Output/Storage/storage.h"
-#include "Model/message.h"
-#include "Output/TCP/tcp.h"
-#include "Config/config.h"
 
 /*
     这个文件服务于裸机
@@ -26,13 +22,11 @@
     然后依次完成各自的外设初始化。对于返回状态的初始化函数，一旦失败就立即返回，
     这样APP不会在传感器、显示或存储尚未准备好时误进入主循环。
 
-    tcp_init()需要由调用者传入服务器地址、端口等tcp_config_struct，并且它会负责
-    esp12s_init()；所以TCP和ESP12S都不放在这个无参数总入口中，避免USART1被重复初始化。
+    TCP 初始化需要等待 ESP-AT 和 WiFi 回应，放在 TransmitTask 内执行；这样启动时
+    StorageTask 能先恢复 sequence 和历史 pending，不被网络入网时间阻塞。
 */
 uint8_t init_all(void)
 {
-    uint32_t recovered_next_sequence;
-
     /* BOARD必须最先执行：它建立所有BSP共用的时钟、中断和SPI0。 */
     board_config_init();
 
@@ -57,21 +51,6 @@ uint8_t init_all(void)
         return INIT_ALL_FAIL;
     }
     if(display_buffer_init() == DISPLAY_BUFFER_FAIL)
-    {
-        return INIT_ALL_FAIL;
-    }
-
-    /* Storage会验证GD25Q32并寻找新日志扇区，失败时不能继续追加历史数据。 */
-    if(storage_init(&recovered_next_sequence) == STORAGE_FAIL)
-    {
-        return INIT_ALL_FAIL;
-    }
-    if(message_sequence_init(recovered_next_sequence) == MESSAGE_FAIL)
-    {
-        return INIT_ALL_FAIL;
-    }
-
-    if(tcp_init(config_tcp_get()) == TCP_FAIL)
     {
         return INIT_ALL_FAIL;
     }

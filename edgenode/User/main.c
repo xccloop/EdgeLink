@@ -13,6 +13,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "FreeRtos/Tasks/rtos_task.h"
+#include "FreeRtos/Queue/rtos_queue.h"
 
 /*
     现在让我们尝试完整的数据链路，不加入HMI,RS485,FAN
@@ -26,8 +27,25 @@
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
-    init_all();
+    if(init_all() != INIT_ALL_SUCCESS)
+    {
+        while(1)
+        {
+        }
+    }
+
+    if(rtos_queue_init() != RTOS_QUEUE_SUCCESS)
+    {
+        while(1)
+        {
+        }
+    }
+
+    storage_task_create();
+    collect_task_create();
+    transmit_task_create();
     led_tasks_create();
+    stack_monitor_task_create();
     printf("Edgenode start\r\n");
 
     vTaskStartScheduler();
