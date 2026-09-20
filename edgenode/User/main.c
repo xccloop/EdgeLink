@@ -1,13 +1,7 @@
 //这个项目位采集节点的设计，还是一样，先做硬件基础然后有了基础才可以构建应用层内容
 //我们先在BSP中实现我们要实现的外设，包括LED,KEY,ESP-12S,GD25Q32,ADC,CAN,IPS,BMP280
 
-#include "CH340/ch340.h"
-#include "Service/node_service.h"
 #include "Startup/init.h"
-#include "board_config.h"
-#include "board_time.h"
-#include "CAN/can.h"
-#include "Output/can/can_output.h"
 #include <stdint.h>
 #include <stdio.h>
 #include "FreeRTOS.h"
@@ -29,18 +23,22 @@ int main(void)
     setvbuf(stdout, NULL, _IONBF, 0);
     if(init_all() != INIT_ALL_SUCCESS)
     {
+        printf("init fail");
         while(1)
         {
         }
     }
 
+    printf("queue init start\r\n");
     if(rtos_queue_init() != RTOS_QUEUE_SUCCESS)
     {
+        printf("qeueu init fail");
         while(1)
         {
         }
     }
-
+    printf("queue init finish\r\n");
+    printf("task ready init\r\n");
     storage_task_create();
     collect_task_create();
     transmit_task_create();

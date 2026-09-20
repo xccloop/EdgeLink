@@ -31,6 +31,9 @@
 #define STORAGE_CRC_LENGTH        4U
 #define STORAGE_CRC_COVER_LENGTH  11U
 
+/* gd25_clear() 的最小擦除单位；当前 BSP 未将该常量导出到 gd25.h。 */
+#define STORAGE_SECTOR_SIZE 4096U
+
 static uint8_t storage_scan_page[STORAGE_SCAN_PAGE_SIZE];
 
 static uint32_t storage_next_address;
@@ -141,11 +144,8 @@ static void storage_record_message_decode(
 }
 
 /*
-    扫描走到第一个空槽或日志末尾时调用。
-    max_sequence 来自所有 CRC 正确记录，而不管它已确认还是 pending；这样掉电后
-    不会复用曾经写入过的 sequence。若没有有效记录，从 0 开始；若已到
-    0xFFFFFFFF，则把 can_append 清零，禁止回绕写新记录，但不影响历史 pending
-    重发和确认。
+    完整扫描结束后恢复下一 sequence。
+    can_append 只由 sequence 是否耗尽决定，物理写地址是否回绕不影响它。
 */
 static void storage_scan_sequence_finish(storage_init_result_t *result,
                                          uint8_t has_valid_record,
@@ -154,6 +154,7 @@ static void storage_scan_sequence_finish(storage_init_result_t *result,
     if(has_valid_record == 0U)
     {
         result->next_sequence = 0U;
+        result->can_append = 1U;
         return;
     }
 
@@ -165,6 +166,26 @@ static void storage_scan_sequence_finish(storage_init_result_t *result,
     }
 
     result->next_sequence = max_sequence + 1U;
+    result->can_append = 1U;
+}
+
+/* 返回日志区内物理顺序的下一个 16 字节槽位；末尾回绕到日志起点。 */
+static uint32_t storage_address_next(uint32_t address)
+{
+    address += STORAGE_SLOT_SIZE;
+
+    if(address >= STORAGE_LOG_END_ADDRESS)
+    {
+        return STORAGE_LOG_BASE_ADDRESS;
+    }
+
+    return address;
+}
+
+/* 返回地址所在 4 KiB 擦除扇区的起始地址，供进入扇区前的擦除判断使用。 */
+static uint32_t storage_sector_base(uint32_t address)
+{
+    return address - (address % STORAGE_SECTOR_SIZE);
 }
 
 /*
@@ -197,6 +218,7 @@ static uint8_t storage_scan_log(storage_init_result_t *result)
     uint32_t slot_offset;
     uint32_t sequence;
     uint32_t max_sequence = 0U;
+    uint32_t max_sequence_address = STORAGE_LOG_BASE_ADDRESS;
     uint32_t oldest_pending_sequence = 0U;
     uint8_t has_valid_record = 0U;
     const uint8_t *record;
@@ -222,21 +244,10 @@ static uint8_t storage_scan_log(storage_init_result_t *result)
             //定义record
             record = &storage_scan_page[slot_offset];
 
-            /*
-                StorageTask 永远顺序追加。
-                因此第一个全 FF 槽位就是下一条安全写入位置；此规则依赖日志区
-                不被外部擦除，且只有 StorageTask 写入，不支持穿过空洞继续恢复。
-            */
-            //如果一个槽位全空
+            /* 循环日志中空槽后仍可能有回绕前的历史记录，不能提前结束扫描。 */
             if(storage_slot_is_empty(record) != 0U)
             {
-                //定义写指针位页+slot，这样就可以定位到是那一页的那一个slot，从这里往下写
-                storage_next_address = page_address + slot_offset;
-                result->next_write_address = storage_next_address;
-                result->can_append = 1U;
-
-                storage_scan_sequence_finish(result, has_valid_record, max_sequence);
-                return STORAGE_SUCCESS;
+                continue;
             }
 
             /*
@@ -255,10 +266,15 @@ static uint8_t storage_scan_log(storage_init_result_t *result)
             */
             sequence = storage_u32_read_be(&record[4]);
 
+            /*
+                当前所有合法记录里面最大的 sequence。
+            */
             if((has_valid_record == 0U) ||
                (sequence > max_sequence))
             {
                 max_sequence = sequence;
+                /* 记录最大 sequence 的槽位，扫描结束后由它恢复写指针。 */
+                max_sequence_address = page_address + slot_offset;
                 has_valid_record = 1U;
             }
 
@@ -278,10 +294,44 @@ static uint8_t storage_scan_log(storage_init_result_t *result)
         }
     }
 
-    /* 日志区写满后仍允许恢复、确认旧 pending；只有后续新写入会被拒绝。 */
-    storage_next_address = STORAGE_LOG_END_ADDRESS;
-    result->next_write_address = STORAGE_LOG_END_ADDRESS;
-    result->can_append = 0U;
+    /* 空日志从起点写；否则从最大 sequence 的下一物理槽位继续写。 */
+    if(has_valid_record == 0U)
+    {
+        storage_next_address = STORAGE_LOG_BASE_ADDRESS;
+    }
+    else
+    {
+        storage_next_address = storage_address_next(max_sequence_address);
+    }
+    /*
+        上次尝试写入 sequence = 5 时可能掉电，导致该槽位非 FF 但 CRC 错。
+        扫描后最大合法 sequence 仍为 4，因此下一次仍应分配 sequence = 5；
+        但不能复用这个半写槽位，因为 NOR Flash 只能把位从 1 写成 0。
+        因此从最大合法记录的下一个槽位开始，在同一扇区内跳过所有非空槽。
+        找到第一个全 FF 槽位时可安全写入；若已走到下一扇区，则停止，
+        后续进入该扇区前会由写入逻辑先擦除整个扇区。
+    */
+    if(has_valid_record != 0U)
+    {
+        while(storage_sector_base(storage_next_address) ==
+            storage_sector_base(max_sequence_address))
+        {
+            if(gd25_read(storage_next_address,
+                        storage_scan_page,
+                        STORAGE_SLOT_SIZE) == 0U)
+            {
+                return STORAGE_FAIL;
+            }
+
+            if(storage_slot_is_empty(storage_scan_page) != 0U)
+            {
+                break;
+            }
+
+            storage_next_address = storage_address_next(storage_next_address);
+        }
+    }
+    result->next_write_address = storage_next_address;
     storage_scan_sequence_finish(result, has_valid_record, max_sequence);
     return STORAGE_SUCCESS;
 }
@@ -333,24 +383,30 @@ uint8_t storage_init(storage_init_result_t *result)
 uint8_t storage_write_pending(const telemetry_sample_struct *message,
                               uint32_t *flash_address)
 {
-    uint8_t record[STORAGE_SLOT_SIZE];
+    uint8_t record[STORAGE_SLOT_SIZE];//定义一个槽位
 
     if((message == 0) || (flash_address == 0) ||
        (storage_ready == 0U) || (storage_can_append == 0U))
     {
         return STORAGE_FAIL;
     }
-
-    if((storage_next_address + STORAGE_SLOT_SIZE) >
-       STORAGE_LOG_END_ADDRESS)
+    //回环判断
+    if(storage_next_address >= STORAGE_LOG_END_ADDRESS)
     {
-        return STORAGE_FAIL;
+        storage_next_address = STORAGE_LOG_BASE_ADDRESS;
     }
-
-    /* Message 编码成完整 pending 记录。 */
+    //进入一个新的扇区就擦除对应扇区
+    if((storage_next_address % STORAGE_SECTOR_SIZE) == 0U)
+    {
+        if(gd25_clear(storage_next_address) == 0U)
+        {
+            return STORAGE_FAIL;
+        }
+    }
+    //message解码为record
     storage_record_message_encode(record, message);
 
-    /* 第一次：一次写完整 16 字节。 */
+    //对storage_next_adress存储record
     if(gd25_write(storage_next_address,
                   record,
                   STORAGE_SLOT_SIZE) == 0U)
@@ -358,11 +414,10 @@ uint8_t storage_write_pending(const telemetry_sample_struct *message,
         return STORAGE_FAIL;
     }
 
-    /* 这条记录将来收到 ACK 时要用这个地址确认。 */
+    //这里的flash_adress就是为了给后续第二次写入不知道在哪里做准备
+    //然后sroage_next_adress推进
     *flash_address = storage_next_address;
-
-    /* 下一条记录写到下一个槽位。 */
-    storage_next_address += STORAGE_SLOT_SIZE;
+    storage_next_address = storage_address_next(storage_next_address);
 
     return STORAGE_SUCCESS;
 }

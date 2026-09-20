@@ -68,13 +68,13 @@ void spi0_bus_init(void)
     spi_init(SPI0, &spi_init_handler);
     spi_enable(SPI0);
 
-    /* 启动阶段创建静态 mutex；任务开始后由它序列化两颗 SPI 从设备。 */
-    if(spi0_bus_mutex_init() == 0U)
-    {
-        spi0_bus_faulted = 1U;
-        return;
-    }
-
+    /*
+        调度器启动前只能由 main() 串行访问 SPI0，不能创建 FreeRTOS mutex。
+        xSemaphoreCreateMutexStatic() 内部会进入临界区；当前 Cortex-M3
+        移植在调度器启动前保留临界区哨兵值，若此时创建 mutex，BASEPRI
+        会保持在 0x50，导致用于 delay_ms() 的 SysTick 被屏蔽。
+        调度器启动后第一次 spi0_bus_lock() 再创建 mutex。
+    */
     spi0_bus_faulted = 0U;
 }
 
@@ -91,15 +91,16 @@ uint8_t spi0_bus_mutex_init(void)
 
 uint8_t spi0_bus_lock(void)
 {
-    if(spi0_bus_mutex == NULL)
-    {
-        return 0U;
-    }
-
     /* 初始化阶段还没有任务并发访问 SPI0，不应在调度器启动前阻塞。 */
     if(xTaskGetSchedulerState() != taskSCHEDULER_RUNNING)
     {
         return 1U;
+    }
+
+    /* 首次任务态访问 SPI0 时才创建 mutex，此时 FreeRTOS 临界区可以正常退出。 */
+    if((spi0_bus_mutex == NULL) && (spi0_bus_mutex_init() == 0U))
+    {
+        return 0U;
     }
 
     return (xSemaphoreTake(spi0_bus_mutex, portMAX_DELAY) == pdTRUE) ? 1U : 0U;

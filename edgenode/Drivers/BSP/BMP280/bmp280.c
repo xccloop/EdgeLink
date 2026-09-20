@@ -3,6 +3,7 @@
 #include "gd32f10x_gpio.h"
 #include "spi0_bus.h"
 #include <stdint.h>
+#include <stdio.h>
 
 /*
     这个文件我们来实现BMP280，硬件连接为，PA4,5,6,7,值得注意的是后续我们编写的外置FLASH也是基于PA5,6,7的SPI进行通讯的，这里会涉及到相关的冲突
@@ -59,8 +60,10 @@ static int32_t bmp280_temperature_centidegree_calculate(const bmp280_calib_t *ca
 
 uint8_t bmp280_init(void)
 {
-    uint8_t chip_id;
+    uint8_t chip_id = 0U;
     uint8_t success = 0U;
+
+    printf("BMP280 init start\r\n");
     /*
         在此，我们来学习什么是SPI
         SPI有四根线，分别是CS,SCK,MISO,MOSI，SPI通信的时候我们称一端位主设备，一端为从设备，一个主设备能够拥有多个从设备，
@@ -78,8 +81,11 @@ uint8_t bmp280_init(void)
     */
     if(spi0_bus_lock() == 0U)
     {
+        printf("BMP280 SPI lock fail\r\n");
         return BMP280_FAIL;
     }
+
+    printf("BMP280 SPI lock success\r\n");
 
     gpio_bit_set(BMP280_CS_PORT, BMP280_CS);
     gpio_init(BMP280_CS_PORT,GPIO_MODE_OUT_PP,GPIO_OSPEED_50MHZ,BMP280_CS);
@@ -92,31 +98,47 @@ uint8_t bmp280_init(void)
     gpio_bit_set(BMP280_CS_PORT, BMP280_CS);
 
     /* 修改：chip_id是本驱动的第一层运行证据；不是0x58就不继续读校准或温度。 */
+    printf("BMP280 read id start\r\n");
     if ((bmp280_data_get(BMP280_REG_ID, &chip_id) == 0U) || (chip_id != BMP280_CHIP_ID)) {
+        printf("BMP280 read id fail: 0x%02X\r\n", chip_id);
         goto cleanup;
     }
+    printf("BMP280 chip id success: 0x%02X\r\n", chip_id);
 
     /* 修改：上电时NVM可能仍在复制校准参数，完成前不能读取0x88开始的校准数据。 */
+    printf("BMP280 wait im update start\r\n");
     if (bmp280_status_wait_clear(BMP280_STATUS_IM_UPDATE, BMP280_STATUS_TIMEOUT_MS) == 0U) {
+        printf("BMP280 wait im update fail\r\n");
         goto cleanup;
     }
+    printf("BMP280 wait im update success\r\n");
+
+    printf("BMP280 calibration read start\r\n");
     if (bmp280_calibration_read() == 0U) {
+        printf("BMP280 calibration read fail\r\n");
         goto cleanup;
     }
+    printf("BMP280 calibration read success\r\n");
 
     /*
         修改：0x23 = 温度过采样x1 + 压力跳过 + normal模式。
         复位后的ctrl_meas为0，温度测量被跳过；这里配置后0xFA~0xFC才会持续更新。
     */
+    printf("BMP280 config write start\r\n");
     if (bmp280_register_write(BMP280_REG_CTRL_MEAS, BMP280_CTRL_MEAS_TEMP_X1_NORMAL) == 0U) {
+        printf("BMP280 config write fail\r\n");
         goto cleanup;
     }
+    printf("BMP280 config write success\r\n");
 
     /* 修改：等待首个x1温度转换完成，避免把复位/旧数据作为第一笔有效温度。 */
     delay_ms(5U);
+    printf("BMP280 wait first measurement start\r\n");
     if (bmp280_status_wait_clear(BMP280_STATUS_MEASURING, BMP280_STATUS_TIMEOUT_MS) == 0U) {
+        printf("BMP280 wait first measurement fail\r\n");
         goto cleanup;
     }
+    printf("BMP280 wait first measurement success\r\n");
 
     bmp280_is_initialized = 1U;
     success = BMP280_SUCCESS;
@@ -210,6 +232,7 @@ static uint8_t bmp280_register_write(uint8_t reg, uint8_t data)
 static uint8_t bmp280_status_wait_clear(uint8_t mask, uint32_t timeout_ms)
 {
     uint8_t status;
+    uint8_t first_status = 1U;
 
     /*
         修改：状态轮询有明确超时；传感器异常或接线故障时bmp280_init()会失败，
@@ -218,6 +241,11 @@ static uint8_t bmp280_status_wait_clear(uint8_t mask, uint32_t timeout_ms)
     while (1) {
         if (bmp280_data_get(BMP280_REG_STATUS, &status) == 0U) {
             return 0U;
+        }
+        if(first_status != 0U)
+        {
+            printf("BMP280 status: 0x%02X, mask: 0x%02X\r\n", status, mask);
+            first_status = 0U;
         }
         if ((status & mask) == 0U) {
             return 1U;

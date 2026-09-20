@@ -8,6 +8,7 @@
 #include "BMP280/bmp280.h"
 #include "IPS/ips.h"
 #include "Presentation/Buffer/display_buffer.h"
+#include <stdio.h>
 
 /*
     这个文件服务于裸机
@@ -29,31 +30,44 @@ uint8_t init_all(void)
 {
     /* BOARD必须最先执行：它建立所有BSP共用的时钟、中断和SPI0。 */
     board_config_init();
+    printf("BOARD init success\r\n");
 
     ch340_init();
+    printf("CH340 init success\r\n");
     led_init();
+    printf("LED init success\r\n");
     key_init();
-    adc_init();
+    printf("KEY init success\r\n");
+    //adc_init(); 有问题
+    //printf("ADC init success\r\n");
     if(Can_init() == 0U)
     {
+        printf("CAN init fail\r\n");
         return INIT_ALL_FAIL;
     }
+    printf("CAN init success\r\n");
 
     /* BMP280和Storage都复用SPI0，因此它们必须在board_config_init()之后初始化。 */
     if(bmp280_init() == 0U)
     {
+        printf("BMP280 init fail\r\n");
         return INIT_ALL_FAIL;
     }
+    printf("BMP280 init success\r\n");
 
     /* display_buffer只管理APP双行缓冲，前提是IPS的SPI2和DMA已经成功初始化。 */
-    if(ips_init() == IPS_FAIL)
-    {
-        return INIT_ALL_FAIL;
-    }
-    if(display_buffer_init() == DISPLAY_BUFFER_FAIL)
-    {
-        return INIT_ALL_FAIL;
-    }
+    //if(ips_init() == IPS_FAIL)
+    //{
+    //    printf("IPS init fail\r\n");
+    //    return INIT_ALL_FAIL;
+    //}
+    //printf("IPS init success\r\n");
+    // if(display_buffer_init() == DISPLAY_BUFFER_FAIL)
+    // {
+    //     printf("display buffer init fail\r\n");
+    //     return INIT_ALL_FAIL;
+    // }
+    // printf("display buffer init success\r\n");
 
     return INIT_ALL_SUCCESS;
 }
