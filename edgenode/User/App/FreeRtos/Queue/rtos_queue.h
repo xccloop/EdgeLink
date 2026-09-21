@@ -10,6 +10,9 @@
 /* Storage 初始化完成后只发送一次 next_sequence，CollectTask 在此之前保持阻塞。 */
 #define RTOS_STORAGE_TO_COLLECT_SEQUENCE_QUEUE_LENGTH  1U
 
+/* Storage 每确认下一条采样能够落入 Flash 后，才发放一个采集许可。 */
+#define RTOS_STORAGE_TO_COLLECT_PERMISSION_QUEUE_LENGTH 1U
+
 /* CollectTask 把新采样的业务 Message 交给唯一允许写 Flash 的 StorageTask。 */
 #define RTOS_COLLECT_TO_STORAGE_QUEUE_LENGTH            10U
 
@@ -39,6 +42,7 @@ typedef struct
 {
     uint32_t sequence;
     uint32_t flash_address;
+    uint8_t success;
 } storage_confirm_event_t;
 
 typedef struct
@@ -58,6 +62,7 @@ uint8_t rtos_queue_init(void);
 
 /* 任务在创建后取得各自需要的队列句柄。 */
 QueueHandle_t rtos_storage_to_collect_sequence_queue_get(void);
+QueueHandle_t rtos_storage_to_collect_permission_queue_get(void);
 QueueHandle_t rtos_collect_to_storage_queue_get(void);
 QueueHandle_t rtos_storage_to_transmit_queue_get(void);
 QueueHandle_t rtos_transmit_to_storage_confirm_queue_get(void);

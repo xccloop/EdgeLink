@@ -10,6 +10,8 @@
 /* Storage 函数统一返回值。 */
 #define STORAGE_SUCCESS 1U
 #define STORAGE_FAIL    0U
+/* 查询完成但没有找到 pending；与 Flash 读取失败必须区分。 */
+#define STORAGE_NO_PENDING 2U
 
 /*
     Storage 初始化时一次扫描得到的结果。
@@ -36,6 +38,15 @@ uint8_t storage_init(storage_init_result_t *result);
 
 uint8_t storage_write_pending(const telemetry_sample_struct *message,uint32_t *flash_address);
 
+/* 不修改 Flash；确认下一次 pending 写入不会擦除仍含 pending 的扇区。 */
+uint8_t storage_write_pending_ready(void);
+
 uint8_t storage_confirm(uint32_t flash_address,uint32_t ack_sequence);
+
+/* 这个函数是为了可以循环去找下没有发送的记录 */
+uint8_t storage_find_next_pending(
+    uint32_t last_processed_address,
+    telemetry_sample_struct *next_pending_message,
+    uint32_t *next_pending_address);
 
 #endif

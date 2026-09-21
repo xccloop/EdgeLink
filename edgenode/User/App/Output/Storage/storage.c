@@ -189,6 +189,58 @@ static uint32_t storage_sector_base(uint32_t address)
 }
 
 /*
+    擦除前只检查目标 4 KiB 扇区。返回 STORAGE_SUCCESS 表示扫描已完成，
+    has_pending 为 1 时该扇区仍含有效 pending，调用者不得擦除。
+    CRC 错记录不具备可恢复业务数据，不作为 pending；但任意 Flash 读取失败
+    都必须返回 STORAGE_FAIL，不能把未知内容误判成可擦除。
+*/
+static uint8_t storage_sector_pending_check(uint32_t sector_address,
+                                            uint8_t *has_pending)
+{
+    uint32_t page_address;
+    uint32_t slot_offset;
+    const uint8_t *record;
+
+    if((has_pending == 0) ||
+       (sector_address > (STORAGE_LOG_END_ADDRESS - STORAGE_SECTOR_SIZE)) ||
+       ((sector_address % STORAGE_SECTOR_SIZE) != 0U))
+    {
+        return STORAGE_FAIL;
+    }
+
+    *has_pending = 0U;
+
+    for(page_address = sector_address;
+        page_address < (sector_address + STORAGE_SECTOR_SIZE);
+        page_address += STORAGE_SCAN_PAGE_SIZE)
+    {
+        if(gd25_read(page_address,
+                     storage_scan_page,
+                     STORAGE_SCAN_PAGE_SIZE) == 0U)
+        {
+            return STORAGE_FAIL;
+        }
+
+        for(slot_offset = 0U;
+            slot_offset < STORAGE_SCAN_PAGE_SIZE;
+            slot_offset += STORAGE_SLOT_SIZE)
+        {
+            record = &storage_scan_page[slot_offset];
+
+            if((storage_slot_is_empty(record) == 0U) &&
+               (storage_record_crc_is_valid(record) != 0U) &&
+               (record[15] != STORAGE_CONFIRMED))
+            {
+                *has_pending = 1U;
+                return STORAGE_SUCCESS;
+            }
+        }
+    }
+
+    return STORAGE_SUCCESS;
+}
+
+/*
     一次遍历完成 StorageTask 启动时需要的全部 Flash 恢复信息：
     1. 第一个全 FF 槽位，作为后续顺序追加的写地址；
     2. 最大合法 sequence，推导 next_sequence；
@@ -384,6 +436,7 @@ uint8_t storage_write_pending(const telemetry_sample_struct *message,
                               uint32_t *flash_address)
 {
     uint8_t record[STORAGE_SLOT_SIZE];//定义一个槽位
+    uint8_t target_sector_has_pending;
 
     if((message == 0) || (flash_address == 0) ||
        (storage_ready == 0U) || (storage_can_append == 0U))
@@ -395,9 +448,21 @@ uint8_t storage_write_pending(const telemetry_sample_struct *message,
     {
         storage_next_address = STORAGE_LOG_BASE_ADDRESS;
     }
-    //进入一个新的扇区就擦除对应扇区
+    //进入一个新的扇区前，必须确认旧扇区没有任何有效 pending。
     if((storage_next_address % STORAGE_SECTOR_SIZE) == 0U)
     {
+        if(storage_sector_pending_check(
+               storage_sector_base(storage_next_address),
+               &target_sector_has_pending) != STORAGE_SUCCESS)
+        {
+            return STORAGE_FAIL;
+        }
+
+        if(target_sector_has_pending != 0U)
+        {
+            return STORAGE_FAIL;
+        }
+
         if(gd25_clear(storage_next_address) == 0U)
         {
             return STORAGE_FAIL;
@@ -418,6 +483,42 @@ uint8_t storage_write_pending(const telemetry_sample_struct *message,
     //然后sroage_next_adress推进
     *flash_address = storage_next_address;
     storage_next_address = storage_address_next(storage_next_address);
+
+    return STORAGE_SUCCESS;
+}
+
+uint8_t storage_write_pending_ready(void)
+{
+    uint32_t next_address;
+    uint8_t target_sector_has_pending;
+
+    if((storage_ready == 0U) || (storage_can_append == 0U))
+    {
+        return STORAGE_FAIL;
+    }
+
+    next_address = storage_next_address;
+    if(next_address >= STORAGE_LOG_END_ADDRESS)
+    {
+        next_address = STORAGE_LOG_BASE_ADDRESS;
+    }
+
+    if((next_address % STORAGE_SECTOR_SIZE) != 0U)
+    {
+        return STORAGE_SUCCESS;
+    }
+
+    if(storage_sector_pending_check(storage_sector_base(next_address),
+                                    &target_sector_has_pending)
+       != STORAGE_SUCCESS)
+    {
+        return STORAGE_FAIL;
+    }
+
+    if(target_sector_has_pending != 0U)
+    {
+        return STORAGE_FAIL;
+    }
 
     return STORAGE_SUCCESS;
 }
@@ -482,4 +583,84 @@ uint8_t storage_confirm(uint32_t flash_address,
     }
 
     return STORAGE_SUCCESS;
+}
+
+/*
+    last_process_adress:找到的最后一条pending并且ACK的记录
+    next_pending_message：返回下一条没有找到的记录信息
+    next_pending_adress:返回下一条pending地址
+*/
+uint8_t storage_find_next_pending(
+    uint32_t last_processed_address,
+    telemetry_sample_struct *next_pending_message,
+    uint32_t *next_pending_address)
+{
+    uint32_t first_search_address;
+    uint32_t current_address;
+    uint8_t record[STORAGE_SLOT_SIZE];
+
+    /*
+        1. 调用者必须给我两个“存放输出结果的位置”；
+           Storage 也必须已经初始化完成。
+    */
+    if((next_pending_message == 0) ||
+    (next_pending_address == 0) ||
+    (storage_ready == 0U) ||
+    (last_processed_address >
+            (STORAGE_LOG_END_ADDRESS - STORAGE_SLOT_SIZE)) ||
+    (((last_processed_address - STORAGE_LOG_BASE_ADDRESS) %
+            STORAGE_SLOT_SIZE) != 0U))
+    {
+        return STORAGE_FAIL;
+    }
+    /*
+        2. 从已处理记录的下一个槽位开始找。
+    */
+    first_search_address =
+        storage_address_next(last_processed_address);
+
+    current_address = first_search_address;
+
+    while(1)
+    {
+        /*
+            3. 读取当前 16 字节槽位。
+        */
+        if(gd25_read(current_address,
+                     record,
+                     STORAGE_SLOT_SIZE) == 0U)
+        {
+            return STORAGE_FAIL;
+        }
+
+        /*
+            4. 这就是我们要找的下一条 pending。
+        */
+        if((storage_slot_is_empty(record) == 0U) &&
+           (storage_record_crc_is_valid(record) != 0U) &&
+           (record[15] != STORAGE_CONFIRMED))
+        {
+            storage_record_message_decode(
+                record,
+                next_pending_message);
+
+            *next_pending_address = current_address;
+
+            return STORAGE_SUCCESS;
+        }
+
+        /*
+            5. 当前槽位不是目标，继续下一个。
+        */
+        current_address =
+            storage_address_next(current_address);
+
+        /*
+            6. 又回到起点，说明整圈都没有 pending。
+        */
+        if(current_address == first_search_address)
+        {
+            return STORAGE_NO_PENDING;
+        }
+    }
 }

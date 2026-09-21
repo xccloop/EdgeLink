@@ -5,6 +5,12 @@ static uint8_t storage_to_collect_sequence_queue_storage[
     RTOS_STORAGE_TO_COLLECT_SEQUENCE_QUEUE_LENGTH * sizeof(uint32_t)];
 static QueueHandle_t storage_to_collect_sequence_queue;
 
+/* CollectTask 每产生一条 Message 前必须先取得一个许可。 */
+static StaticQueue_t storage_to_collect_permission_queue_control;
+static uint8_t storage_to_collect_permission_queue_storage[
+    RTOS_STORAGE_TO_COLLECT_PERMISSION_QUEUE_LENGTH * sizeof(uint8_t)];
+static QueueHandle_t storage_to_collect_permission_queue;
+
 /* Storage 写入 pending 后，或恢复扫描找到 pending 后，都通过这条队列交给 TransmitTask。 */
 static StaticQueue_t storage_to_transmit_queue_control;
 static uint8_t storage_to_transmit_queue_storage[
@@ -17,7 +23,7 @@ static uint8_t collect_to_storage_queue_storage[
     RTOS_COLLECT_TO_STORAGE_QUEUE_LENGTH * sizeof(telemetry_sample_struct)];
 static QueueHandle_t collect_to_storage_queue;
 
-/* 只有收到 TCP/CAN ACK 成功后，TransmitTask 才投递此事件请求 StorageTask 二次写确认位。 */
+/* TransmitTask 对每个 work 投递一次 TCP/CAN 最终结果，StorageTask 决定是否确认。 */
 static StaticQueue_t transmit_to_storage_confirm_queue_control;
 static uint8_t transmit_to_storage_confirm_queue_storage[
     RTOS_TRANSMIT_TO_STORAGE_CONFIRM_QUEUE_LENGTH * sizeof(storage_confirm_event_t)];
@@ -47,6 +53,12 @@ uint8_t rtos_queue_init(void)
         sizeof(uint32_t),
         storage_to_collect_sequence_queue_storage,
         &storage_to_collect_sequence_queue_control);
+
+    storage_to_collect_permission_queue = xQueueCreateStatic(
+        RTOS_STORAGE_TO_COLLECT_PERMISSION_QUEUE_LENGTH,
+        sizeof(uint8_t),
+        storage_to_collect_permission_queue_storage,
+        &storage_to_collect_permission_queue_control);
 
     storage_to_transmit_queue = xQueueCreateStatic(
         RTOS_STORAGE_TO_TRANSMIT_QUEUE_LENGTH,
@@ -79,6 +91,7 @@ uint8_t rtos_queue_init(void)
         &can_receive_frame_queue_control);
 
     if((storage_to_collect_sequence_queue == NULL) ||
+       (storage_to_collect_permission_queue == NULL) ||
        (storage_to_transmit_queue == NULL) ||
        (collect_to_storage_queue == NULL) ||
        (transmit_to_storage_confirm_queue == NULL) ||
@@ -86,6 +99,7 @@ uint8_t rtos_queue_init(void)
        (can_receive_frame_queue == NULL))
     {
         storage_to_collect_sequence_queue = NULL;
+        storage_to_collect_permission_queue = NULL;
         storage_to_transmit_queue = NULL;
         collect_to_storage_queue = NULL;
         transmit_to_storage_confirm_queue = NULL;
@@ -106,6 +120,16 @@ QueueHandle_t rtos_storage_to_collect_sequence_queue_get(void)
     }
 
     return storage_to_collect_sequence_queue;
+}
+
+QueueHandle_t rtos_storage_to_collect_permission_queue_get(void)
+{
+    if(rtos_queue_ready == 0U)
+    {
+        return NULL;
+    }
+
+    return storage_to_collect_permission_queue;
 }
 
 QueueHandle_t rtos_storage_to_transmit_queue_get(void)

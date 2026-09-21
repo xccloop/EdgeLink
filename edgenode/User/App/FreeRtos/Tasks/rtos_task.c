@@ -97,6 +97,7 @@ void led_tasks_create(void)
 static StaticTask_t storage_task_tcb;
 static StackType_t storage_task_stack[256];
 static TaskHandle_t storage_task_handle;
+static TaskHandle_t collect_task_handle;
 
 /*
     这个任务是上电后第一个运行的第一个任务
@@ -107,8 +108,11 @@ static void storage_task(void *argument)
     telemetry_sample_struct collected_message;
     transmit_work_item_t transmit_work;
     storage_confirm_event_t confirm_event;
+    uint8_t recovery_active;
+    uint8_t recovery_fail_count;
 
     QueueHandle_t sequence_queue;
+    QueueHandle_t permission_queue;
     QueueHandle_t collect_queue;
     QueueHandle_t transmit_queue;
     QueueHandle_t confirm_queue;
@@ -116,11 +120,13 @@ static void storage_task(void *argument)
     (void)argument;
 
     sequence_queue = rtos_storage_to_collect_sequence_queue_get();
+    permission_queue = rtos_storage_to_collect_permission_queue_get();
     collect_queue = rtos_collect_to_storage_queue_get();
     transmit_queue = rtos_storage_to_transmit_queue_get();
     confirm_queue = rtos_transmit_to_storage_confirm_queue_get();
 
     if((sequence_queue == NULL) ||
+       (permission_queue == NULL) ||
        (collect_queue == NULL) ||
        (transmit_queue == NULL) ||
        (confirm_queue == NULL))
@@ -131,35 +137,102 @@ static void storage_task(void *argument)
     /* 1. StorageTask 首先初始化 Flash。 */
     if(storage_init(&storage_result) != STORAGE_SUCCESS)
     {
-        while(1)
-        {
-            vTaskDelay(pdMS_TO_TICKS(1000U));
-        }
+        task_block_forever();
     }
 
-    /*
-        2. 当前先把启动时最小的 pending 投递给 TransmitTask。
-        ACK 接收已经接入；但启动恢复的“三次失败后放行”和逐条继续扫描
-        仍未实现，因此不能把“已经投递”当成“恢复已完成”。
-    */
-    if(storage_result.has_pending != 0U)
+    recovery_active = storage_result.has_pending;
+    recovery_fail_count = 0U;
+
+    if(recovery_active != 0U)
     {
         transmit_work.message = storage_result.oldest_pending_message;
         transmit_work.flash_address =
             storage_result.oldest_pending_address;
 
-        xQueueSend(transmit_queue,
-                   &transmit_work,
-                   portMAX_DELAY);
+        (void)xQueueSend(transmit_queue,
+                         &transmit_work,
+                         portMAX_DELAY);
     }
 
-    /*
-        3. 当前暂时放行 CollectTask。后续补齐恢复状态机后，此处必须改为
-        “历史 pending 确认，或连续失败三次”之后才发送 sequence。
-    */
-    xQueueSend(sequence_queue,
-               &storage_result.next_sequence,
-               portMAX_DELAY);
+    while(recovery_active != 0U)
+    {
+        uint8_t find_result;
+
+        if(xQueueReceive(confirm_queue,
+                         &confirm_event,
+                         portMAX_DELAY) != pdPASS)
+        {
+            task_block_forever();
+        }
+
+        if((confirm_event.sequence != transmit_work.message.sequence) ||
+           (confirm_event.flash_address != transmit_work.flash_address))
+        {
+            task_block_forever();
+        }
+
+        if(confirm_event.success == 0U)
+        {
+            recovery_fail_count++;
+
+            if(recovery_fail_count < 3U)
+            {
+                (void)xQueueSend(transmit_queue,
+                                 &transmit_work,
+                                 portMAX_DELAY);
+                continue;
+            }
+
+            recovery_active = 0U;
+            break;
+        }
+
+        if(storage_confirm(confirm_event.flash_address,
+                           confirm_event.sequence) != STORAGE_SUCCESS)
+        {
+            task_block_forever();
+        }
+
+        find_result = storage_find_next_pending(
+            confirm_event.flash_address,
+            &transmit_work.message,
+            &transmit_work.flash_address);
+
+        if(find_result == STORAGE_SUCCESS)
+        {
+            recovery_fail_count = 0U;
+
+            (void)xQueueSend(transmit_queue,
+                             &transmit_work,
+                             portMAX_DELAY);
+            continue;
+        }
+
+        if(find_result == STORAGE_NO_PENDING)
+        {
+            recovery_active = 0U;
+            break;
+        }
+
+        task_block_forever();
+    }
+
+    if(storage_write_pending_ready() != STORAGE_SUCCESS)
+    {
+        task_block_forever();
+    }
+
+    (void)xQueueSend(sequence_queue,
+                     &storage_result.next_sequence,
+                     portMAX_DELAY);
+
+    {
+        uint8_t collect_permission = 1U;
+
+        (void)xQueueSend(permission_queue,
+                         &collect_permission,
+                         portMAX_DELAY);
+    }
 
     while(1)
     {
@@ -170,8 +243,14 @@ static void storage_task(void *argument)
         */
         while(xQueueReceive(confirm_queue, &confirm_event, 0U) == pdPASS)
         {
-            (void)storage_confirm(confirm_event.flash_address,
-                                  confirm_event.sequence);
+            if(confirm_event.success != 0U)
+            {
+                if(storage_confirm(confirm_event.flash_address,
+                                   confirm_event.sequence) != STORAGE_SUCCESS)
+                {
+                    task_block_forever();
+                }
+            }
         }
 
         /*
@@ -196,6 +275,19 @@ static void storage_task(void *argument)
                 xQueueSend(transmit_queue,
                            &transmit_work,
                            portMAX_DELAY);
+
+                if(storage_write_pending_ready() != STORAGE_SUCCESS)
+                {
+                    continue;
+                }
+
+                {
+                    uint8_t collect_permission = 1U;
+
+                    (void)xQueueSend(permission_queue,
+                                     &collect_permission,
+                                     portMAX_DELAY);
+                }
             }
             else
             {
@@ -228,8 +320,10 @@ void storage_task_create(void)
 static void collect_task(void *argument)
 {
     uint32_t next_sequence;
+    uint8_t collect_permission;
     telemetry_sample_struct message;
     QueueHandle_t sequence_queue;
+    QueueHandle_t permission_queue;
     QueueHandle_t collect_queue;
 
     (void)argument;
@@ -237,10 +331,15 @@ static void collect_task(void *argument)
     sequence_queue =
         rtos_storage_to_collect_sequence_queue_get();
 
+    permission_queue =
+        rtos_storage_to_collect_permission_queue_get();
+
     collect_queue =
         rtos_collect_to_storage_queue_get();
 
-    if((sequence_queue == NULL) || (collect_queue == NULL))
+    if((sequence_queue == NULL) ||
+       (permission_queue == NULL) ||
+       (collect_queue == NULL))
     {
         task_block_forever();
     }
@@ -267,6 +366,17 @@ static void collect_task(void *argument)
 
     while(1)
     {
+        /*
+            只有 StorageTask 确认下一槽可写时才会发许可。
+            这样 CollectTask 生成的每个 sequence 都有一个预留的落盘机会。
+        */
+        if(xQueueReceive(permission_queue,
+                         &collect_permission,
+                         portMAX_DELAY) != pdPASS)
+        {
+            task_block_forever();
+        }
+
         if(message_collect(&message) == MESSAGE_SUCCESS)
         {
             /*
@@ -277,6 +387,13 @@ static void collect_task(void *argument)
                        &message,
                        portMAX_DELAY);
         }
+        else
+        {
+            /* 本次没有采到有效数据，归还许可，下一周期再试。 */
+            (void)xQueueSend(permission_queue,
+                             &collect_permission,
+                             portMAX_DELAY);
+        }
 
         vTaskDelay(pdMS_TO_TICKS(1000U));
     }
@@ -284,7 +401,6 @@ static void collect_task(void *argument)
 
 static StaticTask_t collect_task_tcb;
 static StackType_t collect_task_stack[256];
-static TaskHandle_t collect_task_handle;
 
 void collect_task_create(void)
 {
@@ -345,7 +461,8 @@ static uint8_t transmit_tcp_ack_wait(QueueHandle_t tcp_ack_queue,
         }
 
         if((tcp_ack_decode(frame.data, board_id, &ack_sequence, &ack_status) != 0U) &&
-           (ack_sequence == expected_sequence))
+           (ack_sequence == expected_sequence) &&
+           (ack_status == TCP_ACK_STATUS_SUCCESS))
         {
             return 1U;
         }
@@ -386,7 +503,8 @@ static uint8_t transmit_can_ack_wait(QueueHandle_t can_receive_queue,
                            board_id,
                            &ack_sequence,
                            &ack_status) != CAN_FRAME_FAIL) &&
-           (ack_sequence == expected_sequence))
+           (ack_sequence == expected_sequence) &&
+           (ack_status == 0U))
         {
             return 1U;
         }
@@ -394,20 +512,29 @@ static uint8_t transmit_can_ack_wait(QueueHandle_t can_receive_queue,
 
     return 0U;
 }
-
-static void transmit_storage_confirm_send(QueueHandle_t confirm_queue,
-                                          const transmit_work_item_t *transmit_work)
+/*
+    这个函数用于将
+*/
+static void transmit_storage_result_send(
+    QueueHandle_t confirm_queue,
+    const transmit_work_item_t *transmit_work,
+    uint8_t success)
 {
     storage_confirm_event_t confirm_event;
 
     confirm_event.sequence = transmit_work->message.sequence;
     confirm_event.flash_address = transmit_work->flash_address;
-    (void)xQueueSend(confirm_queue, &confirm_event, portMAX_DELAY);
+    confirm_event.success = success;
+
+    (void)xQueueSend(confirm_queue,
+                     &confirm_event,
+                     portMAX_DELAY);
 }
 
 static void transmit_task(void *argument)
 {
     transmit_work_item_t transmit_work;
+    uint8_t transmit_success;
     QueueHandle_t transmit_queue;
     QueueHandle_t confirm_queue;
     QueueHandle_t tcp_ack_queue;
@@ -446,26 +573,35 @@ static void transmit_task(void *argument)
                     确认正确的 Flash 槽位。
             */
 
+            transmit_success = 0U;
+
             transmit_tcp_ack_queue_clear(tcp_ack_queue);
             if(tcp_frame_transmit(&transmit_work.message) == TCP_TRANSMIT_SUCCESS)
             {
                 if(transmit_tcp_ack_wait(tcp_ack_queue,
                                          transmit_work.message.sequence) != 0U)
                 {
-                    transmit_storage_confirm_send(confirm_queue, &transmit_work);
-                    continue;
+                    transmit_success = 1U;
                 }
             }
 
-            transmit_can_receive_queue_clear(can_receive_queue);
-            if(can_frame_transmit(board_id, &transmit_work.message) == CAN_TRANSMIT_SUCCESS)
+            if(transmit_success == 0U)
             {
-                if(transmit_can_ack_wait(can_receive_queue,
-                                         transmit_work.message.sequence) != 0U)
+                transmit_can_receive_queue_clear(can_receive_queue);
+                if(can_frame_transmit(board_id,
+                                      &transmit_work.message) == CAN_TRANSMIT_SUCCESS)
                 {
-                    transmit_storage_confirm_send(confirm_queue, &transmit_work);
+                    if(transmit_can_ack_wait(can_receive_queue,
+                                             transmit_work.message.sequence) != 0U)
+                    {
+                        transmit_success = 1U;
+                    }
                 }
             }
+
+            transmit_storage_result_send(confirm_queue,
+                                         &transmit_work,
+                                         transmit_success);
         }
     }
 }
