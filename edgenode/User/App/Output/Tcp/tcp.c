@@ -23,8 +23,14 @@
 #define TCP_WIFI_JOIN_TIMEOUT_MS 50000U
 #define TCP_COMMAND_BUFFER_SIZE 128U
 
+/* 断线重连比首次建连短：网关不在时也要尽快把发送任务交还给调用方。 */
+#define TCP_RECONNECT_TIMEOUT_MS 5000U
+
 static char tcp_command_buffer[TCP_COMMAND_BUFFER_SIZE];
 static uint8_t tcp_connected;
+
+/* tcp_init() 校验通过的配置留一份，重连时只需重发 CIPSTART，不必重跑 CWJAP。 */
+static const tcp_config_struct *tcp_saved_config;
 
 static uint8_t tcp_deadline_expired(uint32_t deadline_ms)
 {
@@ -226,6 +232,9 @@ uint8_t tcp_init(const tcp_config_struct *config)
         return TCP_FAIL;
     }
 
+    /* 只有配置通过校验才记住，供 tcp_try_reconnect() 复用。 */
+    tcp_saved_config = config;
+
     /* BOARD先配置USART1的NVIC和SysTick；这里才初始化ESP12S的USART1硬件。 */
     esp12s_init();
     tcp_connected = TCP_FAIL;
@@ -287,6 +296,45 @@ uint8_t tcp_init(const tcp_config_struct *config)
 uint8_t tcp_connected_get(void)
 {
     return tcp_connected;
+}
+
+/*
+    运行期断线重连：ESP 断开的只是到服务器的 TCP 连接，
+    Station 模式与 WiFi 仍然在线，所以这里只需要重发一条 CIPSTART 重建连接。
+    成功返回 TCP_SUCCESS 并恢复在线状态；失败返回 TCP_FAIL，由调用方稍后再试。
+*/
+uint8_t tcp_try_reconnect(void)
+{
+    int command_length;
+
+    if((tcp_saved_config == 0) ||
+       (tcp_saved_config->server_ip == 0) ||
+       (tcp_saved_config->server_port == 0U))
+    {
+        return TCP_FAIL;
+    }
+
+    command_length = snprintf(tcp_command_buffer, sizeof(tcp_command_buffer),
+                              "AT+CIPSTART=\"TCP\",\"%s\",%u\r\n",
+                              tcp_saved_config->server_ip,
+                              (unsigned int)tcp_saved_config->server_port);
+    if((command_length < 0) ||
+       ((uint32_t)command_length >= sizeof(tcp_command_buffer)))
+    {
+        return TCP_FAIL;
+    }
+
+    esp12s_response_reset();
+    esp12s_cmd_send(tcp_command_buffer);
+
+    if(tcp_wait_response(TCP_SUCCESS, TCP_RECONNECT_TIMEOUT_MS) == TCP_FAIL)
+    {
+        tcp_connected = TCP_FAIL;
+        return TCP_FAIL;
+    }
+
+    tcp_connected = TCP_SUCCESS;
+    return TCP_SUCCESS;
 }
 
 /*

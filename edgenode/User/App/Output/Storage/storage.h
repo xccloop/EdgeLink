@@ -49,4 +49,9 @@ uint8_t storage_find_next_pending(
     telemetry_sample_struct *next_pending_message,
     uint32_t *next_pending_address);
 
+/* 找整段日志里地址最靠前的一条 pending，作为运行期补发的起点；无 pending 返回 STORAGE_NO_PENDING。 */
+uint8_t storage_find_oldest_pending(
+    telemetry_sample_struct *oldest_pending_message,
+    uint32_t *oldest_pending_address);
+
 #endif

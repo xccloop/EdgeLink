@@ -664,3 +664,18 @@ uint8_t storage_find_next_pending(
         }
     }
 }
+
+/*
+    storage_find_next_pending() 从给定地址的下一个槽位开始搜索并会绕回起点，
+    因此从“日志最后一个槽位”传入，它会先搜到地址最小的一条 pending，即最早写入的那条。
+    运行期补发用地址顺序作起点即可（只要把 pending 都发出去，不要求严格 sequence 顺序）。
+*/
+uint8_t storage_find_oldest_pending(
+    telemetry_sample_struct *oldest_pending_message,
+    uint32_t *oldest_pending_address)
+{
+    return storage_find_next_pending(
+        STORAGE_LOG_END_ADDRESS - STORAGE_SLOT_SIZE,
+        oldest_pending_message,
+        oldest_pending_address);
+}

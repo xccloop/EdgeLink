@@ -23,6 +23,18 @@ static void task_block_forever(void)
     }
 }
 
+/*
+    TransmitTask 在 TCP 重连成功后置 1；StorageTask 看到后把积压的 pending 补发一遍。
+    跨任务单字节标志：即使读写竞争，最坏也只是重复补发一次，而确认 / Hub 去重是幂等的。
+*/
+static volatile uint8_t link_restored;
+
+/* 上次尝试 TCP 重连的 tick，用来给重连加冷却，避免链路长时间不可用时反复卡住发送任务。 */
+static TickType_t last_reconnect_tick;
+
+/* 两条记录之间至少间隔这么久才再试一次重连。 */
+#define TCP_RECONNECT_COOLDOWN_MS 5000U
+
 static StaticTask_t led1_task_tcb;
 static StackType_t led1_task_stack[256];
 static TaskHandle_t led1_task_handle;
@@ -94,8 +106,95 @@ void led_tasks_create(void)
     led2_task_create();
 }
 
+/*
+    把一条待补发的记录交给 TransmitTask，再根据回来的确认事件决定下一步：
+      - 确认成功 → storage_confirm 写 confirmed，然后找下一条 pending；
+      - 连续 3 次失败 → 放弃这一条直接返回（留给下次补发或下次上电），
+        不让一条补不动的数据把补发流程永久卡死；
+      - 全部 pending 确认完 → 返回。
+    起点既可能来自 storage_init() 的扫描结果（上电恢复），
+    也可能来自 storage_find_oldest_pending()（运行期链路恢复）。
+*/
+static void storage_replay_pending(transmit_work_item_t transmit_work,
+                                   QueueHandle_t transmit_queue,
+                                   QueueHandle_t confirm_queue)
+{
+    uint8_t fail_count = 0U;
+
+    (void)xQueueSend(transmit_queue, &transmit_work, portMAX_DELAY);
+
+    while(1)
+    {
+        storage_confirm_event_t confirm_event;
+        uint8_t find_result;
+
+        if(xQueueReceive(confirm_queue, &confirm_event, portMAX_DELAY) != pdPASS)
+        {
+            task_block_forever();
+        }
+
+        /*
+            运行期补发时，TransmitTask 可能刚处理完上一条正常发送，
+            它的事件会先于我们要的那条到达。这种“别人的”事件就地消化：
+            成功就照常写 confirmed，失败则忽略，然后继续等自己这条。
+        */
+        if((confirm_event.sequence != transmit_work.message.sequence) ||
+           (confirm_event.flash_address != transmit_work.flash_address))
+        {
+            if(confirm_event.success != 0U)
+            {
+                if(storage_confirm(confirm_event.flash_address,
+                                   confirm_event.sequence) != STORAGE_SUCCESS)
+                {
+                    task_block_forever();
+                }
+            }
+            continue;
+        }
+
+        if(confirm_event.success == 0U)
+        {
+            fail_count++;
+
+            if(fail_count < 3U)
+            {
+                (void)xQueueSend(transmit_queue, &transmit_work, portMAX_DELAY);
+                continue;
+            }
+
+            return;
+        }
+
+        if(storage_confirm(confirm_event.flash_address,
+                           confirm_event.sequence) != STORAGE_SUCCESS)
+        {
+            task_block_forever();
+        }
+
+        fail_count = 0U;
+
+        find_result = storage_find_next_pending(
+            confirm_event.flash_address,
+            &transmit_work.message,
+            &transmit_work.flash_address);
+
+        if(find_result == STORAGE_SUCCESS)
+        {
+            (void)xQueueSend(transmit_queue, &transmit_work, portMAX_DELAY);
+            continue;
+        }
+
+        if(find_result == STORAGE_NO_PENDING)
+        {
+            return;
+        }
+
+        task_block_forever();
+    }
+}
+
 static StaticTask_t storage_task_tcb;
-static StackType_t storage_task_stack[256];
+static StackType_t storage_task_stack[512];   /* 512：任务内调用 printf，栈需求变大 */
 static TaskHandle_t storage_task_handle;
 static TaskHandle_t collect_task_handle;
 
@@ -108,8 +207,6 @@ static void storage_task(void *argument)
     telemetry_sample_struct collected_message;
     transmit_work_item_t transmit_work;
     storage_confirm_event_t confirm_event;
-    uint8_t recovery_active;
-    uint8_t recovery_fail_count;
 
     QueueHandle_t sequence_queue;
     QueueHandle_t permission_queue;
@@ -140,81 +237,19 @@ static void storage_task(void *argument)
         task_block_forever();
     }
 
-    recovery_active = storage_result.has_pending;
-    recovery_fail_count = 0U;
-
-    if(recovery_active != 0U)
+    /*
+        2. 上电恢复：把扫描到的所有 pending 按顺序补发完，再放行采集。
+           起点是 storage_init() 找到的最旧 pending。
+    */
+    if(storage_result.has_pending != 0U)
     {
         transmit_work.message = storage_result.oldest_pending_message;
         transmit_work.flash_address =
             storage_result.oldest_pending_address;
 
-        (void)xQueueSend(transmit_queue,
-                         &transmit_work,
-                         portMAX_DELAY);
-    }
-
-    while(recovery_active != 0U)
-    {
-        uint8_t find_result;
-
-        if(xQueueReceive(confirm_queue,
-                         &confirm_event,
-                         portMAX_DELAY) != pdPASS)
-        {
-            task_block_forever();
-        }
-
-        if((confirm_event.sequence != transmit_work.message.sequence) ||
-           (confirm_event.flash_address != transmit_work.flash_address))
-        {
-            task_block_forever();
-        }
-
-        if(confirm_event.success == 0U)
-        {
-            recovery_fail_count++;
-
-            if(recovery_fail_count < 3U)
-            {
-                (void)xQueueSend(transmit_queue,
-                                 &transmit_work,
-                                 portMAX_DELAY);
-                continue;
-            }
-
-            recovery_active = 0U;
-            break;
-        }
-
-        if(storage_confirm(confirm_event.flash_address,
-                           confirm_event.sequence) != STORAGE_SUCCESS)
-        {
-            task_block_forever();
-        }
-
-        find_result = storage_find_next_pending(
-            confirm_event.flash_address,
-            &transmit_work.message,
-            &transmit_work.flash_address);
-
-        if(find_result == STORAGE_SUCCESS)
-        {
-            recovery_fail_count = 0U;
-
-            (void)xQueueSend(transmit_queue,
-                             &transmit_work,
-                             portMAX_DELAY);
-            continue;
-        }
-
-        if(find_result == STORAGE_NO_PENDING)
-        {
-            recovery_active = 0U;
-            break;
-        }
-
-        task_block_forever();
+        storage_replay_pending(transmit_work,
+                               transmit_queue,
+                               confirm_queue);
     }
 
     if(storage_write_pending_ready() != STORAGE_SUCCESS)
@@ -254,6 +289,25 @@ static void storage_task(void *argument)
         }
 
         /*
+            运行期链路恢复：TransmitTask 在 TCP 重连成功后置 link_restored。
+            这里把当前所有 pending 补发一遍（起点取地址最旧的一条），
+            补完再回到正常采集。补发期间 CollectTask 停在许可等待上，不会被饿着。
+        */
+        if(link_restored != 0U)
+        {
+            link_restored = 0U;
+
+            if(storage_find_oldest_pending(&transmit_work.message,
+                                           &transmit_work.flash_address)
+               == STORAGE_SUCCESS)
+            {
+                storage_replay_pending(transmit_work,
+                                       transmit_queue,
+                                       confirm_queue);
+            }
+        }
+
+        /*
             4. 等待 CollectTask 的新采样。
             最多等待 100 ms；这样没有新采样时也会回来检查确认队列。
             FreeRTOS 当前没有启用 Queue Set，不能同时永久阻塞在两条队列上。
@@ -266,6 +320,13 @@ static void storage_task(void *argument)
                                      &transmit_work.flash_address)
                == STORAGE_SUCCESS)
             {
+                /* 调试：显示本次写入 Flash 的内容与地址。 */
+                printf("[storage] seq=%lu temp=%d scale=%d addr=0x%06lX\r\n",
+                       (unsigned long)collected_message.sequence,
+                       (int)collected_message.temperature,
+                       (int)collected_message.temperature_scale,
+                       (unsigned long)transmit_work.flash_address);
+
                 transmit_work.message = collected_message;
 
                 /*
@@ -306,7 +367,7 @@ void storage_task_create(void)
 {
     storage_task_handle = xTaskCreateStatic(storage_task,
                                             "storage",
-                                            256,
+                                            512,
                                             NULL,
                                             4,//storage任务我希望他可以上电后就启动，因此设置为最高优先级
                                             storage_task_stack,
@@ -379,6 +440,13 @@ static void collect_task(void *argument)
 
         if(message_collect(&message) == MESSAGE_SUCCESS)
         {
+            /* 调试：显示本次采集到的内容。 */
+            printf("[collect] seq=%lu temp=%d scale=%d uptime=%lu\r\n",
+                   (unsigned long)message.sequence,
+                   (int)message.temperature,
+                   (int)message.temperature_scale,
+                   (unsigned long)message.sample_uptime_ms);
+
             /*
                 队列中复制完整 Message。
                 CollectTask 此后不关心 Flash 地址、CRC、pending 状态。
@@ -400,13 +468,13 @@ static void collect_task(void *argument)
 }
 
 static StaticTask_t collect_task_tcb;
-static StackType_t collect_task_stack[256];
+static StackType_t collect_task_stack[512];   /* 512：任务内调用 printf，栈需求变大 */
 
 void collect_task_create(void)
 {
     collect_task_handle = xTaskCreateStatic(collect_task,
                                             "collect",
-                                            256,
+                                            512,
                                             NULL,
                                             3,
                                             collect_task_stack,
@@ -535,6 +603,7 @@ static void transmit_task(void *argument)
 {
     transmit_work_item_t transmit_work;
     uint8_t transmit_success;
+    TickType_t now_tick;
     QueueHandle_t transmit_queue;
     QueueHandle_t confirm_queue;
     QueueHandle_t tcp_ack_queue;
@@ -587,6 +656,25 @@ static void transmit_task(void *argument)
 
             if(transmit_success == 0U)
             {
+                /*
+                    TCP 这条路失败：多半是链路已经断了。
+                    低频尝试重连；一旦重连成功，置 link_restored 通知
+                    StorageTask 把积压的 pending 补发一遍。
+                    tick 冷却避免网关一直不在时，每条记录都卡在 CIPSTART 上。
+                */
+                now_tick = xTaskGetTickCount();
+
+                if((now_tick - last_reconnect_tick) >=
+                   pdMS_TO_TICKS(TCP_RECONNECT_COOLDOWN_MS))
+                {
+                    last_reconnect_tick = now_tick;
+
+                    if(tcp_try_reconnect() == TCP_SUCCESS)
+                    {
+                        link_restored = 1U;
+                    }
+                }
+
                 transmit_can_receive_queue_clear(can_receive_queue);
                 if(can_frame_transmit(board_id,
                                       &transmit_work.message) == CAN_TRANSMIT_SUCCESS)
@@ -599,6 +687,13 @@ static void transmit_task(void *argument)
                 }
             }
 
+            /* 调试：显示本次发送的内容与结果（OK/FAIL）。 */
+            printf("[transmit] seq=%lu temp=%d scale=%d result=%s\r\n",
+                   (unsigned long)transmit_work.message.sequence,
+                   (int)transmit_work.message.temperature,
+                   (int)transmit_work.message.temperature_scale,
+                   (transmit_success != 0U) ? "OK" : "FAIL");
+
             transmit_storage_result_send(confirm_queue,
                                          &transmit_work,
                                          transmit_success);
@@ -607,14 +702,14 @@ static void transmit_task(void *argument)
 }
 
 static StaticTask_t transmit_task_tcb;
-static StackType_t transmit_task_stack[256];
+static StackType_t transmit_task_stack[512];   /* 512：任务内调用 printf，栈需求变大 */
 static TaskHandle_t transmit_task_handle;
 
 void transmit_task_create(void)
 {
     transmit_task_handle = xTaskCreateStatic(transmit_task,
                                              "transmit",
-                                             256,
+                                             512,
                                              NULL,
                                              3,
                                              transmit_task_stack,
@@ -648,7 +743,7 @@ static void stack_monitor_task(void *argument)
                (unsigned long)uxTaskGetStackHighWaterMark(led2_task_handle),
                (unsigned long)uxTaskGetStackHighWaterMark(NULL));
 
-        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(5000U));
+        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(30000U));
     }
 }
 
