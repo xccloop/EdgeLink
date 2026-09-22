@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE flythings>
+
+<manifest platform="T113STDCXX">
+    <dependencies enableOnPlatforms="T113STDCXX">
+        <package id="easyui" version="^2.2.0"/>
+        <package id="log" version="0.0.0"/>
+        <package id="zkhardware" version="0.0.0"/>
+        <package id="zknet" version="0.0.0"/>
+    </dependencies>
+</manifest>

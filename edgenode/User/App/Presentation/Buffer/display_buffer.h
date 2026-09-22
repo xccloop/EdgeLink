@@ -7,6 +7,17 @@
 #define DISPLAY_BUFFER_FAIL     0U
 
 /*
+    提交像素段的结果必须区分“缓冲满了”和“发生错误”。
+    前者不是丢行条件，Render应保留当前行，下一次服务时继续提交。
+*/
+typedef enum
+{
+    DISPLAY_SUBMIT_OK = 0U,
+    DISPLAY_SUBMIT_BUSY,
+    DISPLAY_SUBMIT_ERROR
+} display_submit_enum;
+
+/*
     display_buffer_init()：紧跟 IPS 初始化后调用一次。
     display_render_line()：每准备好一行就调用；成功才 y++。
     display_buffer_service()：主循环里反复调用，它负责检查 DMA 是否完成并启动等待的下一行。
@@ -21,15 +32,22 @@ uint8_t display_buffer_init(void);
 
 /*
     将一行320像素的RGB565数据提交给双行缓冲。data至少要有640字节，y是逻辑横屏坐标。
-    返回1表示数据已经复制到APP缓冲区；返回0表示两块缓冲区均不可写或IPS发生错误，
-    此时不要丢掉当前这一行，应先继续调用display_buffer_service()，稍后重试。
+    返回DISPLAY_SUBMIT_OK表示数据已经复制到APP缓冲区；
+    返回DISPLAY_SUBMIT_BUSY表示两块缓冲区均不可写，此时不要丢掉当前这一行，
+    应先继续调用display_buffer_service()，稍后重试；
+    返回DISPLAY_SUBMIT_ERROR表示参数或IPS状态异常。
 */
-uint8_t display_render_line(const uint8_t *data, uint16_t y);
+display_submit_enum display_render_line(const uint8_t *data, uint16_t y);
 
 /* 推进DMA和READY队列，不等待DMA忙状态；APP主循环应周期性调用。 */
 uint8_t display_buffer_service(void);
 
 /* 一帧的最后一行提交后调用，等待最后的DMA完成。 */
 uint8_t display_wait_frame_done(void);
+
+display_submit_enum display_render_span(const uint8_t *data,
+                                        uint16_t x,
+                                        uint16_t y,
+                                        uint16_t width);
 
 #endif

@@ -27,7 +27,11 @@ typedef enum
 typedef struct
 {
     uint8_t data[IPS_DMA_LINE_BYTES];
+
+    uint16_t x;
     uint16_t y;
+    uint16_t width;//在缓冲区新增长度而不是固定填满一整个
+
     display_buffer_state_enum state;
 } display_buffer_slot_struct;
 
@@ -165,8 +169,11 @@ uint8_t display_buffer_service(void)
     }
 
     next_index = display_ready_queue[0];
-    flush_result = ips_flush_line(display_buffer_slot[next_index].data, 0U,
-                                  display_buffer_slot[next_index].y, IPS_WIDTH);
+    flush_result = ips_flush_line(
+        display_buffer_slot[next_index].data,
+        display_buffer_slot[next_index].x,
+        display_buffer_slot[next_index].y,
+        display_buffer_slot[next_index].width);
     if(flush_result == IPS_FLUSH_BUSY)
     {
         return DISPLAY_BUFFER_SUCCESS;
@@ -184,46 +191,12 @@ uint8_t display_buffer_service(void)
     return DISPLAY_BUFFER_SUCCESS;
 }
 
-/*
-    这是APP每准备好一行RGB565像素后调用的提交入口。
-
-    它先调用display_buffer_service()回收已经发送完的缓冲区，
-    再把data复制到一块FREE行缓冲区，最后加入READY队列。
-    之所以要复制，而不是让DMA直接读取data，是因为调用者通常会复用自己的临时绘图数组；
-    复制到A或B后，调用者就可以立刻继续生成下一行。
-
-    这里返回成功只表示APP已经安全地交出这行数据，不保证DMA已经立刻开始。
-    如果两个缓冲区分别处于READY和TRANSMITTING，说明CPU已经比SPI快，
-    此时返回0，APP稍后调用display_buffer_service()并重试当前这一行即可。
-*/
-uint8_t display_render_line(const uint8_t *data, uint16_t y)
+display_submit_enum display_render_line(const uint8_t *data, uint16_t y)
 {
-    uint8_t free_index;
-
-    if((data == 0) || (y >= IPS_HEIGHT))
-    {
-        return DISPLAY_BUFFER_FAIL;
-    }
-
-    if(display_buffer_service() == DISPLAY_BUFFER_FAIL)
-    {
-        return DISPLAY_BUFFER_FAIL;
-    }
-
-    free_index = display_buffer_free_index_get();
-    if(free_index == DISPLAY_BUFFER_INVALID_INDEX)
-    {
-        return DISPLAY_BUFFER_FAIL;
-    }
-
-    memcpy(display_buffer_slot[free_index].data, data, IPS_DMA_LINE_BYTES);
-    display_buffer_slot[free_index].y = y;
-    display_buffer_slot[free_index].state = DISPLAY_BUFFER_READY;
-    display_ready_queue[display_ready_count] = free_index;
-    display_ready_count++;
-
-    /* 第一行通常会在这里直接启动；DMA忙时保留READY状态，下一次service再启动。 */
-    return display_buffer_service();
+    return display_render_span(data,
+                                0U,
+                                y,
+                                IPS_WIDTH);
 }
 
 /*
@@ -251,4 +224,56 @@ uint8_t display_wait_frame_done(void)
     }
 
     return DISPLAY_BUFFER_SUCCESS;
+}
+
+/*
+    此函数用于
+*/
+display_submit_enum display_render_span(const uint8_t *data,
+                                        uint16_t x,
+                                        uint16_t y,
+                                        uint16_t width)
+{
+    uint8_t free_index;
+
+    if((data == 0) ||
+       (width == 0U) ||
+       (y >= IPS_HEIGHT) ||
+       (x >= IPS_WIDTH) ||
+       (width > (IPS_WIDTH - x)))
+    {
+        return DISPLAY_SUBMIT_ERROR;
+    }
+
+    if(display_buffer_service() == DISPLAY_BUFFER_FAIL)
+    {
+        return DISPLAY_SUBMIT_ERROR;
+    }
+
+    free_index = display_buffer_free_index_get();
+
+    if(free_index == DISPLAY_BUFFER_INVALID_INDEX)
+    {
+        return DISPLAY_SUBMIT_BUSY;
+    }
+
+    memcpy(display_buffer_slot[free_index].data,
+           data,
+           width * 2U);
+
+    display_buffer_slot[free_index].x = x;
+    display_buffer_slot[free_index].y = y;
+    display_buffer_slot[free_index].width = width;
+
+    display_buffer_slot[free_index].state = DISPLAY_BUFFER_READY;
+
+    display_ready_queue[display_ready_count] = free_index;
+    display_ready_count++;
+
+    if(display_buffer_service() == DISPLAY_BUFFER_FAIL)
+    {
+        return DISPLAY_SUBMIT_ERROR;
+    }
+
+    return DISPLAY_SUBMIT_OK;
 }
