@@ -249,3 +249,42 @@ TCP 与 CAN 都承载同一个 Message，却不强行共用同一份线上帧：
 ## 项目边界
 
 `edgedash/` 是独立的 EasyUI 仪表板原型，不属于本 README 的交付说明。本文只陈述当前仓库源码及已保留实机记录能支持的结论；尚未完成的验证明确保留为下一步，不用架构设计或截图替代。
+
+## 硬件原理图与 PCB
+
+`docs/PCB/` 保存 EdgeNode 的硬件设计预览，分为核心控制板（`CORE`）和扩展采集板（`EXP`）。下面的图片用于让读者快速核对软件所依赖的电源、MCU、调试和外设接口边界；它们是原理图/布局导出，不代替已焊接板的上电、信号完整性或外设实测结论。
+
+### 核心控制板（CORE）
+
+核心板以 GD32F103RCT6 为控制中心，提供 Type-C 供电与 CH340 串口、SWD 下载接口、8 MHz 与 32.768 kHz 时钟、复位/唤醒按键、3.3 V 降压电源及向扩展板引出的排针接口。
+
+![核心控制板原理图：GD32、供电、时钟、SWD、CH340 与扩展排针](docs/PCB/CORE/P1.png)
+
+### 扩展采集板（EXP）
+
+扩展板将网络、现场总线、采集、显示和供电模块集中到核心板接口：
+
+- ESP-12S Wi-Fi 与 2.4 GHz 天线区域，对应节点的 ESP-AT TCP 通路；
+- SN65HVD230 CAN 收发器，对应 TCP 未确认时的 CAN 回退设计；
+- SPI Flash 与 BMP280 接口，对应本地 pending 日志与温度采样；
+- IPS 显示接口、RS485、12 V 电压采样、按键、PWM 和 12 V → 5 V 电源链路。
+
+![扩展采集板原理图第 1 页：核心板接口、Wi-Fi、CAN、LED 与 5 V 转 3.3 V](docs/PCB/EXP/P1.png)
+
+![扩展采集板原理图第 2 页：SPI Flash、BMP280、IPS、RS485、12 V 采样、PWM、按键与 12 V 转 5 V](docs/PCB/EXP/P2.png)
+
+### PCB 布局预览
+
+原理图说明电气连接，PCB 截图说明模块在两块板上的实际布局和走线分区。`PCB_ON` 为顶层预览，`PCB_OFF` 为底层预览；完整导出文件位于 [`docs/PCB/CORE/`](docs/PCB/CORE/) 与 [`docs/PCB/EXP/`](docs/PCB/EXP/)。
+
+#### 核心控制板 PCB
+
+![核心控制板 PCB 顶层布局](docs/PCB/CORE/PCB_ON.png)
+
+![核心控制板 PCB 底层布局](docs/PCB/CORE/PCB_OFF.png)
+
+#### 扩展采集板 PCB
+
+![扩展采集板 PCB 顶层布局](docs/PCB/EXP/PCB_ON.png)
+
+![扩展采集板 PCB 底层布局](docs/PCB/EXP/PCB_OFF.png)
