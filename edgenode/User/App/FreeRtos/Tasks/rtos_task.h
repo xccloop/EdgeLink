@@ -6,4 +6,5 @@ void storage_task_create(void);
 void collect_task_create(void);
 void transmit_task_create(void);
 void stack_monitor_task_create(void);
+void hmi_task_create(void);
 #endif

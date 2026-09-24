@@ -4,6 +4,8 @@
 #include "gd32f10x_rcu.h"
 #include "gd32f10x_exti.h"
 
+static volatile uint8_t key_pending_events;
+
 /*
     这个文件我们来进行key的相关操作，主要是检测是否按下，这三个按键都是低电平有效
     | PA15 | KEY1
@@ -36,7 +38,7 @@
 #define KEY3_PORT GPIOC
 #define KEY3_PIN GPIO_PIN_1
 
-void key_init()
+void key_init(void)
 {
     //这次的初始化要考虑到的有，时钟和中断
     rcu_periph_clock_enable(RCU_GPIOA);
@@ -96,4 +98,32 @@ void key_init()
 
     //KEY的EXTI NVIC优先级由board_config_init统一配置。
     printf("\nKEY init finsh\n");
+}
+
+void key_event_record_from_isr(key_event_t event)
+{
+    if((event < KEY_EVENT_1) || (event > KEY_EVENT_3))
+    {
+        return;
+    }
+
+    key_pending_events |= (uint8_t)(1U << ((uint8_t)event - 1U));
+}
+
+uint8_t key_event_take(void)
+{
+    uint32_t interrupt_mask;
+    uint8_t events;
+
+    /*
+        任务读出并清除位图必须是一段原子操作：否则ISR可能刚记录KEY2，
+        任务随后写0会把KEY2丢掉。恢复进入前的PRIMASK，兼容调用方已有
+        临界区的情况。
+    */
+    interrupt_mask = __get_PRIMASK();
+    __disable_irq();
+    events = key_pending_events;
+    key_pending_events = 0U;
+    __set_PRIMASK(interrupt_mask);
+    return events;
 }

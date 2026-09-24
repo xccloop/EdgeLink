@@ -9,10 +9,106 @@
 #include "Config/config.h"
 #include "Protocol/Tcp/tcp_frame.h"
 #include "Protocol/Can/can_frame.h"
+#include "Presentation/Hmi/Control/hmi_control.h"
+#include "KEY/key.h"
+#include "board_time.h"
 #include <stdint.h>
 #include <stdio.h>
 #include "queue.h"
 #include "FreeRtos/Queue/rtos_queue.h"
+
+/*
+    HMI只拥有显示栈和按键事件：没有读取传感器、Flash、TCP或业务队列。
+    后续需要显示真实数据时，应由这个任务接收一份显示快照后调用
+    hmi_set_view_data()，而不是让其他任务直接操作HMI。
+*/
+#define HMI_TASK_PERIOD_MS       1U
+#define HMI_KEY_DEBOUNCE_MS      50U
+#define HMI_ERROR_RETRY_MS       100U
+#define HMI_TASK_STACK_DEPTH     512U
+
+static StaticTask_t hmi_task_tcb;
+static StackType_t hmi_task_stack[HMI_TASK_STACK_DEPTH];
+static TaskHandle_t hmi_task_handle;
+
+static uint8_t hmi_key_accept(uint8_t key_bit, uint32_t now_ms,
+                              uint32_t *last_key_ms, uint8_t *key_seen)
+{
+    if((key_seen[key_bit] != 0U) &&
+       ((uint32_t)(now_ms - last_key_ms[key_bit]) < HMI_KEY_DEBOUNCE_MS))
+    {
+        return 0U;
+    }
+
+    key_seen[key_bit] = 1U;
+    last_key_ms[key_bit] = now_ms;
+    return 1U;
+}
+
+static void hmi_task(void *argument)
+{
+    TickType_t last_wake_time;
+    TickType_t error_retry_tick = 0U;
+    uint32_t last_key_ms[3] = {0U, 0U, 0U};
+    uint8_t key_seen[3] = {0U, 0U, 0U};
+    uint8_t waiting_for_error_retry = 0U;
+
+    (void)argument;
+    hmi_init(board_id);
+    last_wake_time = xTaskGetTickCount();
+
+    while(1)
+    {
+        uint8_t events = key_event_take();
+        uint32_t now_ms = board_systick_ms;
+
+        if((events & 0x01U) != 0U && hmi_key_accept(0U, now_ms, last_key_ms, key_seen))
+        {
+            hmi_key_event(HMI_KEY_PREVIOUS);
+        }
+        if((events & 0x02U) != 0U && hmi_key_accept(1U, now_ms, last_key_ms, key_seen))
+        {
+            hmi_key_event(HMI_KEY_NEXT);
+        }
+        if((events & 0x04U) != 0U && hmi_key_accept(2U, now_ms, last_key_ms, key_seen))
+        {
+            hmi_key_event(HMI_KEY_CONFIRM);
+        }
+
+        /* 即使没有按键，也要继续推进双行缓冲和最后一笔DMA。 */
+        if(waiting_for_error_retry == 0U)
+        {
+            if(hmi_service() == 0U)
+            {
+                /*
+                    DMA/SPI持续故障时不能每1ms重画一帧。保持错误锁存，
+                    100ms后才请求一次恢复；等待时仍可接收按键事件。
+                */
+                error_retry_tick = xTaskGetTickCount() + pdMS_TO_TICKS(HMI_ERROR_RETRY_MS);
+                waiting_for_error_retry = 1U;
+            }
+        }
+        else if((TickType_t)(xTaskGetTickCount() - error_retry_tick) < (TickType_t)0x80000000UL)
+        {
+            hmi_refresh();
+            waiting_for_error_retry = 0U;
+        }
+
+        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(HMI_TASK_PERIOD_MS));
+    }
+}
+
+void hmi_task_create(void)
+{
+    hmi_task_handle = xTaskCreateStatic(hmi_task,
+                                        "hmi",
+                                        HMI_TASK_STACK_DEPTH,
+                                        NULL,
+                                        2U,
+                                        hmi_task_stack,
+                                        &hmi_task_tcb);
+    configASSERT(hmi_task_handle != NULL);
+}
 
 /* 初始化失败时本任务不再访问外设或队列，但继续阻塞让其他任务可以运行。 */
 static void task_block_forever(void)
@@ -735,10 +831,11 @@ static void stack_monitor_task(void *argument)
 
     while(1)
     {
-        printf("stack free words: storage=%lu collect=%lu transmit=%lu led1=%lu led2=%lu monitor=%lu\r\n",
+        printf("stack free words: storage=%lu collect=%lu transmit=%lu hmi=%lu led1=%lu led2=%lu monitor=%lu\r\n",
                (unsigned long)uxTaskGetStackHighWaterMark(storage_task_handle),
                (unsigned long)uxTaskGetStackHighWaterMark(collect_task_handle),
                (unsigned long)uxTaskGetStackHighWaterMark(transmit_task_handle),
+               (unsigned long)uxTaskGetStackHighWaterMark(hmi_task_handle),
                (unsigned long)uxTaskGetStackHighWaterMark(led1_task_handle),
                (unsigned long)uxTaskGetStackHighWaterMark(led2_task_handle),
                (unsigned long)uxTaskGetStackHighWaterMark(NULL));

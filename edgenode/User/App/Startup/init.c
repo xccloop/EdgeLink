@@ -56,18 +56,18 @@ uint8_t init_all(void)
     printf("BMP280 init success\r\n");
 
     /* display_buffer只管理APP双行缓冲，前提是IPS的SPI2和DMA已经成功初始化。 */
-    //if(ips_init() == IPS_FAIL)
-    //{
-    //    printf("IPS init fail\r\n");
-    //    return INIT_ALL_FAIL;
-    //}
-    //printf("IPS init success\r\n");
-    // if(display_buffer_init() == DISPLAY_BUFFER_FAIL)
-    // {
-    //     printf("display buffer init fail\r\n");
-    //     return INIT_ALL_FAIL;
-    // }
-    // printf("display buffer init success\r\n");
+    if(ips_init() == IPS_FAIL)
+    {
+        printf("IPS init fail\r\n");
+        return INIT_ALL_FAIL;
+    }
+    printf("IPS init success\r\n");
+    if(display_buffer_init() == DISPLAY_BUFFER_FAIL)
+    {
+        printf("display buffer init fail\r\n");
+        return INIT_ALL_FAIL;
+    }
+    printf("display buffer init success\r\n");
 
     return INIT_ALL_SUCCESS;
 }

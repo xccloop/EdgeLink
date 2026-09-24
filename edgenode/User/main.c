@@ -42,6 +42,7 @@ int main(void)
     storage_task_create();
     collect_task_create();
     transmit_task_create();
+    hmi_task_create();
     led_tasks_create();
     stack_monitor_task_create();
     printf("Edgenode start\r\n");
