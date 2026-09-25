@@ -9,106 +9,10 @@
 #include "Config/config.h"
 #include "Protocol/Tcp/tcp_frame.h"
 #include "Protocol/Can/can_frame.h"
-#include "Presentation/Hmi/Control/hmi_control.h"
-#include "KEY/key.h"
-#include "board_time.h"
 #include <stdint.h>
 #include <stdio.h>
 #include "queue.h"
 #include "FreeRtos/Queue/rtos_queue.h"
-
-/*
-    HMI只拥有显示栈和按键事件：没有读取传感器、Flash、TCP或业务队列。
-    后续需要显示真实数据时，应由这个任务接收一份显示快照后调用
-    hmi_set_view_data()，而不是让其他任务直接操作HMI。
-*/
-#define HMI_TASK_PERIOD_MS       1U
-#define HMI_KEY_DEBOUNCE_MS      50U
-#define HMI_ERROR_RETRY_MS       100U
-#define HMI_TASK_STACK_DEPTH     512U
-
-static StaticTask_t hmi_task_tcb;
-static StackType_t hmi_task_stack[HMI_TASK_STACK_DEPTH];
-static TaskHandle_t hmi_task_handle;
-
-static uint8_t hmi_key_accept(uint8_t key_bit, uint32_t now_ms,
-                              uint32_t *last_key_ms, uint8_t *key_seen)
-{
-    if((key_seen[key_bit] != 0U) &&
-       ((uint32_t)(now_ms - last_key_ms[key_bit]) < HMI_KEY_DEBOUNCE_MS))
-    {
-        return 0U;
-    }
-
-    key_seen[key_bit] = 1U;
-    last_key_ms[key_bit] = now_ms;
-    return 1U;
-}
-
-static void hmi_task(void *argument)
-{
-    TickType_t last_wake_time;
-    TickType_t error_retry_tick = 0U;
-    uint32_t last_key_ms[3] = {0U, 0U, 0U};
-    uint8_t key_seen[3] = {0U, 0U, 0U};
-    uint8_t waiting_for_error_retry = 0U;
-
-    (void)argument;
-    hmi_init(board_id);
-    last_wake_time = xTaskGetTickCount();
-
-    while(1)
-    {
-        uint8_t events = key_event_take();
-        uint32_t now_ms = board_systick_ms;
-
-        if((events & 0x01U) != 0U && hmi_key_accept(0U, now_ms, last_key_ms, key_seen))
-        {
-            hmi_key_event(HMI_KEY_PREVIOUS);
-        }
-        if((events & 0x02U) != 0U && hmi_key_accept(1U, now_ms, last_key_ms, key_seen))
-        {
-            hmi_key_event(HMI_KEY_NEXT);
-        }
-        if((events & 0x04U) != 0U && hmi_key_accept(2U, now_ms, last_key_ms, key_seen))
-        {
-            hmi_key_event(HMI_KEY_CONFIRM);
-        }
-
-        /* 即使没有按键，也要继续推进双行缓冲和最后一笔DMA。 */
-        if(waiting_for_error_retry == 0U)
-        {
-            if(hmi_service() == 0U)
-            {
-                /*
-                    DMA/SPI持续故障时不能每1ms重画一帧。保持错误锁存，
-                    100ms后才请求一次恢复；等待时仍可接收按键事件。
-                */
-                error_retry_tick = xTaskGetTickCount() + pdMS_TO_TICKS(HMI_ERROR_RETRY_MS);
-                waiting_for_error_retry = 1U;
-            }
-        }
-        else if((TickType_t)(xTaskGetTickCount() - error_retry_tick) < (TickType_t)0x80000000UL)
-        {
-            hmi_refresh();
-            waiting_for_error_retry = 0U;
-        }
-
-        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(HMI_TASK_PERIOD_MS));
-    }
-}
-
-void hmi_task_create(void)
-{
-    hmi_task_handle = xTaskCreateStatic(hmi_task,
-                                        "hmi",
-                                        HMI_TASK_STACK_DEPTH,
-                                        NULL,
-                                        2U,
-                                        hmi_task_stack,
-                                        &hmi_task_tcb);
-    configASSERT(hmi_task_handle != NULL);
-}
 
 /* 初始化失败时本任务不再访问外设或队列，但继续阻塞让其他任务可以运行。 */
 static void task_block_forever(void)
@@ -118,18 +22,6 @@ static void task_block_forever(void)
         vTaskDelay(pdMS_TO_TICKS(1000U));
     }
 }
-
-/*
-    TransmitTask 在 TCP 重连成功后置 1；StorageTask 看到后把积压的 pending 补发一遍。
-    跨任务单字节标志：即使读写竞争，最坏也只是重复补发一次，而确认 / Hub 去重是幂等的。
-*/
-static volatile uint8_t link_restored;
-
-/* 上次尝试 TCP 重连的 tick，用来给重连加冷却，避免链路长时间不可用时反复卡住发送任务。 */
-static TickType_t last_reconnect_tick;
-
-/* 两条记录之间至少间隔这么久才再试一次重连。 */
-#define TCP_RECONNECT_COOLDOWN_MS 5000U
 
 static StaticTask_t led1_task_tcb;
 static StackType_t led1_task_stack[256];
@@ -208,8 +100,7 @@ void led_tasks_create(void)
       - 连续 3 次失败 → 放弃这一条直接返回（留给下次补发或下次上电），
         不让一条补不动的数据把补发流程永久卡死；
       - 全部 pending 确认完 → 返回。
-    起点既可能来自 storage_init() 的扫描结果（上电恢复），
-    也可能来自 storage_find_oldest_pending()（运行期链路恢复）。
+    此函数只由 storage_init() 扫描到的 pending 调用，用于上电恢复。
 */
 static void storage_replay_pending(transmit_work_item_t transmit_work,
                                    QueueHandle_t transmit_queue,
@@ -381,25 +272,7 @@ static void storage_task(void *argument)
                 {
                     task_block_forever();
                 }
-            }
-        }
 
-        /*
-            运行期链路恢复：TransmitTask 在 TCP 重连成功后置 link_restored。
-            这里把当前所有 pending 补发一遍（起点取地址最旧的一条），
-            补完再回到正常采集。补发期间 CollectTask 停在许可等待上，不会被饿着。
-        */
-        if(link_restored != 0U)
-        {
-            link_restored = 0U;
-
-            if(storage_find_oldest_pending(&transmit_work.message,
-                                           &transmit_work.flash_address)
-               == STORAGE_SUCCESS)
-            {
-                storage_replay_pending(transmit_work,
-                                       transmit_queue,
-                                       confirm_queue);
             }
         }
 
@@ -699,7 +572,6 @@ static void transmit_task(void *argument)
 {
     transmit_work_item_t transmit_work;
     uint8_t transmit_success;
-    TickType_t now_tick;
     QueueHandle_t transmit_queue;
     QueueHandle_t confirm_queue;
     QueueHandle_t tcp_ack_queue;
@@ -752,25 +624,6 @@ static void transmit_task(void *argument)
 
             if(transmit_success == 0U)
             {
-                /*
-                    TCP 这条路失败：多半是链路已经断了。
-                    低频尝试重连；一旦重连成功，置 link_restored 通知
-                    StorageTask 把积压的 pending 补发一遍。
-                    tick 冷却避免网关一直不在时，每条记录都卡在 CIPSTART 上。
-                */
-                now_tick = xTaskGetTickCount();
-
-                if((now_tick - last_reconnect_tick) >=
-                   pdMS_TO_TICKS(TCP_RECONNECT_COOLDOWN_MS))
-                {
-                    last_reconnect_tick = now_tick;
-
-                    if(tcp_try_reconnect() == TCP_SUCCESS)
-                    {
-                        link_restored = 1U;
-                    }
-                }
-
                 transmit_can_receive_queue_clear(can_receive_queue);
                 if(can_frame_transmit(board_id,
                                       &transmit_work.message) == CAN_TRANSMIT_SUCCESS)
@@ -831,11 +684,10 @@ static void stack_monitor_task(void *argument)
 
     while(1)
     {
-        printf("stack free words: storage=%lu collect=%lu transmit=%lu hmi=%lu led1=%lu led2=%lu monitor=%lu\r\n",
+        printf("stack free words: storage=%lu collect=%lu transmit=%lu led1=%lu led2=%lu monitor=%lu\r\n",
                (unsigned long)uxTaskGetStackHighWaterMark(storage_task_handle),
                (unsigned long)uxTaskGetStackHighWaterMark(collect_task_handle),
                (unsigned long)uxTaskGetStackHighWaterMark(transmit_task_handle),
-               (unsigned long)uxTaskGetStackHighWaterMark(hmi_task_handle),
                (unsigned long)uxTaskGetStackHighWaterMark(led1_task_handle),
                (unsigned long)uxTaskGetStackHighWaterMark(led2_task_handle),
                (unsigned long)uxTaskGetStackHighWaterMark(NULL));

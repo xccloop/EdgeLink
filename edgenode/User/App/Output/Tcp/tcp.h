@@ -24,9 +24,6 @@ uint8_t tcp_init(const tcp_config_struct *config);
 /* tcp_init()成功返回后为TCP_SUCCESS；收到关闭事件的在线状态检测后续再单独实现。 */
 uint8_t tcp_connected_get(void);
 
-/* 运行期链路断开后重建到服务器的TCP连接；成功返回TCP_SUCCESS并恢复在线状态。 */
-uint8_t tcp_try_reconnect(void);
-
 /* 已建连时按ESP-AT普通模式发送一段原始字节；只有收到SEND OK才报告成功。 */
 uint8_t tcp_data_send(const uint8_t *data, uint8_t length);
 

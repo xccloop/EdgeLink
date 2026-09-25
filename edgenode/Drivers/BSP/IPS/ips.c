@@ -3,6 +3,7 @@
 #include "gd32f10x_gpio.h"
 #include "gd32f10x_spi.h"
 #include "gd32f10x_dma.h"
+#include "gd32f10x_dbg.h"
 #include "board_time.h"
 
 /*
@@ -44,7 +45,11 @@
     ips_dma_abort()在超时或DMA错误时统一收尾，清除标志、释放active并拉高CS；ips_spi_wait_tbe()等待SPI发送缓冲区为空，ips_spi_wait_idle()等待SPI移位寄存器真正空闲，
     二者都带超时；ips_write_command_data()在一次CS有效期内先拉低DC发命令、再拉高DC发参数，最后等SPI空闲并拉高CS，所有ST7789命令都通过它发送。
     ips_init()打开GPIOB、GPIOC、SPI2、DMA1时钟，把PB3/PB5配成复用推挽，把CS/DC/RST/BLK配成推挽输出并先设安全电平
-    ，配置SPI2为Mode0、主机、只发送、8bit、9MHz、软件NSS，配置DMA1_CH1为内存到外设、内存地址递增、8bit宽度、外设地址固定为SPI_DATA(SPI2)、高优先级，
+    ，配置SPI2为Mode0、主机、单向发送（SPI_TRANSMODE_BDTRANSMIT：数据线为MOSI、MISO不使用）、8bit、9MHz、软件NSS。屏幕只接MOSI，
+    单向发送下没有接收通路，所以不需要DMA1_CH0，也不需要任何排空回读字节的代码。
+    关键：ST7789只在第8个SCL上升沿采样D/CX，所以命令字节必须完全移完之后才能抬高DC。ips_spi_write_byte()用ips_spi_wait_idle()
+    轮询SPI_FLAG_TRANS来保证这一点（TRANS清零即代表这一字节已经移出）；若改成只等TBE就抬DC（实测），17条初始化命令会全部被当成参数收下，屏幕完全不显示。
+    配置DMA1_CH1为内存到外设、内存地址递增、8bit宽度、外设地址固定为SPI_DATA(SPI2)、高优先级，
     然后复位ST7789并依次发送软件复位、退出睡眠、RGB565、横屏扫描、打开显示等命令，最后打开背光并置ips_initialized。ips_dma_start()在每次刷行时被调用，
     它检查初始化状态、data指针、byte_count、DMA空闲状态，并确认整段源数据落在GD32F103RCT6的48KB SRAM范围内，同时确认SPI2不在传输，
     然后关闭DMA通道、重设内存地址和传输数量、清除旧标志、拉低CS、拉高DC、使能SPI2的DMA发送请求和DMA1_CH1，并记录超时时间。ips_dma_poll()用于轮询本次DMA是否完成，
@@ -101,6 +106,8 @@ typedef enum
     IPS_DMA_STATE_ERROR
 } ips_dma_state_enum;
 
+static uint8_t ips_spi_wait_idle(void);
+
 static void ips_dma_stop(void)
 {
     /* 先关闭DMA通道，再关闭SPI2的DMA发送请求，避免DMA在配置过程中继续搬运数据。 */
@@ -112,6 +119,7 @@ static void ips_dma_abort(void)
 {
     /* DMA或SPI异常时统一收尾，确保APP不会继续把这块缓冲区当作DMA占用。 */
     ips_dma_stop();
+    (void)ips_spi_wait_idle();
     dma_flag_clear(DMA1, DMA_CH1, DMA_FLAG_G);
     ips_dma_active = 0U;
     gpio_bit_set(IPS_CS_PORT, IPS_CS_PIN);
@@ -145,6 +153,24 @@ static uint8_t ips_spi_wait_idle(void)
     return IPS_SUCCESS;
 }
 
+static uint8_t ips_spi_write_byte(uint8_t value)
+{
+    if(ips_spi_wait_tbe() == IPS_FAIL)
+    {
+        return IPS_FAIL;
+    }
+
+    spi_i2s_data_transmit(SPI2, value);
+
+    /* 单向发送没有接收通路，等TRANS清零即可确认这一字节已经移完（也因此DC时机才对）。 */
+    if(ips_spi_wait_idle() == IPS_FAIL)
+    {
+        return IPS_FAIL;
+    }
+
+    return IPS_SUCCESS;
+}
+
 static uint8_t ips_write_command_data(uint8_t command, const uint8_t *data, uint8_t length)
 {
     uint8_t i;
@@ -154,23 +180,21 @@ static uint8_t ips_write_command_data(uint8_t command, const uint8_t *data, uint
     gpio_bit_reset(IPS_CS_PORT, IPS_CS_PIN);
     gpio_bit_reset(IPS_DC_PORT, IPS_DC_PIN);
 
-    if(ips_spi_wait_tbe() == IPS_FAIL)
+    if(ips_spi_write_byte(command) == IPS_FAIL)
     {
         success = IPS_FAIL;
     }
     else
     {
-        spi_i2s_data_transmit(SPI2, command);
         gpio_bit_set(IPS_DC_PORT, IPS_DC_PIN);
 
         for(i = 0U; i < length; i++)
         {
-            if(ips_spi_wait_tbe() == IPS_FAIL)
+            if(ips_spi_write_byte(data[i]) == IPS_FAIL)
             {
                 success = IPS_FAIL;
                 break;
             }
-            spi_i2s_data_transmit(SPI2, data[i]);
         }
     }
 
@@ -184,8 +208,21 @@ static uint8_t ips_write_command_data(uint8_t command, const uint8_t *data, uint
 
 uint8_t ips_init(void)
 {
-    const uint8_t pixel_format = 0x55U;
-    const uint8_t memory_access_control = 0xA0U;
+    const uint8_t pixel_format = 0x05U;
+    const uint8_t memory_access_control = 0x60U;
+    static const uint8_t porch_control[] = {0x05U, 0x05U, 0x00U, 0x33U, 0x33U};
+    static const uint8_t power_control[] = {0xA4U, 0xA1U};
+    static const uint8_t extra_timing[] = {0x09U, 0x09U, 0x08U};
+    static const uint8_t positive_gamma[] =
+    {
+        0xD0U, 0x05U, 0x09U, 0x09U, 0x08U, 0x14U, 0x28U,
+        0x33U, 0x3FU, 0x07U, 0x13U, 0x14U, 0x28U, 0x30U
+    };
+    static const uint8_t negative_gamma[] =
+    {
+        0xD0U, 0x05U, 0x09U, 0x09U, 0x08U, 0x03U, 0x24U,
+        0x32U, 0x32U, 0x3BU, 0x14U, 0x13U, 0x28U, 0x2FU
+    };
 
     /* IPS初始化会重置SPI、DMA和屏幕，DMA正在读取APP缓冲区时绝对不能重复执行。 */
     if((ips_dma_active != 0U) || (ips_initialized != 0U))
@@ -200,6 +237,7 @@ uint8_t ips_init(void)
     rcu_periph_clock_enable(RCU_DMA1);
 
     /* PB3默认是JTAG的JTDO。board_config_init已经关闭JTAG、保留SWD，所以这里可以作为SPI2时钟。 */
+    dbg_trace_pin_disable();
     gpio_init(IPS_SCK_PORT, GPIO_MODE_AF_PP, GPIO_OSPEED_50MHZ, IPS_SCK_PIN);
     gpio_init(IPS_MOSI_PORT, GPIO_MODE_AF_PP, GPIO_OSPEED_50MHZ, IPS_MOSI_PIN);
 
@@ -224,10 +262,10 @@ uint8_t ips_init(void)
     spi_struct_para_init(&spi_init_handler);
     spi_init_handler.clock_polarity_phase = SPI_CK_PL_LOW_PH_1EDGE; /* Mode 0：空闲低，SDA 在上升沿采样 */
     spi_init_handler.device_mode          = SPI_MASTER;
-    spi_init_handler.trans_mode           = SPI_TRANSMODE_BDTRANSMIT; /* 屏幕只接 MOSI，不读回 */
+    spi_init_handler.trans_mode           = SPI_TRANSMODE_BDTRANSMIT; /* MTB：主模式单向发送，数据线为 MOSI，MISO 不使用 */
     spi_init_handler.endian               = SPI_ENDIAN_MSB;
     spi_init_handler.nss                  = SPI_NSS_SOFT;             /* CS 由 PC4 手动控制 */
-    spi_init_handler.prescale             = SPI_PSC_4;                /* SPI2 时钟 36MHz / 4 = 9MHz */
+    spi_init_handler.prescale             = SPI_PSC_4;                /* SPI2 时钟 36MHz / 4 = 9MHz，落在ST7789写周期66ns的规格内 */
     spi_init_handler.frame_size           = SPI_FRAMESIZE_8BIT;
     spi_init(SPI2, &spi_init_handler);
     spi_enable(SPI2);
@@ -301,13 +339,17 @@ uint8_t ips_init(void)
     dma_init(DMA1, DMA_CH1, &dma_init_handler);
 
     /*
-        ST7789上电后还不能直接写像素，先复位并选择RGB565和横屏扫描方向。
-        下面的命令是控制器通用的基础初始化，具体伽马、电压等面板相关参数暂不在这里猜测。
+        ST7789上电后还不能直接写像素，先复位再走完整的面板初始化。
+        复位时序：RST低100ms（手册要求有效脉冲>9us）、释放后再等100ms
+        （tRT复位取消时间≤5ms，期间控制器从NVM载入出厂ID/VCOM），余量都很大。
+        命令序列：0x01软复位、0x11退出睡眠、0x3A选RGB565、0x36设扫描方向，
+        再加VCOM/porch/电源/帧率/正负伽马等面板相关参数，最后0x29开显示。
+        这些面板参数不是猜的：原始版本只有3条命令，屏幕完全不亮；补齐这整套后才正常。
     */
     gpio_bit_reset(IPS_RST_PORT, IPS_RST_PIN);
-    delay_ms(10U);
+    delay_ms(100U);
     gpio_bit_set(IPS_RST_PORT, IPS_RST_PIN);
-    delay_ms(120U);
+    delay_ms(100U);
 
     if(ips_write_command_data(0x01U, 0, 0U) == IPS_FAIL) /* 软件复位 */
     {
@@ -322,14 +364,39 @@ uint8_t ips_init(void)
     }
     delay_ms(120U);
 
-    if((ips_write_command_data(0x3AU, &pixel_format, 1U) == IPS_FAIL) || /* RGB565 */
-       (ips_write_command_data(0x36U, &memory_access_control, 1U) == IPS_FAIL) || /* 横屏 */
-       (ips_write_command_data(0x29U, 0, 0U) == IPS_FAIL)) /* 打开显示 */
+    if(ips_write_command_data(0x3AU, &pixel_format, 1U) == IPS_FAIL) /* RGB565 */
     {
         gpio_bit_reset(IPS_BLK_PORT, IPS_BLK_PIN);
         return IPS_FAIL;
     }
 
+    if((ips_write_command_data(0xC5U, (const uint8_t[]){0x1AU}, 1U) == IPS_FAIL) ||
+       (ips_write_command_data(0x36U, &memory_access_control, 1U) == IPS_FAIL) ||
+       (ips_write_command_data(0xB2U, porch_control, sizeof(porch_control)) == IPS_FAIL) ||
+       (ips_write_command_data(0xB7U, (const uint8_t[]){0x05U}, 1U) == IPS_FAIL) ||
+       (ips_write_command_data(0xBBU, (const uint8_t[]){0x3FU}, 1U) == IPS_FAIL) ||
+       (ips_write_command_data(0xC0U, (const uint8_t[]){0x2CU}, 1U) == IPS_FAIL) ||
+       (ips_write_command_data(0xC2U, (const uint8_t[]){0x01U}, 1U) == IPS_FAIL) ||
+       (ips_write_command_data(0xC3U, (const uint8_t[]){0x0FU}, 1U) == IPS_FAIL) ||
+       (ips_write_command_data(0xC4U, (const uint8_t[]){0x20U}, 1U) == IPS_FAIL) ||
+       (ips_write_command_data(0xC6U, (const uint8_t[]){0x01U}, 1U) == IPS_FAIL) ||
+       (ips_write_command_data(0xD0U, power_control, sizeof(power_control)) == IPS_FAIL) ||
+       (ips_write_command_data(0xE8U, (const uint8_t[]){0x03U}, 1U) == IPS_FAIL) ||
+       (ips_write_command_data(0xE9U, extra_timing, sizeof(extra_timing)) == IPS_FAIL) ||
+       (ips_write_command_data(0xE0U, positive_gamma, sizeof(positive_gamma)) == IPS_FAIL) ||
+       (ips_write_command_data(0xE1U, negative_gamma, sizeof(negative_gamma)) == IPS_FAIL))
+    {
+        gpio_bit_reset(IPS_BLK_PORT, IPS_BLK_PIN);
+        return IPS_FAIL;
+    }
+
+    if(ips_write_command_data(0x29U, 0, 0U) == IPS_FAIL)
+    {
+        gpio_bit_reset(IPS_BLK_PORT, IPS_BLK_PIN);
+        return IPS_FAIL;
+    }
+
+    delay_ms(50U);
     gpio_bit_set(IPS_BLK_PORT, IPS_BLK_PIN);
     ips_initialized = 1U;
     return IPS_SUCCESS;
