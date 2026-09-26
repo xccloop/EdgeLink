@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "Presentation/Hmi/Widget/hmi_widget.h"
+#include "Presentation/Hmi/Page/hmi_page.h"
 
 typedef enum
 {
@@ -22,5 +23,16 @@ void hmi_render_service(void);
 
 /* 忙不忙 */
 uint8_t hmi_render_busy(void);
+
+/*
+    绘制一整页：把 page 里所有 widget 按数组顺序叠在一起，
+    只画 first_y 到 last_y 这个行区间（闭区间），用来做局部刷新。
+
+    page 会被整份拷进记账本，调用方传完就可以随便改它（可以放栈上）。
+    但 page 里指向的 widget 必须一直存活、内容不许改，直到 busy 变 0。
+*/
+hmi_render_result_enum hmi_render_page(const hmi_page_t *page,
+                                       uint16_t first_y,
+                                       uint16_t last_y);
 
 #endif
