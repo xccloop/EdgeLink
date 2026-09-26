@@ -7,6 +7,8 @@
 
 //我们这里发现我们调用EXTI1_IRQnHandler来编写EXTI触发的时候会进行怎么样子的操作
 //这是因为在startup_gd32f10x_hd.s启动文件中定义了相关函数，所以我们才可以使用他来进行操作
+
+/*KEY3*/
 void EXTI1_IRQHandler()
 {
     //这里采用exti_flag_get函数来获取EXTI1此时的标志位，虽然已经进入中断了，但是以防万一我们还是再判断一次
@@ -18,22 +20,22 @@ void EXTI1_IRQHandler()
     }
 }
 
+/*KEY2*/
 void EXTI5_9_IRQHandler()
 {
     if(exti_flag_get(EXTI_8) == SET)
     {
         key_event_record_from_isr(KEY_EVENT_2);
-        exti_interrupt_flag_clear(EXTI_8);
-
+        exti_interrupt_flag_clear(EXTI_8);  
     }
 }
 
+/*KEY1*/
 void EXTI10_15_IRQHandler()
 {
     if(exti_flag_get(EXTI_15) == SET)
     {
         key_event_record_from_isr(KEY_EVENT_1);
         exti_interrupt_flag_clear(EXTI_15);
-
     }
 }

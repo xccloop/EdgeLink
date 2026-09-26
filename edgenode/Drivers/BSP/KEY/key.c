@@ -100,30 +100,41 @@ void key_init(void)
     printf("\nKEY init finsh\n");
 }
 
+/*
+    这个函数要做的事把 event 对应的那一位置 1
+    KEY1-0x01 0000 0001
+    KEY2-0x02 0000 0010
+    KEY3-0x04 0000 0100
+*/
 void key_event_record_from_isr(key_event_t event)
 {
     if((event < KEY_EVENT_1) || (event > KEY_EVENT_3))
     {
         return;
     }
-
     key_pending_events |= (uint8_t)(1U << ((uint8_t)event - 1U));
 }
 
+/*
+    这个函数负责
+    1. 记住现在中断是开还是关
+    2. 关中断
+    3. 读走 key_pending_events，然后写 0
+    4. 恢复到原来那个中断状态
+    5. return 读到的值
+*/
 uint8_t key_event_take(void)
 {
-    uint32_t interrupt_mask;
-    uint8_t events;
+    uint32_t interrupt_mask;      /* 先声明两个局部变量 */
+    uint8_t  events;
 
-    /*
-        任务读出并清除位图必须是一段原子操作：否则ISR可能刚记录KEY2，
-        任务随后写0会把KEY2丢掉。恢复进入前的PRIMASK，兼容调用方已有
-        临界区的情况。
-    */
-    interrupt_mask = __get_PRIMASK();
-    __disable_irq();
-    events = key_pending_events;
-    key_pending_events = 0U;
-    __set_PRIMASK(interrupt_mask);
+    interrupt_mask = __get_PRIMASK();   /* ① 记住现在的状态 */
+    __disable_irq();                    /* ② 关 */
+
+    events = key_pending_events;        /* ③ 读走 */
+    key_pending_events = 0U;            /*    清零 */
+
+    __set_PRIMASK(interrupt_mask);      /* ④ 恢复成原来的状态 */
+
     return events;
 }
