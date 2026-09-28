@@ -151,6 +151,11 @@ uint8_t hmi_set_view_data(const hmi_view_data_t *data)
     
     view_data = *data;
 
-    request_refresh(29U, 211U);
+    /*
+        必须从 0 开始：头部（0~28 行）也画着数据——页名和 "WI-FI <状态>"。
+        只刷 29~211 的话，头部会永远停在初始化那次画的样子，
+        于是 SSID/IP 都刷新了，右上角却还挂着开机时的 UNKNOWN。
+    */
+    request_refresh(0U, 211U);
     return 1U;
 }
