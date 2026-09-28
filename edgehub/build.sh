@@ -10,6 +10,9 @@ cmake -B build
 # 2. 编译
 cmake --build build -j"$(nproc)"
 
+#设置can0为500kbs
+sudo ip link set can0 up type can bitrate 500000
+
 # 3. 前台运行。Ctrl+C 会结束服务；Ctrl+Z 只会暂停进程且仍占用 8888 端口。
 echo "EdgeHub starts in foreground. Press Ctrl+C to stop it; do not use Ctrl+Z."
 exec ./build/Edgehub

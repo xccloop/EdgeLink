@@ -33,7 +33,15 @@ int main()
     
     Gateruntime runtime;
     
-    runtime.init();
+    if(runtime.init() == false)
+    {
+        return 1;
+    }
     
-    runtime.run(&g_running);
+    if(runtime.run(&g_running) == false)
+    {
+        return 1;
+    }
+
+    return 0;
 }
