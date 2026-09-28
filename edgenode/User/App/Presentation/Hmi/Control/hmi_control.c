@@ -133,3 +133,24 @@ uint8_t hmi_service(void)
     /* BUSY 时保留 refresh_pending，下次 service 再试。 */
     return 1U;
 }
+
+uint8_t hmi_set_view_data(const hmi_view_data_t *data)
+{
+    if((data == NULL) || (initialized == 0U))
+    {
+        return 0U;
+    }
+
+    if((data->wifi_state > HMI_LINK_OFFLINE) ||
+       (data->tcp_state  > HMI_LINK_OFFLINE) ||
+       (data->can_state  > HMI_LINK_OFFLINE) ||
+       (data->log_count  > HMI_LOG_LINES))
+    {
+        return 0U;
+    }
+    
+    view_data = *data;
+
+    request_refresh(29U, 211U);
+    return 1U;
+}

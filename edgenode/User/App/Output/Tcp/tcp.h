@@ -27,4 +27,13 @@ uint8_t tcp_connected_get(void);
 /* 已建连时按ESP-AT普通模式发送一段原始字节；只有收到SEND OK才报告成功。 */
 uint8_t tcp_data_send(const uint8_t *data, uint8_t length);
 
+/* wifi_connected：tcp_init()期间收到WIFI CONNECTED后为TCP_SUCCESS；重连前会先复位。 */
+uint8_t wifi_state_get(void);
+
+//获取ip
+uint8_t tcp_local_ip_get(char *buffer, uint8_t size);
+
+//获取ssid
+uint8_t tcp_ssid_get(char *buffer,uint8_t size);
+
 #endif

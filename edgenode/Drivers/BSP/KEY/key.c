@@ -1,8 +1,14 @@
 #include "key.h"
+#include <stdint.h>
 #include <stdio.h>
 #include "gd32f10x_gpio.h"
 #include "gd32f10x_rcu.h"
 #include "gd32f10x_exti.h"
+#include "board_time.h"      
+
+/* 消抖门槛：50ms 内只认一次 */
+#define KEY_DEBOUNCE_MS  50U
+static uint32_t key_last_accept_ms;
 
 static volatile uint8_t key_pending_events;
 
@@ -134,7 +140,19 @@ uint8_t key_event_take(void)
     events = key_pending_events;        /* ③ 读走 */
     key_pending_events = 0U;            /*    清零 */
 
-    __set_PRIMASK(interrupt_mask);      /* ④ 恢复成原来的状态 */
+    __set_PRIMASK(interrupt_mask);     
 
+    //以下为按键消抖
+    if (events == 0U)
+    {
+        return 0U;
+    }
+
+    if((uint32_t)(board_systick_ms - key_last_accept_ms) < KEY_DEBOUNCE_MS)
+    {
+        return 0U;
+    }
+    
+    key_last_accept_ms = board_systick_ms;
     return events;
 }

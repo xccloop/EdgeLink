@@ -22,9 +22,13 @@
 #define TCP_AT_TIMEOUT_MS       10000U
 #define TCP_WIFI_JOIN_TIMEOUT_MS 50000U
 #define TCP_COMMAND_BUFFER_SIZE 128U
+#define TCP_SSID_SIZE 33U      
 
 static char tcp_command_buffer[TCP_COMMAND_BUFFER_SIZE];
 static uint8_t tcp_connected;
+static uint8_t wifi_connected;
+  
+static char tcp_ssid_saved[TCP_SSID_SIZE];//存储ssid
 
 static uint8_t tcp_deadline_expired(uint32_t deadline_ms)
 {
@@ -85,6 +89,12 @@ static uint8_t tcp_wait_response(uint8_t wait_connect, uint32_t timeout_ms)
             {
                 return TCP_SUCCESS;
             }
+
+           if(response == ESP12S_RESPONSE_WIFI_CONNECTED)
+            {
+                wifi_connected = TCP_SUCCESS;
+            }
+
             continue;
         }
 
@@ -229,6 +239,8 @@ uint8_t tcp_init(const tcp_config_struct *config)
     /* BOARD先配置USART1的NVIC和SysTick；这里才初始化ESP12S的USART1硬件。 */
     esp12s_init();
     tcp_connected = TCP_FAIL;
+    /* 重连或重试时必须先摘掉旧牌子，否则HMI会显示上一次的在线状态。 */
+    wifi_connected = TCP_FAIL;
 
     if(tcp_command_send_and_wait_ok(ESP_AT_TEST, TCP_AT_TIMEOUT_MS) == TCP_FAIL)
     {
@@ -251,6 +263,17 @@ uint8_t tcp_init(const tcp_config_struct *config)
         printf("TCP init failed: WiFi join command failed or timed out\r\n");
         return TCP_FAIL;
     }
+    uint8_t i = 0U;
+    for(i = 0U; i < (TCP_SSID_SIZE - 1U); i++)
+    {
+        tcp_ssid_saved[i] = config->wifi_ssid[i];
+
+        if(config->wifi_ssid[i] == '\0')
+        {
+            break;                                  /* ← 碰到结尾就停 */
+        }
+    }
+    tcp_ssid_saved[i] = '\0';                       /* ← 抄满时兜底 */
 
     if(tcp_command_send_and_wait_ok(ESP_AT_CIFSR, TCP_AT_TIMEOUT_MS) == TCP_FAIL)
     {
@@ -338,4 +361,37 @@ uint8_t tcp_data_send(const uint8_t *data, uint8_t length)
         return TCP_SEND_FAIL;
     }
     return TCP_SEND_SUCCESS;
+}
+
+uint8_t wifi_state_get(void)
+{
+    return wifi_connected;
+}
+
+/* 内部已经做好不用再写逻辑了 */
+uint8_t tcp_local_ip_get(char *buffer, uint8_t size)
+{
+    return esp12s_local_ip_get(buffer, size);
+}
+
+uint8_t tcp_ssid_get(char *buffer,uint8_t size)
+{
+    if(buffer == NULL || size <= 0)
+    {
+        return 0U;
+    }
+    uint8_t i;
+    for(i = 0;i < size;i++)
+    {
+        buffer[i] = tcp_ssid_saved[i];
+        if(tcp_ssid_saved[i] == '\0')
+        {
+            break;
+        }
+    }
+    if(i >= size)
+    {
+        buffer[size - 1U] = '\0';
+    }
+    return 1U;
 }

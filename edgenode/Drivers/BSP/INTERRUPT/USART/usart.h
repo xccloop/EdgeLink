@@ -26,6 +26,9 @@ typedef enum
 /* APP从回应队列取出一个事件；返回0表示当前没有新的完整回应。 */
 uint8_t esp12s_response_get(esp12s_response_t *response);
 
+//获取ip
+uint8_t esp12s_local_ip_get(char *buffer, uint8_t size);
+
 /* APP发送新AT命令前调用，丢弃旧事件并重新同步当前行解析状态。 */
 void esp12s_response_reset(void);
 

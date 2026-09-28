@@ -1,4 +1,6 @@
 #include "rtos_queue.h"
+#include "FreeRTOS.h"
+#include <stdint.h>
 /* Storage 初始化恢复的 sequence 只需要交给 CollectTask 一次。 */
 static StaticQueue_t storage_to_collect_sequence_queue_control;
 static uint8_t storage_to_collect_sequence_queue_storage[
@@ -23,6 +25,12 @@ static uint8_t collect_to_storage_queue_storage[
     RTOS_COLLECT_TO_STORAGE_QUEUE_LENGTH * sizeof(telemetry_sample_struct)];
 static QueueHandle_t collect_to_storage_queue;
 
+/* CollectTask将采样内容发给hmi */
+static StaticQueue_t collect_to_hmi_queue_control;
+static uint8_t collect_to_hmi_queue_storage[
+    RTOS_COLLECT_TO_HMI_QUEUE_LENGTH * sizeof(telemetry_sample_struct)];
+static QueueHandle_t collect_to_hmi_queue;
+
 /* TransmitTask 对每个 work 投递一次 TCP/CAN 最终结果，StorageTask 决定是否确认。 */
 static StaticQueue_t transmit_to_storage_confirm_queue_control;
 static uint8_t transmit_to_storage_confirm_queue_storage[
@@ -38,6 +46,12 @@ static StaticQueue_t can_receive_frame_queue_control;
 static uint8_t can_receive_frame_queue_storage[
     RTOS_CAN_RECEIVE_FRAME_QUEUE_LENGTH * sizeof(can_receive_frame_t)];
 static QueueHandle_t can_receive_frame_queue;
+
+/* TransmitTask 每发完一条就交一行显示用日志给 HMI，HMI 收下后塞进自己的滚动窗口。 */
+static StaticQueue_t transmit_to_hmi_log_queue_control;
+static uint8_t transmit_to_hmi_log_queue_storage[
+    RTOS_TRANSMIT_TO_HMI_LOG_QUEUE_LENGTH * HMI_LOG_LINE_SIZE];
+static QueueHandle_t transmit_to_hmi_log_queue;
 
 static uint8_t rtos_queue_ready;
 
@@ -71,6 +85,12 @@ uint8_t rtos_queue_init(void)
         sizeof(telemetry_sample_struct),
         collect_to_storage_queue_storage,
         &collect_to_storage_queue_control);
+    
+    collect_to_hmi_queue = xQueueCreateStatic(
+        RTOS_COLLECT_TO_HMI_QUEUE_LENGTH,
+        sizeof(telemetry_sample_struct),
+        collect_to_hmi_queue_storage,
+        &collect_to_hmi_queue_control);
 
     transmit_to_storage_confirm_queue = xQueueCreateStatic(
         RTOS_TRANSMIT_TO_STORAGE_CONFIRM_QUEUE_LENGTH,
@@ -90,21 +110,31 @@ uint8_t rtos_queue_init(void)
         can_receive_frame_queue_storage,
         &can_receive_frame_queue_control);
 
+    transmit_to_hmi_log_queue = xQueueCreateStatic(
+        RTOS_TRANSMIT_TO_HMI_LOG_QUEUE_LENGTH,
+        HMI_LOG_LINE_SIZE,
+        transmit_to_hmi_log_queue_storage,
+        &transmit_to_hmi_log_queue_control);
+
     if((storage_to_collect_sequence_queue == NULL) ||
        (storage_to_collect_permission_queue == NULL) ||
        (storage_to_transmit_queue == NULL) ||
        (collect_to_storage_queue == NULL) ||
        (transmit_to_storage_confirm_queue == NULL) ||
        (tcp_ack_frame_queue == NULL) ||
-       (can_receive_frame_queue == NULL))
+       (can_receive_frame_queue == NULL) ||
+       (collect_to_hmi_queue == NULL) ||
+       (transmit_to_hmi_log_queue == NULL))
     {
         storage_to_collect_sequence_queue = NULL;
         storage_to_collect_permission_queue = NULL;
         storage_to_transmit_queue = NULL;
         collect_to_storage_queue = NULL;
+        collect_to_hmi_queue = NULL;
         transmit_to_storage_confirm_queue = NULL;
         tcp_ack_frame_queue = NULL;
         can_receive_frame_queue = NULL;
+        transmit_to_hmi_log_queue = NULL;
         return RTOS_QUEUE_FAIL;
     }
 
@@ -152,6 +182,16 @@ QueueHandle_t rtos_collect_to_storage_queue_get(void)
     return collect_to_storage_queue;
 }
 
+QueueHandle_t rtos_collect_to_hmi_queue_get(void)
+{
+    if(rtos_queue_ready == 0U)
+    {
+        return NULL;
+    }
+
+    return collect_to_hmi_queue;
+}
+
 QueueHandle_t rtos_transmit_to_storage_confirm_queue_get(void)
 {
     if(rtos_queue_ready == 0U)
@@ -170,6 +210,11 @@ QueueHandle_t rtos_tcp_ack_frame_queue_get(void)
 QueueHandle_t rtos_can_receive_frame_queue_get(void)
 {
     return (rtos_queue_ready != 0U) ? can_receive_frame_queue : NULL;
+}
+
+QueueHandle_t rtos_transmit_to_hmi_log_queue_get(void)
+{
+    return (rtos_queue_ready != 0U) ? transmit_to_hmi_log_queue : NULL;
 }
 
 uint8_t rtos_tcp_ack_frame_send_from_isr(const tcp_ack_frame_t *frame,

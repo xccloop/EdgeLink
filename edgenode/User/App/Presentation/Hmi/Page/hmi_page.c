@@ -98,21 +98,60 @@ static uint16_t state_color(hmi_link_state_t state)
     return COLOR_WAIT;    
 }
 
-//link页面的构建
 static uint8_t links_build(hmi_page_t *page, const hmi_view_data_t *data)
 {
-    (void)page;
-    (void)data;
+    const char *tcp_detail = data->tcp_state == HMI_LINK_ONLINE ? "LAST COMMUNICATION CONFIRMED" :
+                             data->tcp_state == HMI_LINK_OFFLINE ? "LAST COMMUNICATION FAILED" : "NO CONFIRMED RESULT";
+    const char *can_detail = data->can_state == HMI_LINK_ONLINE ? "LAST COMMUNICATION CONFIRMED" :
+                             data->can_state == HMI_LINK_OFFLINE ? "LAST COMMUNICATION FAILED" : "STANDBY / NOT YET VERIFIED";
+    return page_add_text(page, 16U, 45U, "CONNECTIVITY", 1U, COLOR_MUTED) &&
+           page_add_text(page, 16U, 66U, "TCP", 3U, COLOR_TEXT) &&
+           page_add_text(page, 262U, 73U, state_name(data->tcp_state), 1U, state_color(data->tcp_state)) &&
+           page_add_text(page, 16U, 99U, tcp_detail, 1U, COLOR_MUTED) &&
+           page_add_rect(page, 16U, 116U, 288U, 1U, COLOR_LINE) &&
+           page_add_text(page, 16U, 129U, "CAN", 3U, COLOR_TEXT) &&
+           page_add_text(page, 262U, 136U, state_name(data->can_state), 1U, state_color(data->can_state)) &&
+           page_add_text(page, 16U, 162U, can_detail, 1U, COLOR_MUTED) &&
+           page_add_rect(page, 16U, 181U, 288U, 1U, COLOR_LINE) &&
+           page_add_text(page, 16U, 193U, "STATUS BASED ON LAST OBSERVATION", 1U, COLOR_MUTED);
+}
+
+/*
+    LOG 页只有两个东西，彼此没有位置关系：
+
+    1. 正文区右上角一行格式说明，字号小，只是告诉看的人每行数据的四段分别是什么；
+    2. 左边是滚动日志区，logs[0] 最老、logs[log_count - 1] 最新，最新的在最下面。
+
+    每行的字数由生成日志的一侧按 HMI_LOG_LINE_SIZE 截断，这里不再换行、不再截断。
+*/
+static uint8_t log_build(hmi_page_t *page, const hmi_view_data_t *data)
+{
+    uint8_t line;
+
+    /* 16 个字符 × 6 像素 = 96 像素，从 x=208 起，右边正好留出 16 像素边距。 */
+    if(!page_add_text(page, 208U, 40U, "DATA/SCALE/TX/RX", 1U, COLOR_MUTED))
+    {
+        return 0U;
+    }
+
+    /* 一条都还没攒到时给一句话，免得看着像屏幕坏了。 */
+    if(data->log_count == 0U)
+    {
+        return page_add_text(page, 16U, 68U, "No log received.", 2U, COLOR_MUTED);
+    }
+
+    for(line = 0U; line < data->log_count; line++)
+    {
+        if(!page_add_text(page, 16U, (uint16_t)(68U + line * 22U),
+                          data->logs[line], 2U, COLOR_TEXT))
+        {
+            return 0U;
+        }
+    }
+
     return 1U;
 }
 
-//log页面的构建
-static uint8_t log_build(hmi_page_t *page, const hmi_view_data_t *data)
-{
-    (void)page;
-    (void)data;
-    return 1U;
-}
 
 /* 此函数用于绘制home页面 */
 static uint8_t home_build(hmi_page_t *page, const hmi_view_data_t *data)

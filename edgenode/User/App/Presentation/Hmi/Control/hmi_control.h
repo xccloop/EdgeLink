@@ -2,7 +2,12 @@
 #define HMI_CONTROL_H_
 
 #include <stdint.h>
+
+#include "Presentation/Hmi/hmi_types.h"      
+#include "stddef.h"                         
 void hmi_control_init(uint8_t node_id);
+
+uint8_t hmi_set_view_data(const hmi_view_data_t *data);
 
 typedef enum
 {

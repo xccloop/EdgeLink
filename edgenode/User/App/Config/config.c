@@ -16,3 +16,8 @@ const tcp_config_struct *config_tcp_get(void)
 {
     return &tcp_config;
 }
+
+const char *ssid_get()
+{
+    return tcp_config.wifi_ssid;
+}

@@ -4,6 +4,10 @@
 #include "gd32f10x.h"
 #include "gd32f10x_usart.h"
 
+//用于装IP的buffer
+#define ESP12S_LOCAL_IP_SIZE 16U
+static char esp12s_local_ip[ESP12S_LOCAL_IP_SIZE];
+
 /* USART0连接CH340，USART1连接ESP12S；中断都只取走已经到达的字节，不等待也不发送AT命令。 */
 volatile uint8_t ch340_receive_data = 0U;
 
@@ -161,6 +165,22 @@ static void esp12s_response_line_handle(void)
     {
         esp12s_response_push(ESP12S_RESPONSE_BUSY);
     }
+    else if(esp12s_response_line_start_with("+CIFSR:STAIP,\"") != 0U)
+    {
+        uint8_t src = 14U;
+        uint8_t dst = 0U;
+
+        while((src < esp12s_response_line_length) &&
+              (esp12s_response_line[src] != '"') &&
+              (dst < (ESP12S_LOCAL_IP_SIZE - 1U)))
+        {
+            esp12s_local_ip[dst] = esp12s_response_line[src];
+            dst++;
+            src++;
+        }
+
+        esp12s_local_ip[dst] = '\0';
+    }
 }
 
 uint8_t esp12s_response_get(esp12s_response_t *response)
@@ -274,4 +294,31 @@ void USART1_IRQHandler(void)
             esp12s_response_line_overflow = 1U;
         }
     }
+}
+
+uint8_t esp12s_local_ip_get(char *buffer, uint8_t size)
+{
+    uint8_t i;                    /* ← 挪出来，让循环外面也看得见 */
+
+    if((buffer == NULL) || (size == 0U))
+    {
+        return 0U;
+    }
+
+    for(i = 0U; i < size; i++)    /* ← 这里不再写 uint8_t */
+    {
+        buffer[i] = esp12s_local_ip[i];
+
+        if(esp12s_local_ip[i] == '\0')
+        {
+            break;
+        }
+    }
+
+    if(i >= size)                 /* ← 现在 i 还活着，而且这里是"事后" */
+    {
+        buffer[size - 1U] = '\0';
+    }
+
+    return 1U;
 }

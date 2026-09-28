@@ -13,7 +13,13 @@
 
 #define HMI_SSID_CAPACITY 33U     /* 32 个字符 + 1 个结束标记 */
 #define HMI_IP_CAPACITY   16U     /* 15 个字符 + 1 个结束标记 */
-#define HMI_LOG_CAPACITY  257U    /* 256 个字符 + 1 个结束标记 */
+
+/*
+    LOG 页的滚动窗口：最多显示 5 行，每行 24 个字符 + 1 个结束标记。
+    24 是 2 倍字号下一行能放下的字数，超出的部分由生成日志的一侧截断。
+*/
+#define HMI_LOG_LINES     5U
+#define HMI_LOG_LINE_SIZE 25U
 
 /* 页面编号。HMI_PAGE_COUNT 只用来数"一共几页"。 */
 typedef enum
@@ -41,6 +47,9 @@ typedef enum
 
     wifi_ssid 是实际连上的 Wi-Fi 名称；local_ip 是节点自己的地址，不是服务端的。
     字符串都是内嵌数组，接收时有界复制，不保留调用方的指针。
+
+    logs 是 LOG 页的滚动窗口：logs[0] 是最老的一条，logs[log_count - 1] 是最新的，
+    新的从下面进、旧的从上面顶出去，和终端一样。log_count 只在 0 ~ HMI_LOG_LINES 之间。
 */
 typedef struct
 {
@@ -52,8 +61,8 @@ typedef struct
     hmi_link_state_t can_state;
     char             wifi_ssid[HMI_SSID_CAPACITY];
     char             local_ip[HMI_IP_CAPACITY];
-    char             latest_log[HMI_LOG_CAPACITY];
-    uint32_t         log_uptime_seconds;  /* 日志产生时的开机时长，小时可超过 24 */
+    uint8_t          log_count;           /* 已经攒了几条，0 ~ HMI_LOG_LINES */
+    char             logs[HMI_LOG_LINES][HMI_LOG_LINE_SIZE];
 } hmi_view_data_t;
 
 #endif
