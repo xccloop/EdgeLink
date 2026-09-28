@@ -2,6 +2,8 @@
 #include "ESP12S/esp12s.h"
 #include "INTERRUPT/USART/usart.h"
 #include "board_time.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -22,13 +24,19 @@
 #define TCP_AT_TIMEOUT_MS       10000U
 #define TCP_WIFI_JOIN_TIMEOUT_MS 50000U
 #define TCP_COMMAND_BUFFER_SIZE 128U
-#define TCP_SSID_SIZE 33U      
+#define TCP_SSID_SIZE 33U
+
+/* 断线重连比首次建连短：网关不在时也要尽快把发送任务交还给调用方。 */
+#define TCP_RECONNECT_TIMEOUT_MS 5000U
 
 static char tcp_command_buffer[TCP_COMMAND_BUFFER_SIZE];
 static uint8_t tcp_connected;
 static uint8_t wifi_connected;
-  
+
 static char tcp_ssid_saved[TCP_SSID_SIZE];//存储ssid
+
+/* tcp_init() 校验通过的配置留一份，重连时只需重发 CIPSTART，不必重跑 CWJAP。 */
+static const tcp_config_struct *tcp_saved_config;
 
 static uint8_t tcp_deadline_expired(uint32_t deadline_ms)
 {
@@ -50,6 +58,13 @@ static uint8_t tcp_wait_response(uint8_t wait_connect, uint32_t timeout_ms)
     {
         if(esp12s_response_get(&response) == 0U)
         {
+            /*
+                没有新事件时让出 1ms，不要纯自旋。
+                这里最长要等 5 秒（重连）甚至 50 秒（开机 CWJAP），
+                自旋会一直占着 CPU，把同优先级的采集和 HMI 一起拖慢。
+                一行 AT 回应大约 1.7ms 就到齐，1ms 轮询足够。
+            */
+            vTaskDelay(pdMS_TO_TICKS(1U));
             continue;
         }
 
@@ -168,6 +183,13 @@ static uint8_t tcp_wait_prompt(uint32_t timeout_ms)
     {
         if(esp12s_response_get(&response) == 0U)
         {
+            /*
+                没有新事件时让出 1ms，不要纯自旋。
+                这里最长要等 5 秒（重连）甚至 50 秒（开机 CWJAP），
+                自旋会一直占着 CPU，把同优先级的采集和 HMI 一起拖慢。
+                一行 AT 回应大约 1.7ms 就到齐，1ms 轮询足够。
+            */
+            vTaskDelay(pdMS_TO_TICKS(1U));
             continue;
         }
 
@@ -196,6 +218,13 @@ static uint8_t tcp_wait_send_ok(uint32_t timeout_ms)
     {
         if(esp12s_response_get(&response) == 0U)
         {
+            /*
+                没有新事件时让出 1ms，不要纯自旋。
+                这里最长要等 5 秒（重连）甚至 50 秒（开机 CWJAP），
+                自旋会一直占着 CPU，把同优先级的采集和 HMI 一起拖慢。
+                一行 AT 回应大约 1.7ms 就到齐，1ms 轮询足够。
+            */
+            vTaskDelay(pdMS_TO_TICKS(1U));
             continue;
         }
 
@@ -235,6 +264,9 @@ uint8_t tcp_init(const tcp_config_struct *config)
         printf("TCP init failed: configuration contains unsupported character\r\n");
         return TCP_FAIL;
     }
+
+    /* 只有配置通过校验才记住，供 tcp_try_reconnect() 复用。 */
+    tcp_saved_config = config;
 
     /* BOARD先配置USART1的NVIC和SysTick；这里才初始化ESP12S的USART1硬件。 */
     esp12s_init();
@@ -310,6 +342,48 @@ uint8_t tcp_init(const tcp_config_struct *config)
 uint8_t tcp_connected_get(void)
 {
     return tcp_connected;
+}
+
+/*
+    运行期断线重连：ESP 断开的只是到服务器的 TCP 连接，
+    Station 模式与 WiFi 仍然在线，所以这里只需要重发一条 CIPSTART 重建连接。
+
+    成功返回 TCP_SUCCESS 并恢复在线状态；失败返回 TCP_FAIL，由调用方稍后再试。
+    调用者必须给重连加冷却（见 TransmitTask 的 TCP_RECONNECT_COOLDOWN_MS），
+    否则网关一直不在时每条记录都会卡在这条 CIPSTART 上。
+*/
+uint8_t tcp_try_reconnect(void)
+{
+    int command_length;
+
+    if((tcp_saved_config == 0) ||
+       (tcp_saved_config->server_ip == 0) ||
+       (tcp_saved_config->server_port == 0U))
+    {
+        return TCP_FAIL;
+    }
+
+    command_length = snprintf(tcp_command_buffer, sizeof(tcp_command_buffer),
+                              "AT+CIPSTART=\"TCP\",\"%s\",%u\r\n",
+                              tcp_saved_config->server_ip,
+                              (unsigned int)tcp_saved_config->server_port);
+    if((command_length < 0) ||
+       ((uint32_t)command_length >= sizeof(tcp_command_buffer)))
+    {
+        return TCP_FAIL;
+    }
+
+    esp12s_response_reset();
+    esp12s_cmd_send(tcp_command_buffer);
+
+    if(tcp_wait_response(TCP_SUCCESS, TCP_RECONNECT_TIMEOUT_MS) == TCP_FAIL)
+    {
+        tcp_connected = TCP_FAIL;
+        return TCP_FAIL;
+    }
+
+    tcp_connected = TCP_SUCCESS;
+    return TCP_SUCCESS;
 }
 
 /*

@@ -28,6 +28,19 @@ static void task_block_forever(void)
     }
 }
 
+/*
+    TransmitTask 在 TCP 重连成功后置 1；StorageTask 看到后把积压的 pending 补发一遍。
+    跨任务单字节标志：即使读写竞争，最坏也只是重复补发一次，
+    而 storage_confirm 和 Hub 的查重都是幂等的，重复不会出错。
+*/
+static volatile uint8_t link_restored;
+
+/* 上次尝试 TCP 重连的时刻，用来给重连加冷却。 */
+static TickType_t last_reconnect_tick;
+
+/* 两条记录之间至少间隔这么久才再试一次重连，避免网关长期不在时每条都卡在 CIPSTART。 */
+#define TCP_RECONNECT_COOLDOWN_MS 5000U
+
 static StaticTask_t led1_task_tcb;
 static StackType_t led1_task_stack[256];
 static TaskHandle_t led1_task_handle;
@@ -278,6 +291,25 @@ static void storage_task(void *argument)
                     task_block_forever();
                 }
 
+            }
+        }
+
+        /*
+            运行期链路恢复：TransmitTask 在 TCP 重连成功后置 link_restored。
+            这里把当前所有 pending 补发一遍（起点取地址最旧的一条），
+            补完再回到正常采集。补发期间 CollectTask 停在许可等待上，不会被饿着。
+        */
+        if(link_restored != 0U)
+        {
+            link_restored = 0U;
+
+            if(storage_find_oldest_pending(&transmit_work.message,
+                                           &transmit_work.flash_address)
+               == STORAGE_SUCCESS)
+            {
+                storage_replay_pending(transmit_work,
+                                       transmit_queue,
+                                       confirm_queue);
             }
         }
 
@@ -595,6 +627,7 @@ static void transmit_task(void *argument)
     QueueHandle_t log_queue;
     char log_line[HMI_LOG_LINE_SIZE];
     const char *link;
+    TickType_t now_tick;
 
     (void)argument;
 
@@ -671,6 +704,28 @@ static void transmit_task(void *argument)
             }
 
             /*
+                TCP 这条路失败：多半是链路已经断了。
+                按冷却低频尝试重连；一旦成功就置 link_restored，
+                通知 StorageTask 把积压的 pending 补发一遍。
+                tick 冷却避免网关一直不在时，每条记录都卡在 CIPSTART 上。
+            */
+            if(tcp_connected_get() == TCP_FAIL)
+            {
+                now_tick = xTaskGetTickCount();
+
+                if((now_tick - last_reconnect_tick) >=
+                   pdMS_TO_TICKS(TCP_RECONNECT_COOLDOWN_MS))
+                {
+                    last_reconnect_tick = now_tick;
+
+                    if(tcp_try_reconnect() == TCP_SUCCESS)
+                    {
+                        link_restored = 1U;
+                    }
+                }
+            }
+
+            /*
                 拼一行给 HMI 滚动日志用：数据、倍率、谁发的、成没成。
                 谁都没发出去时整行只写到 FAIL，不假装用了某条链路。
             */
@@ -739,6 +794,7 @@ static void hmi_task(void *argument)
     uint8_t key_event;//按键事件
     uint8_t need_commit;//这一轮有没有新数据要提交
     uint8_t i;
+    uint32_t pending_now;
     last_wake_time = xTaskGetTickCount();
 
     sample_queue =
@@ -786,6 +842,18 @@ static void hmi_task(void *argument)
 
         (void)tcp_ssid_get(hmi_snapshot.wifi_ssid, sizeof(hmi_snapshot.wifi_ssid));
         (void)tcp_local_ip_get(hmi_snapshot.local_ip, sizeof(hmi_snapshot.local_ip));
+
+        /*
+            Storage 那边只在"写入成功"和"确认成功"两处改这个数。
+            这里只在它真的变了的时候才置 need_commit —— 否则每 1ms 都提交一次，
+            屏幕会被要求不停重画。
+        */
+        pending_now = storage_pending_count_get();
+        if(pending_now != hmi_snapshot.pending_count)
+        {
+            hmi_snapshot.pending_count = pending_now;
+            need_commit = 1U;
+        }
 
         if(xQueueReceive(sample_queue,&sample,0) == pdPASS)
         {

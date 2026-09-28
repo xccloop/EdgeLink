@@ -40,6 +40,13 @@ static uint32_t storage_next_address;
 static uint8_t storage_can_append;
 static uint8_t storage_ready;
 
+/*
+    当前 Flash 里还没被 Hub 确认的条数，供 HMI 显示。
+    只有 StorageTask 改它（开机扫描、写入成功、确认成功这三处），HMI 任务只读。
+    单个 32 位对齐变量的读写是一条指令，不会读到半新半旧的值，所以不用加锁。
+*/
+static volatile uint32_t storage_pending_count;
+
 static void storage_record_message_encode(uint8_t record[STORAGE_SLOT_SIZE],
                                           const telemetry_sample_struct *message)
 {
@@ -272,6 +279,7 @@ static uint8_t storage_scan_log(storage_init_result_t *result)
     uint32_t max_sequence = 0U;
     uint32_t max_sequence_address = STORAGE_LOG_BASE_ADDRESS;
     uint32_t oldest_pending_sequence = 0U;
+    uint32_t pending_total = 0U;
     uint8_t has_valid_record = 0U;
     const uint8_t *record;
 
@@ -333,6 +341,7 @@ static uint8_t storage_scan_log(storage_init_result_t *result)
             /* status 只要不是 0x00 都视为 pending，包括确认写入时掉电留下的中间值。 */
             if(record[15] != STORAGE_CONFIRMED)
             {
+                pending_total++;
                 if((result->has_pending == 0U) ||
                    (sequence < oldest_pending_sequence))
                 {
@@ -385,6 +394,8 @@ static uint8_t storage_scan_log(storage_init_result_t *result)
     }
     result->next_write_address = storage_next_address;
     storage_scan_sequence_finish(result, has_valid_record, max_sequence);
+    /* 全盘扫完才把计数一次性放出去，扫描中途失败不会留下半数。 */
+    storage_pending_count = pending_total;
     return STORAGE_SUCCESS;
 }
 
@@ -404,6 +415,7 @@ uint8_t storage_init(storage_init_result_t *result)
     storage_ready = 0U;
     storage_next_address = STORAGE_LOG_BASE_ADDRESS;
     storage_can_append = 0U;
+    storage_pending_count = 0U;
     result->next_sequence = 0U;
     result->next_write_address = STORAGE_LOG_BASE_ADDRESS;
     result->can_append = 0U;
@@ -483,6 +495,9 @@ uint8_t storage_write_pending(const telemetry_sample_struct *message,
     //然后sroage_next_adress推进
     *flash_address = storage_next_address;
     storage_next_address = storage_address_next(storage_next_address);
+
+    /* 刚写进去的记录默认就是 pending，等 Hub ACK 之后才由 storage_confirm 减掉。 */
+    storage_pending_count++;
 
     return STORAGE_SUCCESS;
 }
@@ -582,7 +597,18 @@ uint8_t storage_confirm(uint32_t flash_address,
         return STORAGE_FAIL;
     }
 
+    /*
+        到这一步才是真的确认掉了。
+        上面"已确认，重复 ACK 直接成功"那条分支会提前 return，所以重复 ACK 不会减两次。
+    */
+    storage_pending_count--;
+
     return STORAGE_SUCCESS;
+}
+
+uint32_t storage_pending_count_get(void)
+{
+    return storage_pending_count;
 }
 
 /*

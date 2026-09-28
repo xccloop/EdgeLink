@@ -54,4 +54,10 @@ uint8_t storage_find_oldest_pending(
     telemetry_sample_struct *oldest_pending_message,
     uint32_t *oldest_pending_address);
 
+/*
+    当前还压在 Flash 里、没被 Hub 确认的记录条数，供 HMI 的 STORAGE 页显示。
+    只有 StorageTask 会改它，其他任务只读；单个 32 位变量的读写是原子的，不需要加锁。
+*/
+uint32_t storage_pending_count_get(void);
+
 #endif

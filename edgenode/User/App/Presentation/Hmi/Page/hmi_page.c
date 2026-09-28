@@ -17,8 +17,13 @@
 /* widget 实例池：同一时刻只画一页，所以所有页共用这 16 个槽位。 */
 static hmi_widget_t page_widgets[HMI_PAGE_MAX_ITEMS];
 
-/* 导航标题 */
-static const char *const titles[] = {"HOME", "LINKS", "LOG"};
+/* 导航标题。顺序必须和 hmi_page_id_t 一致。 */
+static const char *const titles[] = {"HOME", "LINKS", "LOG", "STORAGE"};
+
+/* 导航条：4 格平分，左右各留 5 像素。 */
+#define NAV_ITEM_X_STEP   78U
+#define NAV_ITEM_X_FIRST  5U
+#define NAV_ITEM_WIDTH    73U
 
 /* 往页里加一块色块。成功返回 1，页满了返回 0。 */
 static uint8_t page_add_rect(hmi_page_t *page,
@@ -193,6 +198,32 @@ static uint8_t home_build(hmi_page_t *page, const hmi_view_data_t *data)
     return page_add_text(page, 76U, 179U, buffer, 1U, COLOR_MUTED);
 }
 
+/*
+    STORAGE 页只回答一个问题：还有多少条数据压在 Flash 里、没被 Hub 确认。
+    0 表示全都上报过了；非 0 说明补发还没追上，或者链路本身有问题。
+*/
+static uint8_t storage_build(hmi_page_t *page, const hmi_view_data_t *data)
+{
+    char buffer[HMI_TEXT_CAPACITY];
+    uint8_t length;
+    uint8_t scale;
+    uint8_t all_synced = (data->pending_count == 0U) ? 1U : 0U;
+
+    (void)snprintf(buffer, sizeof(buffer), "%lu", (unsigned long)data->pending_count);
+    length = (uint8_t)strlen(buffer);
+    /* 位数多了就缩小字号，别顶出右边界。 */
+    scale = (length <= 3U) ? 7U : 5U;
+
+    return page_add_text(page, 16U, 60U, "PENDING RECORDS", 1U, COLOR_MUTED) &&
+           page_add_text(page, 16U, 88U, buffer, scale, COLOR_TEXT) &&
+           page_add_rect(page, 16U, 160U, 288U, 1U, COLOR_LINE) &&
+           page_add_text(page, 16U, 172U,
+                         (all_synced != 0U) ? "ALL DATA UPLOADED"
+                                            : "WAITING TO BE SENT",
+                         1U,
+                         (all_synced != 0U) ? COLOR_ACCENT : COLOR_WAIT);
+}
+
 uint8_t hmi_page_build(hmi_page_t *page, const hmi_view_data_t *data,hmi_page_id_t current_page, hmi_page_id_t selected_page)
 {
     char buffer[HMI_TEXT_CAPACITY];
@@ -239,6 +270,10 @@ uint8_t hmi_page_build(hmi_page_t *page, const hmi_view_data_t *data,hmi_page_id
     {
         page_result = links_build(page, data);
     }
+    else if(current_page == HMI_PAGE_STORAGE)
+    {
+        page_result = storage_build(page, data);
+    }
     else
     {
         page_result = log_build(page, data);
@@ -248,22 +283,23 @@ uint8_t hmi_page_build(hmi_page_t *page, const hmi_view_data_t *data,hmi_page_id
         return 0U;
     }
 
-    //这里绘制的是底部导航页
+    //这里绘制的是底部导航页：4 格平分
     for(uint8_t i = 0U; i < HMI_PAGE_COUNT; i++)
     {
-        uint16_t x = (uint16_t)(5U + 105U * i);
+        uint16_t x = (uint16_t)(NAV_ITEM_X_FIRST + NAV_ITEM_X_STEP * i);
 
         /* 只有"选中"项画实心块。当前是哪页看头部，导航条里不区分。 */
         if(i == selected_page)
         {
-            if(!page_add_rect(page, x, 216U, 100U, 20U, COLOR_ACCENT))
+            if(!page_add_rect(page, x, 216U, NAV_ITEM_WIDTH, 20U, COLOR_ACCENT))
             {
                 return 0U;
             }
         }
 
-        /* 三个标题都画：选中项用深色字（配亮绿底），其他用灰字 */
-        if(!page_add_text(page, (uint16_t)(x + (100U - strlen(titles[i]) * 6U) / 2U),
+        /* 所有标题都画：选中项用深色字（配亮绿底），其他用灰字 */
+        if(!page_add_text(page,
+                        (uint16_t)(x + (NAV_ITEM_WIDTH - strlen(titles[i]) * 6U) / 2U),
                         222U, titles[i], 1U,
                         (i == selected_page) ? COLOR_BG : COLOR_MUTED))
         {

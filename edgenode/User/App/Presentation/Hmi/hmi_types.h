@@ -27,6 +27,7 @@ typedef enum
     HMI_PAGE_HOME = 0,
     HMI_PAGE_LINKS,
     HMI_PAGE_LOG,
+    HMI_PAGE_STORAGE,
     HMI_PAGE_COUNT
 } hmi_page_id_t;
 
@@ -61,6 +62,10 @@ typedef struct
     hmi_link_state_t can_state;
     char             wifi_ssid[HMI_SSID_CAPACITY];
     char             local_ip[HMI_IP_CAPACITY];
+
+    /* 还压在 Flash 里、没被 Hub 确认的条数，来自 storage_pending_count_get()。 */
+    uint32_t         pending_count;
+
     uint8_t          log_count;           /* 已经攒了几条，0 ~ HMI_LOG_LINES */
     char             logs[HMI_LOG_LINES][HMI_LOG_LINE_SIZE];
 } hmi_view_data_t;
