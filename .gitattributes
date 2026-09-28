@@ -1,0 +1,21 @@
+# 全线用 LF：仓库里存 LF，检出也是 LF。
+#
+# 这个仓库同时跑在两个平台上：
+#   Windows —— gcc / mingw32-make 编译 edgenode
+#   树莓派  —— bash 脚本 + cmake 编译 edgehub
+# 而 Linux 这两样都受不了 CRLF：shebang 会变成 "#!/usr/bin/env bash\r" 直接报错，
+# make 的 recipe 也会把 \r 当成命令的一部分。
+# Windows 的工具反过来都能吃 LF，所以 LF 是唯一两边都安全的选择。
+#
+# 这一条会覆盖 core.autocrlf，两个平台上都别再开 autocrlf。
+* text=auto eol=lf
+
+# 二进制文件不做任何转换
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.db   binary
+*.bin  binary
+*.elf  binary
