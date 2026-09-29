@@ -4,12 +4,59 @@
 
 | 维度 | 当前设计 |
 | --- | --- |
-| 采集节点 | GD32F103RCT6、FreeRTOS、BMP280、GD25Q32、ESP-AT、CAN |
+| 采集节点 | GD32F103RCT6、FreeRTOS、BMP280、GD25Q32、ESP-AT、CAN、ST7789 IPS |
 | 边缘网关 | Raspberry Pi、C++17、`epoll`、SocketCAN、SQLite3 |
 | 传输 | TCP V5 固定遥测帧为主；TCP 未确认时可走 CAN 回退 |
 | 数据身份 | `(nodeId, sequence)` 是端到端去重与 ACK 匹配键 |
 | 交付语义 | 节点 **at-least-once 重传**，Hub 以唯一索引实现幂等持久化 |
-| 当前边界 | 已有源码和阶段性实机证据；完整 ACK 闭环、异常掉电恢复与当前 CAN 回退验收通过，72小时工作无死机 |
+| 链路恢复 | 运行期断线自动重连，重连成功后补发积压 pending |
+| 节点显示 | 320×240 IPS 四页：HOME / LINKS / LOG / STORAGE |
+| 当前边界 | 已有源码和阶段性实机证据；ACK 闭环、异常掉电恢复、CAN 回退、断线重连与补发均已实机验收通过，72 小时工作无死机 |
+
+## 快速开始
+
+两块板子各自三步。
+
+### EdgeNode（GD32F103RCT6）
+
+```bash
+# 1. 改配置：Wi-Fi SSID/密码、Hub 的 IP 与端口，以及本节点的 board_id
+#    edgenode/User/App/Config/config.c
+
+# 2. 编译（需要 ARM GNU Toolchain）
+mingw32-make -C edgenode -j2
+
+# 3. 烧录（需要已连接的 ST-Link；脚本会先强制重新编译再烧写校验）
+./edgenode/flash.ps1
+```
+
+`board_id` 决定 TCP Frame 的 source 和 CAN 仲裁 ID，**同一个 Hub 下的节点不能重复**。
+
+### EdgeHub（树莓派）
+
+```bash
+# 1. can0 配一次（build.sh 故意不做这件事，原因见下方「构建与运行」）
+sudo ip link set can0 up type can bitrate 500000
+
+# 2. 编译并在前台运行，监听 TCP 8888
+cd edgehub && ./build.sh
+```
+
+## 目录
+
+- [快速开始](#快速开始)
+- [项目解决的问题](#项目解决的问题)
+- [实机演示](#实机演示)
+- [总体架构](#总体架构)
+- [EdgeNode：分层与任务协作](#edgenode分层与任务协作)
+- [EdgeNode：节点侧 HMI](#edgenode节点侧-hmi)
+- [Flash 日志：恢复逻辑与容量边界](#flash-日志恢复逻辑与容量边界)
+- [EdgeHub：事件循环、解析与幂等持久化](#edgehub事件循环解析与幂等持久化)
+- [协议契约](#协议契约)
+- [构建与运行](#构建与运行)
+- [资料索引](#资料索引)
+- [项目边界](#项目边界)
+- [硬件原理图与 PCB](#硬件原理图与-pcb)
 
 ## 项目解决的问题
 
@@ -143,6 +190,31 @@ sequenceDiagram
 | Storage 写入、读回或确认校验失败 | StorageTask 停止继续访问队列/外设。 | 宁可停止采集，也不静默跳过 sequence 或覆盖未知数据。 |
 | CAN 无物理 ACK | CAN 控制器发送邮箱可能占满，TransmitTask 不会把它当 Hub 成功确认。 | Flash pending 保留。 |
 
+## EdgeNode：节点侧 HMI
+
+节点带一块 320×240 的 ST7789 IPS 屏，由 `hmi_task` 独占驱动（1 ms 周期）。它**不直接读**传感器、Flash 或 ESP——其他任务把数据填进一份完整快照（`hmi_view_data_t`），HMI 只负责显示。
+
+| 页面 | 显示什么 | 数据来源 |
+| --- | --- | --- |
+| **HOME** | 温度、Wi-Fi 名字与本机 IP | `collect_to_hmi_queue`；`tcp_ssid_get()` / `tcp_local_ip_get()` |
+| **LINKS** | TCP / CAN 最近一次通信结果 | `tcp_connected_get()`；`can_state` |
+| **LOG** | 最近 5 次收发的滚动窗口（终端式，新的从下面进） | `transmit_to_hmi_log_queue`——TransmitTask 每发完一条交一行 |
+| **STORAGE** | Flash 里还没被 Hub 确认的 pending 条数 | `storage_pending_count_get()` |
+
+底部 28 像素是导航条：**KEY1/KEY2** 移动候选页，**KEY3** 确认切换。按键走 EXTI 中断 + 位图事件，由 HMI 任务取走并做 50 ms 去抖。
+
+刷新不是整屏双缓冲：`hmi_service()` 每次只合成**一行**，212 行的正文要约 212 ms 画完，所以物理屏幕上能看到逐行刷新。绘制期间的数据更新不会打断当前场景——`hmi_set_view_data()` 把待刷新行范围合并起来，等空闲时再一起提交。
+
+四个页面都无法自行探测或推断状态：链路状态只反映「调用方最近一次观测」，`UNKNOWN` 表示「还没有结果」，和 `OFFLINE`（确认失败）不是一回事。**STORAGE 页是唯一能看出「数据压在本地没发出去」的地方**——断网时它只涨，链路恢复补发后它回落。
+
+分层见 [`Presentation/Hmi/`](edgenode/User/App/Presentation/Hmi/)：
+
+```text
+Widget  →  Page   →  Render  →  Control
+点阵字体    页面坐标    逐行合成    持有快照、当前页、
+矩形/文本   配色       交 DMA      待刷新范围
+```
+
 ## Flash 日志：恢复逻辑与容量边界
 
 每条 Flash 记录固定为 16 字节：
@@ -166,7 +238,7 @@ byte 15      status                 0x00 = confirmed；其他值 = pending
 
 ## EdgeHub：事件循环、解析与幂等持久化
 
-EdgeHub 的入口在 [`edgehub/main.cpp`](edgehub/main.cpp)，运行时资源由 [`Gateruntime`](edgehub/src/Gateruntime.cpp) 管理。`Gateruntime::init()` 会在 SocketCAN、TCP 监听、`epoll` 或 SQLite 初始化失败时返回 `false`；当前 `main.cpp` 尚未检查该返回值便调用 `run()`，这是一个应在后续修复并回归验证的启动失败路径风险。
+EdgeHub 的入口在 [`edgehub/main.cpp`](edgehub/main.cpp)，运行时资源由 [`Gateruntime`](edgehub/src/Gateruntime.cpp) 管理。`Gateruntime::init()` 在 SocketCAN、TCP 监听、`epoll` 或 SQLite 任一步失败时返回 `false`，`main.cpp` 会**就此退出**，不会带着没建好的 `epoll` 进入事件循环——否则会报出一句误导人的 `epoll error: Invalid argument`，把真正的失败原因（比如端口已被占用）盖住。
 
 ```text
 TCP listen :8888                  SocketCAN can0
@@ -230,13 +302,18 @@ TCP 与 CAN 都承载同一个 Message，却不强行共用同一份线上帧：
 
 - 构建规则：[`edgenode/Makefile`](edgenode/Makefile)，使用 ARM GNU Toolchain 生成 ELF 和 BIN。
 - Windows 烧录入口：[`edgenode/flash.ps1`](edgenode/flash.ps1)。脚本会强制重新编译，再通过 ST-Link/OpenOCD 烧录、校验并复位。
-- 节点的 Wi-Fi、Hub IP 与端口由 [`edgenode/User/App/Config/`](edgenode/User/App/Config/) 提供。不要提交真实 Wi-Fi 凭据。
+- **节点配置**：Wi-Fi 凭据、Hub 地址和 `board_id` 都在 [`edgenode/User/App/Config/config.c`](edgenode/User/App/Config/config.c)，由 `config_tcp_get()` 提供给 TCP 层。`board_id` 同时决定 TCP Frame 的 source 和 CAN 仲裁 ID，**同一个 Hub 下的节点不能重复**。
 
 ### EdgeHub
 
 - 依赖：Linux、CMake、C++17、SQLite3 开发包、已配置的 SocketCAN `can0`。
 - 构建并前台运行：`cd edgehub && ./build.sh`。
-- 当前源码监听 TCP **8888**，数据库路径为 `/home/qxc/Desktop/EdgeLink/edgehub/data/edgehub.db`。部署到其他目录前需调整该路径；启动前也应确认 `can0` 已按目标波特率 UP。
+- 当前源码监听 TCP **8888**，数据库路径为 `/home/qxc/Desktop/EdgeLink/edgehub/data/edgehub.db`。该 `.db` 同样不入库。部署到其他目录前需调整这个路径。
+- **`build.sh` 不配置 `can0`**，因为两件事都不合适：接口已在 UP 状态时不能在线改波特率，`ip` 会报 `RTNETLINK answers: Device or resource busy`，而 `set -e` 会让脚本当场退出、Edgehub 跟着起不来；改成先 `down` 再 `up` 虽然能绕开，却会在每次编译运行时把总线断开一下，还要每次输 sudo。所以这件事留在外面，开机手动配一次：
+
+  ```bash
+  sudo ip link set can0 up type can bitrate 500000
+  ```
 
 ## 资料索引
 

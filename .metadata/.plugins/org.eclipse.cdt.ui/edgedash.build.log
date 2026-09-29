@@ -1,0 +1,6 @@
+14:42:27 **** Incremental Build of configuration Release for project edgedash ****
+make -j16 all 
+make: Nothing to be done for `all'.
+
+14:42:27 Build Finished. 0 errors, 0 warnings. (took 157ms)
+

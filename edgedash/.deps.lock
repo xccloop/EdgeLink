@@ -1,0 +1,47 @@
+// 该文件由Versioning自动生成
+// 它不适用于手动编辑
+{
+  "version": "1.0.0",
+  "dependencies": [
+    {
+      "repository": {
+        "id": "public",
+        "url": "https://package.flythings.cn"
+      },
+      "platform": "T113STDCXX",
+      "id": "easyui",
+      "version": "^2.2.0",
+      "revision": "2.6.0"
+    },
+    {
+      "repository": {
+        "id": "public",
+        "url": "https://package.flythings.cn"
+      },
+      "platform": "T113STDCXX",
+      "id": "log",
+      "version": "0.0.0",
+      "revision": "0.0.0"
+    },
+    {
+      "repository": {
+        "id": "public",
+        "url": "https://package.flythings.cn"
+      },
+      "platform": "T113STDCXX",
+      "id": "zkhardware",
+      "version": "0.0.0",
+      "revision": "0.0.0"
+    },
+    {
+      "repository": {
+        "id": "public",
+        "url": "https://package.flythings.cn"
+      },
+      "platform": "T113STDCXX",
+      "id": "zknet",
+      "version": "0.0.0",
+      "revision": "0.0.0"
+    }
+  ]
+}

@@ -1,0 +1,293 @@
+diff --git a/edgenode/Drivers/BSP/IPS/ips.c b/edgenode/Drivers/BSP/IPS/ips.c
+index a8a16d6..aa7cc85 100644
+--- a/edgenode/Drivers/BSP/IPS/ips.c
++++ b/edgenode/Drivers/BSP/IPS/ips.c
+@@ -3,6 +3,7 @@
+ #include "gd32f10x_gpio.h"
+ #include "gd32f10x_spi.h"
+ #include "gd32f10x_dma.h"
++#include "gd32f10x_dbg.h"
+ #include "board_time.h"
+ 
+ /*
+@@ -91,6 +92,7 @@
+ /* 这个标志只属于BSP，用来防止APP在上一段数据尚未发送完时再次改写DMA寄存器。 */
+ static uint8_t ips_dma_active;
+ static uint8_t ips_initialized;
++static volatile uint8_t ips_spi_rx_sink;
+ static uint32_t ips_dma_deadline_ms;
+ 
+ typedef enum
+@@ -101,18 +103,35 @@ typedef enum
+     IPS_DMA_STATE_ERROR
+ } ips_dma_state_enum;
+ 
++static uint8_t ips_spi_wait_idle(void);
++
+ static void ips_dma_stop(void)
+ {
+-    /* 先关闭DMA通道，再关闭SPI2的DMA发送请求，避免DMA在配置过程中继续搬运数据。 */
++    /* 全双工下两个DMA通道必须一起停止，RX通道负责读走无意义回读字节。 */
+     dma_channel_disable(DMA1, DMA_CH1);
++    dma_channel_disable(DMA1, DMA_CH0);
+     spi_dma_disable(SPI2, SPI_DMA_TRANSMIT);
++    spi_dma_disable(SPI2, SPI_DMA_RECEIVE);
++}
++
++static void ips_spi_clear_rx_state(void)
++{
++    /* 清RBNE后再读状态寄存器，符合SPI接收溢出的硬件清除顺序。 */
++    if(spi_i2s_flag_get(SPI2, SPI_FLAG_RBNE) != RESET)
++    {
++        (void)spi_i2s_data_receive(SPI2);
++    }
++    (void)SPI_STAT(SPI2);
+ }
+ 
+ static void ips_dma_abort(void)
+ {
+     /* DMA或SPI异常时统一收尾，确保APP不会继续把这块缓冲区当作DMA占用。 */
+     ips_dma_stop();
++    (void)ips_spi_wait_idle();
++    ips_spi_clear_rx_state();
+     dma_flag_clear(DMA1, DMA_CH1, DMA_FLAG_G);
++    dma_flag_clear(DMA1, DMA_CH0, DMA_FLAG_G);
+     ips_dma_active = 0U;
+     gpio_bit_set(IPS_CS_PORT, IPS_CS_PIN);
+ }
+@@ -145,6 +164,39 @@ static uint8_t ips_spi_wait_idle(void)
+     return IPS_SUCCESS;
+ }
+ 
++static uint8_t ips_spi_wait_rbne(void)
++{
++    uint32_t timeout = IPS_SPI_TIMEOUT;
++
++    while(spi_i2s_flag_get(SPI2, SPI_FLAG_RBNE) == RESET)
++    {
++        if(timeout-- == 0U)
++        {
++            return IPS_FAIL;
++        }
++    }
++    return IPS_SUCCESS;
++}
++
++static uint8_t ips_spi_write_byte(uint8_t value)
++{
++    if(ips_spi_wait_tbe() == IPS_FAIL)
++    {
++        return IPS_FAIL;
++    }
++
++    spi_i2s_data_transmit(SPI2, value);
++
++    /* 屏幕没有MISO；全双工模式的回读字节必须及时取走，避免RBNE/OVR阻塞发送。 */
++    if(ips_spi_wait_rbne() == IPS_FAIL)
++    {
++        return IPS_FAIL;
++    }
++    (void)spi_i2s_data_receive(SPI2);
++
++    return IPS_SUCCESS;
++}
++
+ static uint8_t ips_write_command_data(uint8_t command, const uint8_t *data, uint8_t length)
+ {
+     uint8_t i;
+@@ -154,23 +206,21 @@ static uint8_t ips_write_command_data(uint8_t command, const uint8_t *data, uint
+     gpio_bit_reset(IPS_CS_PORT, IPS_CS_PIN);
+     gpio_bit_reset(IPS_DC_PORT, IPS_DC_PIN);
+ 
+-    if(ips_spi_wait_tbe() == IPS_FAIL)
++    if(ips_spi_write_byte(command) == IPS_FAIL)
+     {
+         success = IPS_FAIL;
+     }
+     else
+     {
+-        spi_i2s_data_transmit(SPI2, command);
+         gpio_bit_set(IPS_DC_PORT, IPS_DC_PIN);
+ 
+         for(i = 0U; i < length; i++)
+         {
+-            if(ips_spi_wait_tbe() == IPS_FAIL)
++            if(ips_spi_write_byte(data[i]) == IPS_FAIL)
+             {
+                 success = IPS_FAIL;
+                 break;
+             }
+-            spi_i2s_data_transmit(SPI2, data[i]);
+         }
+     }
+ 
+@@ -184,8 +234,21 @@ static uint8_t ips_write_command_data(uint8_t command, const uint8_t *data, uint
+ 
+ uint8_t ips_init(void)
+ {
+-    const uint8_t pixel_format = 0x55U;
+-    const uint8_t memory_access_control = 0xA0U;
++    const uint8_t pixel_format = 0x05U;
++    const uint8_t memory_access_control = 0x60U;
++    static const uint8_t porch_control[] = {0x05U, 0x05U, 0x00U, 0x33U, 0x33U};
++    static const uint8_t power_control[] = {0xA4U, 0xA1U};
++    static const uint8_t extra_timing[] = {0x09U, 0x09U, 0x08U};
++    static const uint8_t positive_gamma[] =
++    {
++        0xD0U, 0x05U, 0x09U, 0x09U, 0x08U, 0x14U, 0x28U,
++        0x33U, 0x3FU, 0x07U, 0x13U, 0x14U, 0x28U, 0x30U
++    };
++    static const uint8_t negative_gamma[] =
++    {
++        0xD0U, 0x05U, 0x09U, 0x09U, 0x08U, 0x03U, 0x24U,
++        0x32U, 0x32U, 0x3BU, 0x14U, 0x13U, 0x28U, 0x2FU
++    };
+ 
+     /* IPS初始化会重置SPI、DMA和屏幕，DMA正在读取APP缓冲区时绝对不能重复执行。 */
+     if((ips_dma_active != 0U) || (ips_initialized != 0U))
+@@ -200,6 +263,7 @@ uint8_t ips_init(void)
+     rcu_periph_clock_enable(RCU_DMA1);
+ 
+     /* PB3默认是JTAG的JTDO。board_config_init已经关闭JTAG、保留SWD，所以这里可以作为SPI2时钟。 */
++    dbg_trace_pin_disable();
+     gpio_init(IPS_SCK_PORT, GPIO_MODE_AF_PP, GPIO_OSPEED_50MHZ, IPS_SCK_PIN);
+     gpio_init(IPS_MOSI_PORT, GPIO_MODE_AF_PP, GPIO_OSPEED_50MHZ, IPS_MOSI_PIN);
+ 
+@@ -224,10 +288,10 @@ uint8_t ips_init(void)
+     spi_struct_para_init(&spi_init_handler);
+     spi_init_handler.clock_polarity_phase = SPI_CK_PL_LOW_PH_1EDGE; /* Mode 0：空闲低，SDA 在上升沿采样 */
+     spi_init_handler.device_mode          = SPI_MASTER;
+-    spi_init_handler.trans_mode           = SPI_TRANSMODE_BDTRANSMIT; /* 屏幕只接 MOSI，不读回 */
++    spi_init_handler.trans_mode           = SPI_TRANSMODE_FULLDUPLEX;
+     spi_init_handler.endian               = SPI_ENDIAN_MSB;
+     spi_init_handler.nss                  = SPI_NSS_SOFT;             /* CS 由 PC4 手动控制 */
+-    spi_init_handler.prescale             = SPI_PSC_4;                /* SPI2 时钟 36MHz / 4 = 9MHz */
++    spi_init_handler.prescale             = SPI_PSC_2;
+     spi_init_handler.frame_size           = SPI_FRAMESIZE_8BIT;
+     spi_init(SPI2, &spi_init_handler);
+     spi_enable(SPI2);
+@@ -300,14 +364,28 @@ uint8_t ips_init(void)
+     dma_init_handler.priority = DMA_PRIORITY_HIGH;
+     dma_init(DMA1, DMA_CH1, &dma_init_handler);
+ 
++    /* SPI2全双工时，DMA1_CH0同步把每个无意义的接收字节写入固定sink。 */
++    dma_deinit(DMA1, DMA_CH0);
++    dma_struct_para_init(&dma_init_handler);
++    dma_init_handler.direction = DMA_PERIPHERAL_TO_MEMORY;
++    dma_init_handler.memory_addr = (uint32_t)&ips_spi_rx_sink;
++    dma_init_handler.memory_inc = DMA_MEMORY_INCREASE_DISABLE;
++    dma_init_handler.memory_width = DMA_MEMORY_WIDTH_8BIT;
++    dma_init_handler.periph_width = DMA_PERIPHERAL_WIDTH_8BIT;
++    dma_init_handler.periph_addr = (uint32_t)&SPI_DATA(SPI2);
++    dma_init_handler.periph_inc = DMA_PERIPH_INCREASE_DISABLE;
++    dma_init_handler.number = 0U;
++    dma_init_handler.priority = DMA_PRIORITY_HIGH;
++    dma_init(DMA1, DMA_CH0, &dma_init_handler);
++
+     /*
+         ST7789上电后还不能直接写像素，先复位并选择RGB565和横屏扫描方向。
+         下面的命令是控制器通用的基础初始化，具体伽马、电压等面板相关参数暂不在这里猜测。
+     */
+     gpio_bit_reset(IPS_RST_PORT, IPS_RST_PIN);
+-    delay_ms(10U);
++    delay_ms(100U);
+     gpio_bit_set(IPS_RST_PORT, IPS_RST_PIN);
+-    delay_ms(120U);
++    delay_ms(100U);
+ 
+     if(ips_write_command_data(0x01U, 0, 0U) == IPS_FAIL) /* 软件复位 */
+     {
+@@ -322,14 +400,39 @@ uint8_t ips_init(void)
+     }
+     delay_ms(120U);
+ 
+-    if((ips_write_command_data(0x3AU, &pixel_format, 1U) == IPS_FAIL) || /* RGB565 */
+-       (ips_write_command_data(0x36U, &memory_access_control, 1U) == IPS_FAIL) || /* 横屏 */
+-       (ips_write_command_data(0x29U, 0, 0U) == IPS_FAIL)) /* 打开显示 */
++    if(ips_write_command_data(0x3AU, &pixel_format, 1U) == IPS_FAIL) /* RGB565 */
++    {
++        gpio_bit_reset(IPS_BLK_PORT, IPS_BLK_PIN);
++        return IPS_FAIL;
++    }
++
++    if((ips_write_command_data(0xC5U, (const uint8_t[]){0x1AU}, 1U) == IPS_FAIL) ||
++       (ips_write_command_data(0x36U, &memory_access_control, 1U) == IPS_FAIL) ||
++       (ips_write_command_data(0xB2U, porch_control, sizeof(porch_control)) == IPS_FAIL) ||
++       (ips_write_command_data(0xB7U, (const uint8_t[]){0x05U}, 1U) == IPS_FAIL) ||
++       (ips_write_command_data(0xBBU, (const uint8_t[]){0x3FU}, 1U) == IPS_FAIL) ||
++       (ips_write_command_data(0xC0U, (const uint8_t[]){0x2CU}, 1U) == IPS_FAIL) ||
++       (ips_write_command_data(0xC2U, (const uint8_t[]){0x01U}, 1U) == IPS_FAIL) ||
++       (ips_write_command_data(0xC3U, (const uint8_t[]){0x0FU}, 1U) == IPS_FAIL) ||
++       (ips_write_command_data(0xC4U, (const uint8_t[]){0x20U}, 1U) == IPS_FAIL) ||
++       (ips_write_command_data(0xC6U, (const uint8_t[]){0x01U}, 1U) == IPS_FAIL) ||
++       (ips_write_command_data(0xD0U, power_control, sizeof(power_control)) == IPS_FAIL) ||
++       (ips_write_command_data(0xE8U, (const uint8_t[]){0x03U}, 1U) == IPS_FAIL) ||
++       (ips_write_command_data(0xE9U, extra_timing, sizeof(extra_timing)) == IPS_FAIL) ||
++       (ips_write_command_data(0xE0U, positive_gamma, sizeof(positive_gamma)) == IPS_FAIL) ||
++       (ips_write_command_data(0xE1U, negative_gamma, sizeof(negative_gamma)) == IPS_FAIL))
++    {
++        gpio_bit_reset(IPS_BLK_PORT, IPS_BLK_PIN);
++        return IPS_FAIL;
++    }
++
++    if(ips_write_command_data(0x29U, 0, 0U) == IPS_FAIL)
+     {
+         gpio_bit_reset(IPS_BLK_PORT, IPS_BLK_PIN);
+         return IPS_FAIL;
+     }
+ 
++    delay_ms(50U);
+     gpio_bit_set(IPS_BLK_PORT, IPS_BLK_PIN);
+     ips_initialized = 1U;
+     return IPS_SUCCESS;
+@@ -384,14 +487,19 @@ static uint8_t ips_dma_start(const uint8_t *data, uint16_t byte_count)
+     */
+     dma_memory_address_config(DMA1, DMA_CH1, (uint32_t)data);
+     dma_transfer_number_config(DMA1, DMA_CH1, byte_count);
++    dma_memory_address_config(DMA1, DMA_CH0, (uint32_t)&ips_spi_rx_sink);
++    dma_transfer_number_config(DMA1, DMA_CH0, byte_count);
+ 
+     /* 清除上一笔传输遗留的完成、半完成和错误状态，避免把旧状态误当成本次已经完成。 */
+     dma_flag_clear(DMA1, DMA_CH1, DMA_FLAG_G);
++    dma_flag_clear(DMA1, DMA_CH0, DMA_FLAG_G);
+ 
+-    /* SPI2产生发送请求后，DMA才会把内存中的下一个字节自动写入SPI2数据寄存器。 */
++    /* TX发送像素，RX同步消耗全双工回读数据，两个通道的字节数必须一致。 */
+     gpio_bit_reset(IPS_CS_PORT, IPS_CS_PIN);
+     gpio_bit_set(IPS_DC_PORT, IPS_DC_PIN);
++    spi_dma_enable(SPI2, SPI_DMA_RECEIVE);
+     spi_dma_enable(SPI2, SPI_DMA_TRANSMIT);
++    dma_channel_enable(DMA1, DMA_CH0);
+     dma_channel_enable(DMA1, DMA_CH1);
+     ips_dma_active = 1U;
+     ips_dma_deadline_ms = board_systick_ms + IPS_DMA_TIMEOUT_MS;
+@@ -419,7 +527,20 @@ static ips_dma_state_enum ips_dma_poll(void)
+         return IPS_DMA_STATE_ERROR;
+     }
+ 
+-    if(dma_flag_get(DMA1, DMA_CH1, DMA_FLAG_FTF) == RESET)
++    if(dma_flag_get(DMA1, DMA_CH0, DMA_FLAG_ERR) != RESET)
++    {
++        ips_dma_abort();
++        return IPS_DMA_STATE_ERROR;
++    }
++
++    if(spi_i2s_flag_get(SPI2, SPI_FLAG_RXORERR) != RESET)
++    {
++        ips_dma_abort();
++        return IPS_DMA_STATE_ERROR;
++    }
++
++    if((dma_flag_get(DMA1, DMA_CH1, DMA_FLAG_FTF) == RESET) ||
++       (dma_flag_get(DMA1, DMA_CH0, DMA_FLAG_FTF) == RESET))
+     {
+         return IPS_DMA_STATE_BUSY;
+     }
+@@ -435,6 +556,7 @@ static ips_dma_state_enum ips_dma_poll(void)
+     }
+ 
+     dma_flag_clear(DMA1, DMA_CH1, DMA_FLAG_G);
++    dma_flag_clear(DMA1, DMA_CH0, DMA_FLAG_G);
+     ips_dma_active = 0U;
+     gpio_bit_set(IPS_CS_PORT, IPS_CS_PIN);
+     return IPS_DMA_STATE_COMPLETE;

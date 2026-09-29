@@ -1,0 +1,23 @@
+{
+  "date": "2026-09-26",
+  "window": "30d: 2026-08-27 through 2026-09-26",
+  "metrics": {
+    "commits": 73,
+    "contributors": 1,
+    "insertions_excluding_edgenode_ThirdParty": 55314,
+    "deletions_excluding_edgenode_ThirdParty": 4713,
+    "project_test_files": 0,
+    "test_commits": 0,
+    "active_days": 25,
+    "feat_commits": 19,
+    "fix_commits": 10,
+    "other_commits": 42
+  },
+  "authors": {
+    "xccloop": {
+      "commits": 73
+    }
+  },
+  "metrics_scope": "Line churn excludes edgenode/ThirdParty. Remaining line totals include source, docs, notes, diagrams and generated artifacts; not a measure of authored code or productivity.",
+  "notes": "Commit timestamps indicate activity only, not working hours. My-Learning wiki was reviewed separately; note text is polished and not treated as unedited raw diary."
+}

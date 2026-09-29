@@ -1,0 +1,93 @@
+diff --git a/edgenode/User/App/FreeRtos/Tasks/rtos_task.c b/edgenode/User/App/FreeRtos/Tasks/rtos_task.c
+index 56a00c4..8cc66bc 100644
+--- a/edgenode/User/App/FreeRtos/Tasks/rtos_task.c
++++ b/edgenode/User/App/FreeRtos/Tasks/rtos_task.c
+@@ -119,18 +119,6 @@ static void task_block_forever(void)
+     }
+ }
+ 
+-/*
+-    TransmitTask 在 TCP 重连成功后置 1；StorageTask 看到后把积压的 pending 补发一遍。
+-    跨任务单字节标志：即使读写竞争，最坏也只是重复补发一次，而确认 / Hub 去重是幂等的。
+-*/
+-static volatile uint8_t link_restored;
+-
+-/* 上次尝试 TCP 重连的 tick，用来给重连加冷却，避免链路长时间不可用时反复卡住发送任务。 */
+-static TickType_t last_reconnect_tick;
+-
+-/* 两条记录之间至少间隔这么久才再试一次重连。 */
+-#define TCP_RECONNECT_COOLDOWN_MS 5000U
+-
+ static StaticTask_t led1_task_tcb;
+ static StackType_t led1_task_stack[256];
+ static TaskHandle_t led1_task_handle;
+@@ -208,8 +196,7 @@ void led_tasks_create(void)
+       - 连续 3 次失败 → 放弃这一条直接返回（留给下次补发或下次上电），
+         不让一条补不动的数据把补发流程永久卡死；
+       - 全部 pending 确认完 → 返回。
+-    起点既可能来自 storage_init() 的扫描结果（上电恢复），
+-    也可能来自 storage_find_oldest_pending()（运行期链路恢复）。
++    此函数只由 storage_init() 扫描到的 pending 调用，用于上电恢复。
+ */
+ static void storage_replay_pending(transmit_work_item_t transmit_work,
+                                    QueueHandle_t transmit_queue,
+@@ -381,25 +368,7 @@ static void storage_task(void *argument)
+                 {
+                     task_block_forever();
+                 }
+-            }
+-        }
+-
+-        /*
+-            运行期链路恢复：TransmitTask 在 TCP 重连成功后置 link_restored。
+-            这里把当前所有 pending 补发一遍（起点取地址最旧的一条），
+-            补完再回到正常采集。补发期间 CollectTask 停在许可等待上，不会被饿着。
+-        */
+-        if(link_restored != 0U)
+-        {
+-            link_restored = 0U;
+ 
+-            if(storage_find_oldest_pending(&transmit_work.message,
+-                                           &transmit_work.flash_address)
+-               == STORAGE_SUCCESS)
+-            {
+-                storage_replay_pending(transmit_work,
+-                                       transmit_queue,
+-                                       confirm_queue);
+             }
+         }
+ 
+@@ -699,7 +668,6 @@ static void transmit_task(void *argument)
+ {
+     transmit_work_item_t transmit_work;
+     uint8_t transmit_success;
+-    TickType_t now_tick;
+     QueueHandle_t transmit_queue;
+     QueueHandle_t confirm_queue;
+     QueueHandle_t tcp_ack_queue;
+@@ -752,25 +720,6 @@ static void transmit_task(void *argument)
+ 
+             if(transmit_success == 0U)
+             {
+-                /*
+-                    TCP 这条路失败：多半是链路已经断了。
+-                    低频尝试重连；一旦重连成功，置 link_restored 通知
+-                    StorageTask 把积压的 pending 补发一遍。
+-                    tick 冷却避免网关一直不在时，每条记录都卡在 CIPSTART 上。
+-                */
+-                now_tick = xTaskGetTickCount();
+-
+-                if((now_tick - last_reconnect_tick) >=
+-                   pdMS_TO_TICKS(TCP_RECONNECT_COOLDOWN_MS))
+-                {
+-                    last_reconnect_tick = now_tick;
+-
+-                    if(tcp_try_reconnect() == TCP_SUCCESS)
+-                    {
+-                        link_restored = 1U;
+-                    }
+-                }
+-
+                 transmit_can_receive_queue_clear(can_receive_queue);
+                 if(can_frame_transmit(board_id,
+                                       &transmit_work.message) == CAN_TRANSMIT_SUCCESS)
