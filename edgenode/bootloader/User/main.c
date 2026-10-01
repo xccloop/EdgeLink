@@ -3,6 +3,7 @@
 #include "ota_metadata.h"   /* ota_metadata_t / load / save / OTA_SLOT_NONE */
 #include "boot_jump.h"
 #include "image_verify.h"
+#include "CH340/ch340.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -26,19 +27,38 @@
     分工：
         image_verify          判断"这个槽能不能用"，从不决定"该跳哪个"
         本文件                 拿这个裁决去组合出"该怎么办"
+
+    日志一律走 ch340_* 那组函数，不用 printf ——
+    见 ch340.h 里对"为什么不用 printf"的说明。
 */
 
 /* 连续试启动失败多少次就放弃新槽、回退到活动槽。 */
 #define OTA_BOOT_ATTEMPT_LIMIT  3U
+
+/* 打一行"标签 + 8 位十六进制地址"。槽地址的日志基本都长这样。 */
+static void boot_log_addr(const char *label, uint32_t slot)
+{
+    ch340_puts(label);
+    ch340_put_hex32(slot);
+    ch340_puts("\r\n");
+}
 
 /*
     两个槽都没有可用镜像时的落点。
 
     不是"出错罢工"，而是"等待救援"：后续接入 CAN 固件接收后，
     这个循环就是等待从总线灌入固件的地方。设备停在这里仍然活着，能被远程救回来。
+
+    停下来之前先把原因打出去并等它发完 —— 否则设备静默卡死，
+    你完全分不清它是卡在这里、卡在校验里、还是压根没启动。
 */
-static void boot_wait_for_recovery(void)
+static void boot_halt(const char *reason)
 {
+    ch340_puts("[boot] HALT: ");
+    ch340_puts(reason);
+    ch340_puts("\r\n");
+    ch340_flush();
+
     while (1)
     {
     }
@@ -92,6 +112,12 @@ static uint32_t boot_choose_usable_slot(void)
     }
 
     /* 两个都能用：挑版本号大的，那多半是用户最后一次升级留下的。 */
+    ch340_puts("[boot] both slots valid, A=v");
+    ch340_put_dec(boot_slot_version(OTA_SLOT_A_BASE_ADDRESS));
+    ch340_puts(" B=v");
+    ch340_put_dec(boot_slot_version(OTA_SLOT_B_BASE_ADDRESS));
+    ch340_puts("\r\n");
+
     return (boot_slot_version(OTA_SLOT_B_BASE_ADDRESS) >
             boot_slot_version(OTA_SLOT_A_BASE_ADDRESS)) ?
            OTA_SLOT_B_BASE_ADDRESS : OTA_SLOT_A_BASE_ADDRESS;
@@ -105,6 +131,10 @@ int main(void)
     uint8_t load_result;
     uint8_t had_pending;
 
+    /* 串口必须最先初始化，后面每一步才有人听得到。 */
+    ch340_init();
+    ch340_puts("\r\n[boot] EdgeNode bootloader\r\n");
+
     load_result = ota_metadata_load(&meta);
 
     if (load_result == OTA_METADATA_LOAD_REAL)
@@ -115,6 +145,13 @@ int main(void)
             两份记录里读到了真实内容，说明"用户上次选了谁"是已知的。
             下面全部按元数据走，不看版本号。
         */
+        ch340_puts("[boot] meta REAL active=");
+        ch340_put_hex32(meta.active_slot);
+        ch340_puts(" pending=");
+        ch340_put_hex32(meta.pending_slot);
+        ch340_puts(" attempts=");
+        ch340_put_dec(meta.boot_attempts);
+        ch340_puts("\r\n");
 
         had_pending = (meta.pending_slot != OTA_SLOT_NONE) ? 1U : 0U;
 
@@ -142,6 +179,12 @@ int main(void)
                     待试槽是刚写进去、还没被验证过的新东西，它出问题很正常。
                 */
                 fallback_slot = meta.active_slot;
+
+                ch340_puts("[boot] try #");
+                ch340_put_dec(meta.boot_attempts);
+                ch340_puts(" -> ");
+                ch340_put_hex32(target_slot);
+                ch340_puts("\r\n");
             }
             else
             {
@@ -155,6 +198,8 @@ int main(void)
                 meta.pending_slot = OTA_SLOT_NONE;
                 meta.boot_attempts = 0U;
                 target_slot = meta.active_slot;
+
+                ch340_puts("[boot] attempts exhausted, give up pending\r\n");
             }
         }
         else
@@ -172,9 +217,11 @@ int main(void)
 
         if (image_verify(target_slot) == false)
         {
+            boot_log_addr("[boot] INVALID image at ", target_slot);
+
             if (fallback_slot == 0U)
             {
-                boot_wait_for_recovery();
+                boot_halt("target invalid, no fallback");
             }
 
             /* 待试启动槽不可用 = 升级没写成功 → 清掉 pending，退回活动槽。 */
@@ -182,9 +229,11 @@ int main(void)
             meta.pending_slot = OTA_SLOT_NONE;
             meta.boot_attempts = 0U;
 
+            boot_log_addr("[boot] fallback -> ", target_slot);
+
             if (image_verify(target_slot) == false)
             {
-                boot_wait_for_recovery();
+                boot_halt("fallback also invalid");
             }
         }
 
@@ -211,12 +260,13 @@ int main(void)
             旧做法是"固定默认槽 A" —— 那等于在没有依据的时候硬选一个，
             设备明明跑的是 B 也会被猜成 A。这里改成实地去看。
         */
+        ch340_puts("[boot] meta UNREADABLE, picking from slots\r\n");
 
         target_slot = boot_choose_usable_slot();
 
         if (target_slot == 0U)
         {
-            boot_wait_for_recovery();
+            boot_halt("no usable image in A or B");
         }
 
         /*
@@ -230,19 +280,30 @@ int main(void)
         meta.boot_attempts = 0U;
         meta.pending_version = 0U;
         (void)ota_metadata_save(&meta);
+
+        boot_log_addr("[boot] rebuilt meta, active=", target_slot);
     }
 
     /*
         走到这里时 target_slot 必定已经通过 image_verify：
 
-          - 上面那条路：跳转前刚校验过，校验不过的已经被 boot_wait_for_recovery 拦住
+          - 上面那条路：跳转前刚校验过，校验不过的已经被 boot_halt 拦住
           - 下面那条路：boot_choose_usable_slot() 只返回它亲自校验通过的槽
 
         元数据只给"候选"，image_verify 才是"裁决"。
     */
+    boot_log_addr("[boot] jump -> ", target_slot + OTA_APPLICATION_OFFSET);
+
+    /*
+        跳转前必须把串口发干净。
+        每个字节只等到 TBE（数据寄存器空），最后一个字节可能还卡在移位寄存器里；
+        应用启动后会 usart_deinit(USART0)，那一刻未发完的字节就被截断。
+    */
+    ch340_flush();
+
     boot_jump_to_vector(target_slot + OTA_APPLICATION_OFFSET);
 
     /* boot_jump_to_vector 是 noreturn，正常走不到这里。 */
-    boot_wait_for_recovery();
+    boot_halt("jump returned unexpectedly");
     return 0;
 }

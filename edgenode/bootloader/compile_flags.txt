@@ -7,6 +7,7 @@
 -std=c11
 -IUser
 -IDriver/Core/Inc
+-IDriver/Bsp
 -I../Common/OTA
 -I../Common/CRC
 -I../User
