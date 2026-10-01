@@ -15,8 +15,10 @@ LDFLAGS := $(MCU) -TOCD/linker/gd32f103rct6_bootloader.ld -Wl,--gc-sections -Wl,
 OBJECTS := $(BUILD_DIR)/main.o \
            $(BUILD_DIR)/boot_jump.o \
            $(BUILD_DIR)/image_verify.o \
+           $(BUILD_DIR)/ota_metadata.o \
            $(BUILD_DIR)/crc32.o \
            $(BUILD_DIR)/system_gd32f10x.o \
+           $(BUILD_DIR)/gd32f10x_fmc.o \
            $(BUILD_DIR)/gd32f10x_misc.o \
            $(BUILD_DIR)/startup_gd32f10x_hd.o
 
@@ -44,7 +46,15 @@ $(BUILD_DIR)/image_verify.o: Driver/Core/Src/image_verify.c
 	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
+$(BUILD_DIR)/ota_metadata.o: ../Common/OTA/ota_metadata.c
+	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
 $(BUILD_DIR)/crc32.o: ../Common/CRC/crc32.c
+	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/gd32f10x_fmc.o: ../Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_fmc.c
 	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
