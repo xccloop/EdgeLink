@@ -1,6 +1,6 @@
 #include "tcp_frame.h"
 #include "Config/config.h"
-#include "Protocol/CRC/crc.h"
+#include "crc32.h"
 
 /*
     这个文件是用于定义TCP协议帧的文件并且提供TCP帧协议解析，协议内容与要edgehub定义一致

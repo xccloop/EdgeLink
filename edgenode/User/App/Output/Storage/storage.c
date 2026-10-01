@@ -1,6 +1,6 @@
 #include "storage.h"
 #include "GD25Q32/gd25.h"
-#include "Protocol/CRC/crc.h"
+#include "crc32.h"
 #include <stdint.h>
 
 /*

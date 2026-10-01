@@ -8,6 +8,7 @@
 -IUser
 -IDriver/Core/Inc
 -I../Common/OTA
+-I../Common/CRC
 -I../User
 -I../Drivers/CMSIS/Include
 -I../Drivers/CMSIS/Device/GD/GD32F10x/Include
