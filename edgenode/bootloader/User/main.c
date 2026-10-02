@@ -4,6 +4,11 @@
 #include "boot_jump.h"
 #include "image_verify.h"
 #include "CH340/ch340.h"
+#include "board_time.h"
+#include "board_debug.h"
+#include "IPS/ips.h"
+#include "Display/display_buffer.h"
+#include "boot_screen.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -43,20 +48,96 @@ static void boot_log_addr(const char *label, uint32_t slot)
     ch340_puts("\r\n");
 }
 
+/* 元数据到底读没读到 —— 主流程记下来，卡住时屏幕要显示它。 */
+static uint8_t boot_meta_was_real;
+
 /*
-    两个槽都没有可用镜像时的落点。
+    每种故障对应的串口日志文字。
+
+    和屏幕上那套（boot_screen.c 里的 screen_messages）故意分开：
+    日志是给开发者看的，屏幕是给现场人员看的，措辞本来就不该一样。
+*/
+static const char *const boot_halt_log[BOOT_HALT_REASON_COUNT] =
+{
+    "no usable image in A or B",
+    "active slot invalid, no fallback",
+    "pending invalid, fallback also invalid",
+    "jump returned unexpectedly",
+};
+
+/*
+    卡住时的落点。
 
     不是"出错罢工"，而是"等待救援"：后续接入 CAN 固件接收后，
     这个循环就是等待从总线灌入固件的地方。设备停在这里仍然活着，能被远程救回来。
 
-    停下来之前先把原因打出去并等它发完 —— 否则设备静默卡死，
-    你完全分不清它是卡在这里、卡在校验里、还是压根没启动。
+    停下来之前做两件事：
+      1. 串口打一行日志并等它发完 —— 否则设备静默卡死，
+         你完全分不清它是卡在这里、卡在校验里、还是压根没启动。
+      2. 点亮屏幕，把故障说明和两个槽的实测状态摆出来。
 */
-static void boot_halt(const char *reason)
+static void boot_halt(boot_halt_reason_t reason)
 {
+    boot_halt_info_t info;
+
+    if (reason >= BOOT_HALT_REASON_COUNT)
+    {
+        reason = BOOT_HALT_JUMP_RETURNED;   /* 不该发生，兜一下防止数组越界 */
+    }
+
     ch340_puts("[boot] HALT: ");
-    ch340_puts(reason);
+    ch340_puts(boot_halt_log[reason]);
     ch340_puts("\r\n");
+    ch340_flush();
+
+    /*
+        屏幕上那份"体检表"是【现场实测】的，不是主流程一路传下来的 ——
+        卡住之后重新验一遍，屏幕说的就是此刻的真实情况。
+        两个槽各算一次 CRC 约 80ms；反正已经卡住了，这点时间不算什么。
+    */
+    info.reason    = reason;
+    info.meta_ok   = boot_meta_was_real;
+    info.slot_a_ok = (image_verify(OTA_SLOT_A_BASE_ADDRESS) != false) ? 1U : 0U;
+    info.slot_b_ok = (image_verify(OTA_SLOT_B_BASE_ADDRESS) != false) ? 1U : 0U;
+
+    /*
+        卡住了才点屏 —— 现场设备屏幕是唯一的人机界面，黑屏等于什么都没说。
+
+        为什么放在这里而不是 main 开头：
+          ips_init() 里有约 490ms 的固定延时（屏幕复位 + 初始化序列），
+          每次上电都点屏会让正常启动白等半秒，还会闪一下。
+          只有真的卡住了才付这个时间。
+
+        屏幕坏掉不该把串口那条路也堵死：
+        ips_init() 内部有 SPI 超时保护，失败返回 IPS_FAIL，
+        那就跳过刷屏，日志照旧发得出去。
+    */
+    /*
+        点屏前的两件准备，顺序不能反，也不能省：
+
+        ① board_debug_init()：PB3 复位后是 JTDO，不关掉 JTAG 就不能当
+           SPI2_SCK 用 —— 屏幕会全黑。而且 ips_init() 还不一定报错，
+           因为 SPI 硬件自己是配置"成功"的，只是时钟线根本没接出来。
+        ② board_systick_init()：ips_init() 内部要用 delay_ms() 等屏幕复位，
+           而 delay_ms() 靠 SysTick 计数 —— 没有它就会死等在那里。
+
+        这两条应用里都由 board_config_init() 代劳，Bootloader 必须自己补。
+    */
+    board_debug_init();
+    board_systick_init();
+
+    if (ips_init() == IPS_SUCCESS)
+    {
+        (void)display_buffer_init();
+        boot_screen_show_halt(&info);
+        ch340_puts("[boot] screen up\r\n");
+    }
+    else
+    {
+        /* ips_init() 内部有 SPI 超时保护；失败时屏幕点不亮，但得让人知道。 */
+        ch340_puts("[boot] display init FAILED, screen stays dark\r\n");
+    }
+
     ch340_flush();
 
     while (1)
@@ -136,6 +217,9 @@ int main(void)
     ch340_puts("\r\n[boot] EdgeNode bootloader\r\n");
 
     load_result = ota_metadata_load(&meta);
+
+    /* 记下来：卡住时屏幕上的"体检表"要显示元数据到底读没读到。 */
+    boot_meta_was_real = (load_result == OTA_METADATA_LOAD_REAL) ? 1U : 0U;
 
     if (load_result == OTA_METADATA_LOAD_REAL)
     {
@@ -221,7 +305,7 @@ int main(void)
 
             if (fallback_slot == 0U)
             {
-                boot_halt("target invalid, no fallback");
+                boot_halt(BOOT_HALT_TARGET_INVALID);
             }
 
             /* 待试启动槽不可用 = 升级没写成功 → 清掉 pending，退回活动槽。 */
@@ -233,7 +317,7 @@ int main(void)
 
             if (image_verify(target_slot) == false)
             {
-                boot_halt("fallback also invalid");
+                boot_halt(BOOT_HALT_FALLBACK_INVALID);
             }
         }
 
@@ -266,7 +350,7 @@ int main(void)
 
         if (target_slot == 0U)
         {
-            boot_halt("no usable image in A or B");
+            boot_halt(BOOT_HALT_NO_USABLE_IMAGE);
         }
 
         /*
@@ -304,6 +388,6 @@ int main(void)
     boot_jump_to_vector(target_slot + OTA_APPLICATION_OFFSET);
 
     /* boot_jump_to_vector 是 noreturn，正常走不到这里。 */
-    boot_halt("jump returned unexpectedly");
+    boot_halt(BOOT_HALT_JUMP_RETURNED);
     return 0;
 }

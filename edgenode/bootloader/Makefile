@@ -13,10 +13,17 @@ CFLAGS := $(MCU) $(DEFS) $(INCLUDES) -std=c11 -g3 -Og -Wall -Wextra -ffunction-s
 LDFLAGS := $(MCU) -TOCD/linker/gd32f103rct6_bootloader.ld -Wl,--gc-sections -Wl,-Map=$(BUILD_DIR)/$(PROJECT).map -specs=nano.specs -specs=nosys.specs
 
 OBJECTS := $(BUILD_DIR)/main.o \
+           $(BUILD_DIR)/boot_screen.o \
+           $(BUILD_DIR)/hmi_render.o \
+           $(BUILD_DIR)/hmi_widget.o \
+           $(BUILD_DIR)/display_buffer.o \
            $(BUILD_DIR)/boot_jump.o \
            $(BUILD_DIR)/image_verify.o \
            $(BUILD_DIR)/ota_metadata.o \
            $(BUILD_DIR)/ch340.o \
+           $(BUILD_DIR)/board_time.o \
+           $(BUILD_DIR)/board_debug.o \
+           $(BUILD_DIR)/ips.o \
            $(BUILD_DIR)/crc32.o \
            $(BUILD_DIR)/system_gd32f10x.o \
            $(BUILD_DIR)/gd32f10x_fmc.o \
@@ -24,6 +31,9 @@ OBJECTS := $(BUILD_DIR)/main.o \
            $(BUILD_DIR)/gd32f10x_gpio.o \
            $(BUILD_DIR)/gd32f10x_rcu.o \
            $(BUILD_DIR)/gd32f10x_usart.o \
+           $(BUILD_DIR)/gd32f10x_spi.o \
+           $(BUILD_DIR)/gd32f10x_dma.o \
+           $(BUILD_DIR)/gd32f10x_dbg.o \
            $(BUILD_DIR)/startup_gd32f10x_hd.o
 
 .PHONY: all clean
@@ -71,6 +81,46 @@ $(BUILD_DIR)/gd32f10x_rcu.o: ../Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 $(BUILD_DIR)/gd32f10x_usart.o: ../Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_usart.c
+	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/gd32f10x_spi.o: ../Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_spi.c
+	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/gd32f10x_dma.o: ../Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_dma.c
+	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/gd32f10x_dbg.o: ../Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_dbg.c
+	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/board_time.o: Driver/Bsp/board_time.c
+	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/board_debug.o: Driver/Bsp/board_debug.c
+	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/ips.o: Driver/Bsp/IPS/ips.c
+	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/boot_screen.o: User/boot_screen.c
+	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/hmi_render.o: Driver/Bsp/Display/hmi_render.c
+	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/hmi_widget.o: Driver/Bsp/Display/hmi_widget.c
+	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/display_buffer.o: Driver/Bsp/Display/display_buffer.c
 	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 

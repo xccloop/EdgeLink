@@ -15,11 +15,43 @@ typedef void (*app_reset_handler_t)(void); //app_reset_handler_t 是一种指针
     一旦 MSP 被切换，当前函数就不能再碰栈了。
     但是我们又需要跳转，所以这里采用汇编的方式进行
 */
+/*
+    两个参数标 __attribute__((unused)) 是为了压掉 -Wunused-parameter：
+    它们的值由 ARM 调用约定直接放进 r0 / r1，只被下面的汇编消费，
+    GCC 在 C 层面看不见引用，就以为没用到。
+
+    不能用 "(void)new_msp;" 那种写法 —— naked 函数里不允许出现汇编以外的
+    语句（GCC 会直接报 "non-ASM statement in naked function"）。
+    加这个属性只影响警告，不改变调用约定，也不生成任何指令。
+*/
 __attribute__((naked, noreturn))
-static void boot_jump_asm(uint32_t new_msp, uint32_t reset_handler)
+static void boot_jump_asm(uint32_t new_msp __attribute__((unused)),
+                          uint32_t reset_handler __attribute__((unused)))
 {
     __asm volatile(
         "msr msp, r0\n"
+        /*
+            在跳过去之前，把中断总开关打开（cpsie i 清 PRIMASK）。
+
+            为什么必须在这里补这一句：
+              本函数上面的 boot_jump_to_vector() 调过 __disable_irq()，
+              那会把 PRIMASK 置 1，屏蔽【所有】可屏蔽中断。
+              而 PRIMASK 是 CPU 级开关，跳转不会把它复位 ——
+              如果我们不管，应用就会全程在"全局关中断"的状态下跑。
+
+              实测后果：应用初始化里凡是依赖 SysTick 中断的 delay_ms()
+              都会死等（board_systick_ms 永远不涨）。应用要等到
+              vTaskStartScheduler() 才重新开中断，但那时早就卡死了。
+
+            为什么放在这里安全：
+              此刻 VTOR 已经指向应用的向量表，NVIC 的使能和挂起位
+              都被 boot_jump_to_vector() 清过，SysTick 也已经关掉 ——
+              从 cpsie i 到 bx r1 之间没有任何中断源能触发。
+
+              真实的上电复位里 PRIMASK 本来就是 0，这一句只是把
+              CPU 恢复到应用有权期待的那个状态。
+        */
+        "cpsie i\n"
         "bx r1\n"
     );
 }

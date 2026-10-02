@@ -1,5 +1,28 @@
 PROJECT := edegnode
+
+# ── 槽位选择（命令行覆盖：make SLOT=a） ──
+#   plain —— 老的 0x08000000 布局，Bootloader 还没接管时用
+#   a / b —— A / B 槽应用：分别链接到各自槽内地址，并给 SystemInit 传
+#            对应的 VTOR 偏移，否则应用启动时会把向量表指回 0x08000000
+#            （也就是 Bootloader 的向量表），第一个中断就跑飞了。
+SLOT ?= plain
+
+ifeq ($(SLOT),a)
+BUILD_DIR := build_slot_a
+LDSCRIPT  := OCD/linker/gd32f103rct6_slot_a.ld
+VECT_DEF  := -DVECT_TAB_OFFSET=0x4100U
+else ifeq ($(SLOT),b)
+BUILD_DIR := build_slot_b
+LDSCRIPT  := OCD/linker/gd32f103rct6_slot_b.ld
+VECT_DEF  := -DVECT_TAB_OFFSET=0x21900U
+else
 BUILD_DIR := build
+LDSCRIPT  := OCD/linker/gd32f103rct6.ld
+VECT_DEF  :=
+endif
+
+# 写进镜像头的固件版本号
+IMAGE_VERSION ?= 1
 
 TOOLCHAIN := C:/Program Files (x86)/GNU Tools ARM Embedded/5.4 2016q3/bin
 CC := "$(TOOLCHAIN)/arm-none-eabi-gcc.exe"
@@ -7,10 +30,10 @@ OBJCOPY := "$(TOOLCHAIN)/arm-none-eabi-objcopy.exe"
 SIZE := "$(TOOLCHAIN)/arm-none-eabi-size.exe"
 
 MCU := -mcpu=cortex-m3 -mthumb
-DEFS := -DGD32F10X_HD -DUSE_STDPERIPH_DRIVER
+DEFS := -DGD32F10X_HD -DUSE_STDPERIPH_DRIVER $(VECT_DEF)
 INCLUDES := -IUser -IUser/App -ICommon/CRC -IDrivers/BSP -IDrivers/BSP/IPS -IDrivers/BOARD -IDrivers/CMSIS/Include -IDrivers/CMSIS/Device/GD/GD32F10x/Include -IDrivers/GD32F10x_Standard_Peripheral/Inc -IThirdParty/FreeRTOS-Kernel/include -IThirdParty/FreeRTOS-Kernel/portable/GCC/ARM_CM3
 CFLAGS := $(MCU) $(DEFS) $(INCLUDES) -std=c11 -g3 -Og -Wall -Wextra -ffunction-sections -fdata-sections
-LDFLAGS := $(MCU) -TOCD/linker/gd32f103rct6.ld -Wl,--gc-sections -Wl,-Map=$(BUILD_DIR)/$(PROJECT).map -specs=nano.specs -specs=nosys.specs
+LDFLAGS := $(MCU) -T$(LDSCRIPT) -Wl,--gc-sections -Wl,-Map=$(BUILD_DIR)/$(PROJECT).map -specs=nano.specs -specs=nosys.specs
 
 DRIVER_SOURCES := Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_rcu.c \
                   Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_misc.c \
@@ -33,9 +56,16 @@ SOURCES := $(wildcard User/*.c) $(APP_SOURCES) $(BSP_SOURCES) $(BOARD_SOURCES) $
 STARTUP := OCD/startup/startup_gd32f10x_hd.s
 OBJECTS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(SOURCES)) $(BUILD_DIR)/$(STARTUP:.s=.o)
 
-.PHONY: all clean
+.PHONY: all clean image
 
 all: $(BUILD_DIR)/$(PROJECT).elf $(BUILD_DIR)/$(PROJECT).bin
+
+# 带镜像头的可烧镜像。只有 SLOT=a / SLOT=b 时才该用这个目标 ——
+# plain 布局下加了头反而烧不了。
+image: $(BUILD_DIR)/$(PROJECT)_image.bin
+
+$(BUILD_DIR)/$(PROJECT)_image.bin: $(BUILD_DIR)/$(PROJECT).bin tools/make_ota_image.py
+	python tools/make_ota_image.py --input $(BUILD_DIR)/$(PROJECT).bin --output $@ --version $(IMAGE_VERSION)
 
 $(BUILD_DIR)/$(PROJECT).elf: $(OBJECTS)
 	@if not exist "$(@D)" mkdir "$(@D)"
