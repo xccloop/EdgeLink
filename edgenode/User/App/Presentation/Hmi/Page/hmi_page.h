@@ -2,7 +2,7 @@
 #define HMI_PAGE_H_
 
 #include <stdint.h>
-#include "Presentation/Hmi/Widget/hmi_widget.h"
+#include "Hmi/hmi_widget.h"
 #include "Presentation/Hmi/hmi_types.h"
 
 #define HMI_PAGE_MAX_ITEMS 32U//一页最多放32个

@@ -2,7 +2,7 @@
 #define HMI_RENDER_H_
 
 #include <stdint.h>
-#include "hmi_widget.h"
+#include "Hmi/hmi_widget.h"
 #include "hmi_page.h"
 
 typedef enum

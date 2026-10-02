@@ -13,6 +13,7 @@
       ],
       "includePath": [
         "${workspaceFolder}/User",
+        "${workspaceFolder}/Common",
         "${workspaceFolder}/Drivers/BSP/**",
         "${workspaceFolder}/Drivers/CMSIS/Include",
         "${workspaceFolder}/Drivers/CMSIS/Device/GD/GD32F10x/Include",
@@ -21,6 +22,7 @@
       "browse": {
         "path": [
           "${workspaceFolder}/User",
+          "${workspaceFolder}/Common",
           "${workspaceFolder}/Drivers",
           "${workspaceFolder}/OCD"
         ]

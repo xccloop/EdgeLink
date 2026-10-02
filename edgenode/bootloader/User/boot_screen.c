@@ -2,7 +2,7 @@
 #include "Display/hmi_page.h"
 #include "Display/hmi_render.h"
 #include "Display/hmi_types.h"
-#include "Display/hmi_widget.h"
+#include "Hmi/hmi_widget.h"
 
 /*
     Bootloader 的"卡住"屏。

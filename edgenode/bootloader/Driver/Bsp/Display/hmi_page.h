@@ -2,7 +2,7 @@
 #define HMI_PAGE_H_
 
 #include <stdint.h>
-#include "hmi_widget.h"
+#include "Hmi/hmi_widget.h"
 
 /*
     从应用的 User/App/Presentation/Hmi/Page/hmi_page.h 裁剪而来：

@@ -9,6 +9,7 @@
 -IDrivers/BSP
 -IDrivers/BOARD
 -IUser/App
+-ICommon
 -ICommon/CRC
 -IThirdParty/FreeRTOS-Kernel/include
 -IThirdParty/FreeRTOS-Kernel/portable/GCC/ARM_CM3

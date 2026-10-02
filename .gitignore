@@ -1,1 +1,8 @@
 edgehub/data/*.db
+
+# Eclipse 工作区缓存：全部可再生。
+# 工程定义不在这里，在 edgedash/.project、.cproject、.settings/
+.metadata/
+
+# codegraph 工具生成的符号索引
+.codegraph/

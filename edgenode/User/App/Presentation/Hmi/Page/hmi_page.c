@@ -1,5 +1,5 @@
 #include "hmi_page.h"
-#include "Presentation/Hmi/Widget/hmi_widget.h"
+#include "Hmi/hmi_widget.h"
 #include "Presentation/Hmi/hmi_types.h"
 #include <stdint.h>
 #include <string.h>
