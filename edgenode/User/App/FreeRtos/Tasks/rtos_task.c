@@ -5,7 +5,7 @@
 #include "task.h"
 #include "LED/led.h"
 #include "Model/message.h"
-#include "Output/Storage/storage.h"
+#include "Output/Log/log.h"
 #include "Service/Transmit/transmit.h"
 #include "Config/config.h"
 #include "Protocol/Tcp/tcp_frame.h"
@@ -29,9 +29,9 @@ static void task_block_forever(void)
 }
 
 /*
-    TransmitTask 在 TCP 重连成功后置 1；StorageTask 看到后把积压的 pending 补发一遍。
+    TransmitTask 在 TCP 重连成功后置 1；LogTask 看到后把积压的 pending 补发一遍。
     跨任务单字节标志：即使读写竞争，最坏也只是重复补发一次，
-    而 storage_confirm 和 Hub 的查重都是幂等的，重复不会出错。
+    而 log_confirm 和 Hub 的查重都是幂等的，重复不会出错。
 */
 static volatile uint8_t link_restored;
 
@@ -114,13 +114,13 @@ void led_tasks_create(void)
 
 /*
     把一条待补发的记录交给 TransmitTask，再根据回来的确认事件决定下一步：
-      - 确认成功 → storage_confirm 写 confirmed，然后找下一条 pending；
+      - 确认成功 → log_confirm 写 confirmed，然后找下一条 pending；
       - 连续 3 次失败 → 放弃这一条直接返回（留给下次补发或下次上电），
         不让一条补不动的数据把补发流程永久卡死；
       - 全部 pending 确认完 → 返回。
-    此函数只由 storage_init() 扫描到的 pending 调用，用于上电恢复。
+    此函数只由 log_init() 扫描到的 pending 调用，用于上电恢复。
 */
-static void storage_replay_pending(transmit_work_item_t transmit_work,
+static void log_replay_pending(transmit_work_item_t transmit_work,
                                    QueueHandle_t transmit_queue,
                                    QueueHandle_t confirm_queue)
 {
@@ -130,7 +130,7 @@ static void storage_replay_pending(transmit_work_item_t transmit_work,
 
     while(1)
     {
-        storage_confirm_event_t confirm_event;
+        log_confirm_event_t confirm_event;
         uint8_t find_result;
 
         if(xQueueReceive(confirm_queue, &confirm_event, portMAX_DELAY) != pdPASS)
@@ -148,8 +148,8 @@ static void storage_replay_pending(transmit_work_item_t transmit_work,
         {
             if(confirm_event.success != 0U)
             {
-                if(storage_confirm(confirm_event.flash_address,
-                                   confirm_event.sequence) != STORAGE_SUCCESS)
+                if(log_confirm(confirm_event.flash_address,
+                                   confirm_event.sequence) != LOG_SUCCESS)
                 {
                     task_block_forever();
                 }
@@ -170,26 +170,26 @@ static void storage_replay_pending(transmit_work_item_t transmit_work,
             return;
         }
 
-        if(storage_confirm(confirm_event.flash_address,
-                           confirm_event.sequence) != STORAGE_SUCCESS)
+        if(log_confirm(confirm_event.flash_address,
+                           confirm_event.sequence) != LOG_SUCCESS)
         {
             task_block_forever();
         }
 
         fail_count = 0U;
 
-        find_result = storage_find_next_pending(
+        find_result = log_find_next_pending(
             confirm_event.flash_address,
             &transmit_work.message,
             &transmit_work.flash_address);
 
-        if(find_result == STORAGE_SUCCESS)
+        if(find_result == LOG_SUCCESS)
         {
             (void)xQueueSend(transmit_queue, &transmit_work, portMAX_DELAY);
             continue;
         }
 
-        if(find_result == STORAGE_NO_PENDING)
+        if(find_result == LOG_NO_PENDING)
         {
             return;
         }
@@ -198,20 +198,20 @@ static void storage_replay_pending(transmit_work_item_t transmit_work,
     }
 }
 
-static StaticTask_t storage_task_tcb;
-static StackType_t storage_task_stack[512];   /* 512：任务内调用 printf，栈需求变大 */
-static TaskHandle_t storage_task_handle;
+static StaticTask_t log_task_tcb;
+static StackType_t log_task_stack[512];   /* 512：任务内调用 printf，栈需求变大 */
+static TaskHandle_t log_task_handle;
 static TaskHandle_t collect_task_handle;
 
 /*
     这个任务是上电后第一个运行的第一个任务
 */
-static void storage_task(void *argument)
+static void log_task(void *argument)
 {
-    storage_init_result_t storage_result;
+    log_init_result_t log_result;
     telemetry_sample_struct collected_message;
     transmit_work_item_t transmit_work;
-    storage_confirm_event_t confirm_event;
+    log_confirm_event_t confirm_event;
 
     QueueHandle_t sequence_queue;
     QueueHandle_t permission_queue;
@@ -221,11 +221,11 @@ static void storage_task(void *argument)
 
     (void)argument;
 
-    sequence_queue = rtos_storage_to_collect_sequence_queue_get();
-    permission_queue = rtos_storage_to_collect_permission_queue_get();
-    collect_queue = rtos_collect_to_storage_queue_get();
-    transmit_queue = rtos_storage_to_transmit_queue_get();
-    confirm_queue = rtos_transmit_to_storage_confirm_queue_get();
+    sequence_queue = rtos_log_to_collect_sequence_queue_get();
+    permission_queue = rtos_log_to_collect_permission_queue_get();
+    collect_queue = rtos_collect_to_log_queue_get();
+    transmit_queue = rtos_log_to_transmit_queue_get();
+    confirm_queue = rtos_transmit_to_log_confirm_queue_get();
 
     if((sequence_queue == NULL) ||
        (permission_queue == NULL) ||
@@ -236,34 +236,34 @@ static void storage_task(void *argument)
         task_block_forever();
     }
 
-    /* 1. StorageTask 首先初始化 Flash。 */
-    if(storage_init(&storage_result) != STORAGE_SUCCESS)
+    /* 1. LogTask 首先初始化 Flash。 */
+    if(log_init(&log_result) != LOG_SUCCESS)
     {
         task_block_forever();
     }
 
     /*
         2. 上电恢复：把扫描到的所有 pending 按顺序补发完，再放行采集。
-           起点是 storage_init() 找到的最旧 pending。
+           起点是 log_init() 找到的最旧 pending。
     */
-    if(storage_result.has_pending != 0U)
+    if(log_result.has_pending != 0U)
     {
-        transmit_work.message = storage_result.oldest_pending_message;
+        transmit_work.message = log_result.oldest_pending_message;
         transmit_work.flash_address =
-            storage_result.oldest_pending_address;
+            log_result.oldest_pending_address;
 
-        storage_replay_pending(transmit_work,
+        log_replay_pending(transmit_work,
                                transmit_queue,
                                confirm_queue);
     }
 
-    if(storage_write_pending_ready() != STORAGE_SUCCESS)
+    if(log_write_pending_ready() != LOG_SUCCESS)
     {
         task_block_forever();
     }
 
     (void)xQueueSend(sequence_queue,
-                     &storage_result.next_sequence,
+                     &log_result.next_sequence,
                      portMAX_DELAY);
 
     {
@@ -278,15 +278,15 @@ static void storage_task(void *argument)
     {
         /*
             TransmitTask 只在收到 Hub 的成功 ACK 后才投递确认事件。
-            StorageTask 是唯一写 Flash 的任务，所以二次写入必须在这里完成。
+            LogTask 是唯一写 Flash 的任务，所以二次写入必须在这里完成。
             此处先取尽已经到达的事件，避免采集频繁时 ACK 长时间滞留。
         */
         while(xQueueReceive(confirm_queue, &confirm_event, 0U) == pdPASS)
         {
             if(confirm_event.success != 0U)
             {
-                if(storage_confirm(confirm_event.flash_address,
-                                   confirm_event.sequence) != STORAGE_SUCCESS)
+                if(log_confirm(confirm_event.flash_address,
+                                   confirm_event.sequence) != LOG_SUCCESS)
                 {
                     task_block_forever();
                 }
@@ -303,11 +303,11 @@ static void storage_task(void *argument)
         {
             link_restored = 0U;
 
-            if(storage_find_oldest_pending(&transmit_work.message,
+            if(log_find_oldest_pending(&transmit_work.message,
                                            &transmit_work.flash_address)
-               == STORAGE_SUCCESS)
+               == LOG_SUCCESS)
             {
-                storage_replay_pending(transmit_work,
+                log_replay_pending(transmit_work,
                                        transmit_queue,
                                        confirm_queue);
             }
@@ -322,12 +322,12 @@ static void storage_task(void *argument)
                          &collected_message,
                          pdMS_TO_TICKS(100U)) == pdPASS)
         {
-            if(storage_write_pending(&collected_message,
+            if(log_write_pending(&collected_message,
                                      &transmit_work.flash_address)
-               == STORAGE_SUCCESS)
+               == LOG_SUCCESS)
             {
                 /* 调试：显示本次写入 Flash 的内容与地址。 */
-                printf("[storage] seq=%lu temp=%d scale=%d addr=0x%06lX\r\n",
+                printf("[log] seq=%lu temp=%d scale=%d addr=0x%06lX\r\n",
                        (unsigned long)collected_message.sequence,
                        (int)collected_message.temperature,
                        (int)collected_message.temperature_scale,
@@ -343,7 +343,7 @@ static void storage_task(void *argument)
                            &transmit_work,
                            portMAX_DELAY);
 
-                if(storage_write_pending_ready() != STORAGE_SUCCESS)
+                if(log_write_pending_ready() != LOG_SUCCESS)
                 {
                     continue;
                 }
@@ -361,7 +361,7 @@ static void storage_task(void *argument)
                 /*
                     已取出的 Message 不能在未落盘时继续跳过；停止本任务，
                     防止 CollectTask 继续分配 sequence 后造成静默数据丢失。
-                    上电后由 storage_init() 重新扫描实际 Flash 状态。
+                    上电后由 log_init() 重新扫描实际 Flash 状态。
                 */
                 task_block_forever();
             }
@@ -369,16 +369,16 @@ static void storage_task(void *argument)
     }
 }
 
-void storage_task_create(void)
+void log_task_create(void)
 {
-    storage_task_handle = xTaskCreateStatic(storage_task,
-                                            "storage",
+    log_task_handle = xTaskCreateStatic(log_task,
+                                            "log",
                                             512,
                                             NULL,
                                             4,//storage任务我希望他可以上电后就启动，因此设置为最高优先级
-                                            storage_task_stack,
-                                            &storage_task_tcb);
-    configASSERT(storage_task_handle != NULL);
+                                            log_task_stack,
+                                            &log_task_tcb);
+    configASSERT(log_task_handle != NULL);
 }
 
 /*
@@ -397,13 +397,13 @@ static void collect_task(void *argument)
     (void)argument;
 
     sequence_queue =
-        rtos_storage_to_collect_sequence_queue_get();
+        rtos_log_to_collect_sequence_queue_get();
 
     permission_queue =
-        rtos_storage_to_collect_permission_queue_get();
+        rtos_log_to_collect_permission_queue_get();
 
     collect_queue =
-        rtos_collect_to_storage_queue_get();
+        rtos_collect_to_log_queue_get();
     
     hmi_queue = 
         rtos_collect_to_hmi_queue_get();
@@ -417,7 +417,7 @@ static void collect_task(void *argument)
     }
 
     /*
-        StorageTask 未初始化成功、未完成恢复前，
+        LogTask 未初始化成功、未完成恢复前，
         CollectTask 永远停在这里。
     */
     if(xQueueReceive(sequence_queue,
@@ -429,7 +429,7 @@ static void collect_task(void *argument)
 
     /*
         Message 从这里开始接管 sequence 自增。
-        Storage 只负责恢复它的起点。
+        Log 只负责恢复它的起点。
     */
     if(message_sequence_init(next_sequence) != MESSAGE_SUCCESS)
     {
@@ -439,7 +439,7 @@ static void collect_task(void *argument)
     while(1)
     {
         /*
-            只有 StorageTask 确认下一槽可写时才会发许可。
+            只有 LogTask 确认下一槽可写时才会发许可。
             这样 CollectTask 生成的每个 sequence 都有一个预留的落盘机会。
         */
         if(xQueueReceive(permission_queue,
@@ -598,12 +598,12 @@ static uint8_t transmit_can_ack_wait(QueueHandle_t can_receive_queue,
 /*
     这个函数用于将
 */
-static void transmit_storage_result_send(
+static void transmit_log_result_send(
     QueueHandle_t confirm_queue,
     const transmit_work_item_t *transmit_work,
     uint8_t success)
 {
-    storage_confirm_event_t confirm_event;
+    log_confirm_event_t confirm_event;
 
     confirm_event.sequence = transmit_work->message.sequence;
     confirm_event.flash_address = transmit_work->flash_address;
@@ -632,8 +632,8 @@ static void transmit_task(void *argument)
     (void)argument;
 
     transmit_queue =
-        rtos_storage_to_transmit_queue_get();
-    confirm_queue = rtos_transmit_to_storage_confirm_queue_get();
+        rtos_log_to_transmit_queue_get();
+    confirm_queue = rtos_transmit_to_log_confirm_queue_get();
     tcp_ack_queue = rtos_tcp_ack_frame_queue_get();
     can_receive_queue = rtos_can_receive_frame_queue_get();
     log_queue = rtos_transmit_to_hmi_log_queue_get();
@@ -645,7 +645,7 @@ static void transmit_task(void *argument)
         task_block_forever();
     }
 
-    /* TCP 建连可能等待 WiFi 回应，放在 TransmitTask 内不能阻塞 Storage 恢复。 */
+    /* TCP 建连可能等待 WiFi 回应，放在 TransmitTask 内不能阻塞 Log 恢复。 */
     (void)tcp_init(config_tcp_get());
 
     while(1)
@@ -660,7 +660,7 @@ static void transmit_task(void *argument)
 
                 transmit_work.flash_address：
                     当前不参与发送；
-                    将来收到 ACK 后，用于通知 StorageTask
+                    将来收到 ACK 后，用于通知 LogTask
                     确认正确的 Flash 槽位。
             */
 
@@ -706,7 +706,7 @@ static void transmit_task(void *argument)
             /*
                 TCP 这条路失败：多半是链路已经断了。
                 按冷却低频尝试重连；一旦成功就置 link_restored，
-                通知 StorageTask 把积压的 pending 补发一遍。
+                通知 LogTask 把积压的 pending 补发一遍。
                 tick 冷却避免网关一直不在时，每条记录都卡在 CIPSTART 上。
             */
             if(tcp_connected_get() == TCP_FAIL)
@@ -754,7 +754,7 @@ static void transmit_task(void *argument)
                    (int)transmit_work.message.temperature_scale,
                    (transmit_success != 0U) ? "OK" : "FAIL");
 
-            transmit_storage_result_send(confirm_queue,
+            transmit_log_result_send(confirm_queue,
                                          &transmit_work,
                                          transmit_success);
         }
@@ -844,11 +844,11 @@ static void hmi_task(void *argument)
         (void)tcp_local_ip_get(hmi_snapshot.local_ip, sizeof(hmi_snapshot.local_ip));
 
         /*
-            Storage 那边只在"写入成功"和"确认成功"两处改这个数。
+            Log 那边只在"写入成功"和"确认成功"两处改这个数。
             这里只在它真的变了的时候才置 need_commit —— 否则每 1ms 都提交一次，
             屏幕会被要求不停重画。
         */
-        pending_now = storage_pending_count_get();
+        pending_now = log_pending_count_get();
         if(pending_now != hmi_snapshot.pending_count)
         {
             hmi_snapshot.pending_count = pending_now;
@@ -937,8 +937,8 @@ static void stack_monitor_task(void *argument)
 
     while(1)
     {
-        printf("stack free words: storage=%lu collect=%lu transmit=%lu led1=%lu led2=%lu hmi=%lu monitor=%lu\r\n",
-               (unsigned long)uxTaskGetStackHighWaterMark(storage_task_handle),
+        printf("stack free words: log=%lu collect=%lu transmit=%lu led1=%lu led2=%lu hmi=%lu monitor=%lu\r\n",
+               (unsigned long)uxTaskGetStackHighWaterMark(log_task_handle),
                (unsigned long)uxTaskGetStackHighWaterMark(collect_task_handle),
                (unsigned long)uxTaskGetStackHighWaterMark(transmit_task_handle),
                (unsigned long)uxTaskGetStackHighWaterMark(led1_task_handle),

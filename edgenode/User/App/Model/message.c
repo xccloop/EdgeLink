@@ -2,7 +2,7 @@
 #include "Acquisition/collection.h"
 
 /*
-    这个文件是将采集到的温度进行模型管理作为中转层他最后会给TCPframe，CANframe，Storage
+    这个文件是将采集到的温度进行模型管理作为中转层他最后会给TCPframe，CANframe，Log
 */
 
 static uint32_t message_next_sequence;
@@ -42,7 +42,7 @@ uint8_t message_collect(telemetry_sample_struct *message)
 
 
 /*
-    这个函数用于将storage_init计算出来的squence变为这次的squence起点
+    这个函数用于将log_init计算出来的squence变为这次的squence起点
 */
 uint8_t message_sequence_init(uint32_t next_sequence)
 {

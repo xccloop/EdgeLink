@@ -6,3 +6,9 @@ edgehub/data/*.db
 
 # codegraph 工具生成的符号索引
 .codegraph/
+
+# 只留本地，不进版本库（远端仓库也不要这两个目录）。
+# 注意 .gitignore 对【已跟踪】的文件无效，所以这两个目录里的文件
+# 是用 git rm -r --cached 从索引摘掉的，不是靠这里。
+docs/hmi-preview/
+docs/superpowers/

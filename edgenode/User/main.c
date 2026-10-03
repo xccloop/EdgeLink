@@ -39,7 +39,7 @@ int main(void)
     }
     printf("queue init finish\r\n");
     printf("task ready init\r\n");
-    storage_task_create();
+    log_task_create();
     collect_task_create();
     transmit_task_create();
     led_tasks_create();

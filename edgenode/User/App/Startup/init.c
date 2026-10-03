@@ -24,7 +24,7 @@
     这样APP不会在传感器、显示或存储尚未准备好时误进入主循环。
 
     TCP 初始化需要等待 ESP-AT 和 WiFi 回应，放在 TransmitTask 内执行；这样启动时
-    StorageTask 能先恢复 sequence 和历史 pending，不被网络入网时间阻塞。
+    LogTask 能先恢复 sequence 和历史 pending，不被网络入网时间阻塞。
 */
 uint8_t init_all(void)
 {
@@ -47,7 +47,7 @@ uint8_t init_all(void)
     }
     printf("CAN init success\r\n");
 
-    /* BMP280和Storage都复用SPI0，因此它们必须在board_config_init()之后初始化。 */
+    /* BMP280和Log都复用SPI0，因此它们必须在board_config_init()之后初始化。 */
     if(bmp280_init() == 0U)
     {
         printf("BMP280 init fail\r\n");

@@ -18,7 +18,7 @@
 static hmi_widget_t page_widgets[HMI_PAGE_MAX_ITEMS];
 
 /* 导航标题。顺序必须和 hmi_page_id_t 一致。 */
-static const char *const titles[] = {"HOME", "LINKS", "LOG", "STORAGE"};
+static const char *const titles[] = {"HOME", "LINKS", "EVENTS", "BACKLOG"};
 
 /* 导航条：4 格平分，左右各留 5 像素。 */
 #define NAV_ITEM_X_STEP   78U
@@ -122,14 +122,14 @@ static uint8_t links_build(hmi_page_t *page, const hmi_view_data_t *data)
 }
 
 /*
-    LOG 页只有两个东西，彼此没有位置关系：
+    EVENTS 页只有两个东西，彼此没有位置关系：
 
     1. 正文区右上角一行格式说明，字号小，只是告诉看的人每行数据的四段分别是什么；
     2. 左边是滚动日志区，logs[0] 最老、logs[log_count - 1] 最新，最新的在最下面。
 
     每行的字数由生成日志的一侧按 HMI_LOG_LINE_SIZE 截断，这里不再换行、不再截断。
 */
-static uint8_t log_build(hmi_page_t *page, const hmi_view_data_t *data)
+static uint8_t events_build(hmi_page_t *page, const hmi_view_data_t *data)
 {
     uint8_t line;
 
@@ -199,10 +199,11 @@ static uint8_t home_build(hmi_page_t *page, const hmi_view_data_t *data)
 }
 
 /*
-    STORAGE 页只回答一个问题：还有多少条数据压在 Flash 里、没被 Hub 确认。
+    BACKLOG 页只回答一个问题：还有多少条数据压在 Flash 里、没被 Hub 确认。
     0 表示全都上报过了；非 0 说明补发还没追上，或者链路本身有问题。
+    （显示的是 log 模块的积压量；屏幕用 BACKLOG 是因为它对现场人更直观。）
 */
-static uint8_t storage_build(hmi_page_t *page, const hmi_view_data_t *data)
+static uint8_t backlog_build(hmi_page_t *page, const hmi_view_data_t *data)
 {
     char buffer[HMI_TEXT_CAPACITY];
     uint8_t length;
@@ -270,13 +271,13 @@ uint8_t hmi_page_build(hmi_page_t *page, const hmi_view_data_t *data,hmi_page_id
     {
         page_result = links_build(page, data);
     }
-    else if(current_page == HMI_PAGE_STORAGE)
+    else if(current_page == HMI_PAGE_BACKLOG)
     {
-        page_result = storage_build(page, data);
+        page_result = backlog_build(page, data);
     }
     else
     {
-        page_result = log_build(page, data);
+        page_result = events_build(page, data);
     }
     if(page_result == 0U)
     {

@@ -15,7 +15,7 @@
 #define HMI_IP_CAPACITY   16U     /* 15 个字符 + 1 个结束标记 */
 
 /*
-    LOG 页的滚动窗口：最多显示 5 行，每行 24 个字符 + 1 个结束标记。
+    EVENTS 页的滚动窗口：最多显示 5 行，每行 24 个字符 + 1 个结束标记。
     24 是 2 倍字号下一行能放下的字数，超出的部分由生成日志的一侧截断。
 */
 #define HMI_LOG_LINES     5U
@@ -26,8 +26,8 @@ typedef enum
 {
     HMI_PAGE_HOME = 0,
     HMI_PAGE_LINKS,
-    HMI_PAGE_LOG,
-    HMI_PAGE_STORAGE,
+    HMI_PAGE_EVENTS,
+    HMI_PAGE_BACKLOG,
     HMI_PAGE_COUNT
 } hmi_page_id_t;
 
@@ -49,7 +49,7 @@ typedef enum
     wifi_ssid 是实际连上的 Wi-Fi 名称；local_ip 是节点自己的地址，不是服务端的。
     字符串都是内嵌数组，接收时有界复制，不保留调用方的指针。
 
-    logs 是 LOG 页的滚动窗口：logs[0] 是最老的一条，logs[log_count - 1] 是最新的，
+    logs 是 EVENTS 页的滚动窗口：logs[0] 是最老的一条，logs[log_count - 1] 是最新的，
     新的从下面进、旧的从上面顶出去，和终端一样。log_count 只在 0 ~ HMI_LOG_LINES 之间。
 */
 typedef struct
@@ -63,7 +63,7 @@ typedef struct
     char             wifi_ssid[HMI_SSID_CAPACITY];
     char             local_ip[HMI_IP_CAPACITY];
 
-    /* 还压在 Flash 里、没被 Hub 确认的条数，来自 storage_pending_count_get()。 */
+    /* 还压在 Flash 里、没被 Hub 确认的条数，来自 log_pending_count_get()。 */
     uint32_t         pending_count;
 
     uint8_t          log_count;           /* 已经攒了几条，0 ~ HMI_LOG_LINES */

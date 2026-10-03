@@ -1,7 +1,7 @@
 #include "node_service.h"
 #include "Config/config.h"
 #include "Model/message.h"
-#include "Output/Storage/storage.h"
+#include "Output/Log/log.h"
 #include "Output/Tcp/tcp.h"
 #include "board_time.h"
 #include "Service/Transmit/transmit.h"
@@ -14,7 +14,7 @@ static uint8_t node_service_has_sampled;
 /*
     这个函数是一次采集周期的APP调度入口。
     先由Model从Acquisition取得一条完整遥测数据，再交给每个已启用的输出分支。
-    目前唯一已接入的分支是Storage；TCP和CAN会在各自发送链路完成后从这里接入，
+    目前唯一已接入的分支是Log；TCP和CAN会在各自发送链路完成后从这里接入，
     所以main()不需要了解传感器、Flash或协议的具体细节。
 */
 uint8_t node_service_run_once()
@@ -40,9 +40,9 @@ uint8_t node_service_run_once()
     }
 
     /*
-    if(storage_temperature(&message) == STORAGE_FAIL)
+    if(log_temperature(&message) == LOG_FAIL)
     {
-        printf("storage fail");
+        printf("log fail");
         return 0U;
     }
     */
