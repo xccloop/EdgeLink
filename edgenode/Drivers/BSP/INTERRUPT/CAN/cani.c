@@ -1,6 +1,7 @@
 #include "cani.h"
 #include "FreeRTOS.h"
 #include "FreeRtos/Queue/rtos_queue.h"
+#include "Protocol/Can/can_frame.h"
 #include "gd32f10x.h"
 #include "gd32f10x_can.h"
 
@@ -28,8 +29,28 @@ void USBD_LP_CAN0_RX0_IRQHandler()
                 received_frame.data[index] = can0_receive_message.rx_data[index];
             }
 
-            (void)rtos_can_receive_frame_send_from_isr(&received_frame,
-                                                       &higher_priority_task_woken);
+            /*
+                固件帧和遥测/ACK 不能共用一个队列：队列是"取走即消失"的，
+                两个任务抢读会互相偷帧（遥测 ACK 被 OtaTask 吃掉，或反之）。
+
+                按 ID 分成两族，整族走各自的队列。别人的固件帧也会进来
+                （CAN 是广播的），由 OtaTask 按节点号丢弃 —— 中断里不查节点号，
+                这样中断不必知道 board_id，遥测那条路也一个字不改。
+            */
+            if((received_frame.standard_id >= CAN_OTA_DATA_BASE_ID) &&
+               (received_frame.standard_id <
+                (CAN_OTA_DATA_BASE_ID + CAN_ID_SEGMENT_SIZE)))
+            {
+                (void)rtos_ota_frame_send_from_isr(&received_frame,
+                                                   &higher_priority_task_woken);
+            }
+            else
+            {
+                (void)rtos_can_receive_frame_send_from_isr(&received_frame,
+                                                           &higher_priority_task_woken);
+            }
+
+            /* 两条路共同的后继动作：谁被唤醒都置同一位，所以放在分支外。 */
             portYIELD_FROM_ISR(higher_priority_task_woken);
         }
     }

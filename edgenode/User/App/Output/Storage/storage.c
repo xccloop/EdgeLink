@@ -1,5 +1,6 @@
 #include "storage.h"
 #include "GD25Q32/gd25.h"
+#include "ExFlash/external_flash_layout.h"
 #include "crc32.h"
 #include <stdint.h>
 
@@ -22,17 +23,9 @@
 //定义slot大小和扫描的页数
 #define STORAGE_SCAN_PAGE_SIZE    256U
 
-//定义日志存储区域
-#define STORAGE_LOG_BASE_ADDRESS  0x000000UL
-#define STORAGE_LOG_END_ADDRESS   0x003BF000UL
-
-
 #define STORAGE_CRC_OFFSET        11U
 #define STORAGE_CRC_LENGTH        4U
 #define STORAGE_CRC_COVER_LENGTH  11U
-
-/* gd25_clear() 的最小擦除单位；当前 BSP 未将该常量导出到 gd25.h。 */
-#define STORAGE_SECTOR_SIZE 4096U
 
 static uint8_t storage_scan_page[STORAGE_SCAN_PAGE_SIZE];
 
@@ -192,7 +185,7 @@ static uint32_t storage_address_next(uint32_t address)
 /* 返回地址所在 4 KiB 擦除扇区的起始地址，供进入扇区前的擦除判断使用。 */
 static uint32_t storage_sector_base(uint32_t address)
 {
-    return address - (address % STORAGE_SECTOR_SIZE);
+    return address - (address % GD25Q32_SECTOR_SIZE);
 }
 
 /*
@@ -209,8 +202,8 @@ static uint8_t storage_sector_pending_check(uint32_t sector_address,
     const uint8_t *record;
 
     if((has_pending == 0) ||
-       (sector_address > (STORAGE_LOG_END_ADDRESS - STORAGE_SECTOR_SIZE)) ||
-       ((sector_address % STORAGE_SECTOR_SIZE) != 0U))
+       (sector_address > (STORAGE_LOG_END_ADDRESS - GD25Q32_SECTOR_SIZE)) ||
+       ((sector_address % GD25Q32_SECTOR_SIZE) != 0U))
     {
         return STORAGE_FAIL;
     }
@@ -218,7 +211,7 @@ static uint8_t storage_sector_pending_check(uint32_t sector_address,
     *has_pending = 0U;
 
     for(page_address = sector_address;
-        page_address < (sector_address + STORAGE_SECTOR_SIZE);
+        page_address < (sector_address + GD25Q32_SECTOR_SIZE);
         page_address += STORAGE_SCAN_PAGE_SIZE)
     {
         if(gd25_read(page_address,
@@ -461,7 +454,7 @@ uint8_t storage_write_pending(const telemetry_sample_struct *message,
         storage_next_address = STORAGE_LOG_BASE_ADDRESS;
     }
     //进入一个新的扇区前，必须确认旧扇区没有任何有效 pending。
-    if((storage_next_address % STORAGE_SECTOR_SIZE) == 0U)
+    if((storage_next_address % GD25Q32_SECTOR_SIZE) == 0U)
     {
         if(storage_sector_pending_check(
                storage_sector_base(storage_next_address),
@@ -518,7 +511,7 @@ uint8_t storage_write_pending_ready(void)
         next_address = STORAGE_LOG_BASE_ADDRESS;
     }
 
-    if((next_address % STORAGE_SECTOR_SIZE) != 0U)
+    if((next_address % GD25Q32_SECTOR_SIZE) != 0U)
     {
         return STORAGE_SUCCESS;
     }

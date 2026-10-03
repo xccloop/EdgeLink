@@ -17,4 +17,9 @@ uint8_t gd25_clear(uint32_t address);
 #define GD25Q32_CMD_SECTOR_ERASE   0x20
 #define GD25Q32_CMD_READ_ID        0x9F
 
+/* GD25Q32一共4 MiB；一页256字节；最小擦除单位是4 KiB。 */
+#define GD25Q32_CAPACITY_BYTES 0x00400000UL
+#define GD25Q32_PAGE_SIZE 256U
+#define GD25Q32_SECTOR_SIZE 4096U
+
 #endif

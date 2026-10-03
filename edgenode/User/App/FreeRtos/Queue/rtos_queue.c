@@ -53,6 +53,11 @@ static uint8_t transmit_to_hmi_log_queue_storage[
     RTOS_TRANSMIT_TO_HMI_LOG_QUEUE_LENGTH * HMI_LOG_LINE_SIZE];
 static QueueHandle_t transmit_to_hmi_log_queue;
 
+static StaticQueue_t ota_frame_queue_control;
+static uint8_t ota_frame_queue_storage[
+    RTOS_OTA_FRAME_QUEUE_LENGTH * sizeof(can_receive_frame_t)];
+static QueueHandle_t ota_frame_queue;
+
 static uint8_t rtos_queue_ready;
 
 uint8_t rtos_queue_init(void)
@@ -115,6 +120,12 @@ uint8_t rtos_queue_init(void)
         HMI_LOG_LINE_SIZE,
         transmit_to_hmi_log_queue_storage,
         &transmit_to_hmi_log_queue_control);
+    
+    ota_frame_queue = xQueueCreateStatic(
+        RTOS_OTA_FRAME_QUEUE_LENGTH,
+        sizeof(can_receive_frame_t), 
+        ota_frame_queue_storage,
+        &ota_frame_queue_control);
 
     if((storage_to_collect_sequence_queue == NULL) ||
        (storage_to_collect_permission_queue == NULL) ||
@@ -124,7 +135,8 @@ uint8_t rtos_queue_init(void)
        (tcp_ack_frame_queue == NULL) ||
        (can_receive_frame_queue == NULL) ||
        (collect_to_hmi_queue == NULL) ||
-       (transmit_to_hmi_log_queue == NULL))
+       (transmit_to_hmi_log_queue == NULL) ||
+       (ota_frame_queue == NULL))
     {
         storage_to_collect_sequence_queue = NULL;
         storage_to_collect_permission_queue = NULL;
@@ -135,6 +147,7 @@ uint8_t rtos_queue_init(void)
         tcp_ack_frame_queue = NULL;
         can_receive_frame_queue = NULL;
         transmit_to_hmi_log_queue = NULL;
+        ota_frame_queue = NULL;
         return RTOS_QUEUE_FAIL;
     }
 
@@ -217,6 +230,11 @@ QueueHandle_t rtos_transmit_to_hmi_log_queue_get(void)
     return (rtos_queue_ready != 0U) ? transmit_to_hmi_log_queue : NULL;
 }
 
+QueueHandle_t rtos_ota_frame_queue_get(void)
+{
+    return (rtos_queue_ready != 0U) ? ota_frame_queue : NULL;
+}
+
 uint8_t rtos_tcp_ack_frame_send_from_isr(const tcp_ack_frame_t *frame,
                                          BaseType_t *higher_priority_task_woken)
 {
@@ -242,6 +260,21 @@ uint8_t rtos_can_receive_frame_send_from_isr(const can_receive_frame_t *frame,
     }
 
     return (xQueueSendFromISR(can_receive_frame_queue,
+                              frame,
+                              higher_priority_task_woken) == pdPASS) ?
+           RTOS_QUEUE_SUCCESS : RTOS_QUEUE_FAIL;
+}
+
+uint8_t rtos_ota_frame_send_from_isr(const can_receive_frame_t *frame,
+                                     BaseType_t *higher_priority_task_woken)
+{
+    if((frame == NULL) || (higher_priority_task_woken == NULL) ||
+       (rtos_queue_ready == 0U) || (ota_frame_queue == NULL))
+    {
+        return RTOS_QUEUE_FAIL;
+    }
+
+    return (xQueueSendFromISR(ota_frame_queue,
                               frame,
                               higher_priority_task_woken) == pdPASS) ?
            RTOS_QUEUE_SUCCESS : RTOS_QUEUE_FAIL;

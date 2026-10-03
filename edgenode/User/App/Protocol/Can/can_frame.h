@@ -13,6 +13,27 @@
 #define CAN_ACK_LENGTH         5U
 
 /*
+    CAN 总线 ID 分配表（标准帧 11 位）。新增段请加在末尾，避免撞车。
+
+    每段占 0x80：节点号占低 7 位（0~127），与 can_output.c 里
+    "CAN_TELEMETRY_BASE_ID + node_id" 的拼法一致。所以后一段的基址
+    必须比前一段高出 0x80，否则会与上一段的某个节点号撞车。
+
+        0x280 + node    遥测
+        0x300 + node    ACK
+        0x380 + node    固件数据帧（Hub -> Node，2B 序号 + 6B 载荷）
+        0x400 + node    固件控制帧（Hub -> Node，升级通告 / 中止）
+        0x480 + node    固件回复帧（Node -> Hub，进度 / 结果）
+        0x500 ~ 0x7FF   未分配
+*/
+#define CAN_OTA_DATA_BASE_ID   0x380U
+#define CAN_OTA_CTRL_BASE_ID   0x400U
+#define CAN_OTA_REPLY_BASE_ID  0x480U
+
+/* 每段可用的 ID 数量（节点号 7 位）。 */
+#define CAN_ID_SEGMENT_SIZE    128U
+
+/*
     这里只定义CAN遥测协议，不访问CAN硬件。
     Message提供统一业务数据；编码结果交给Output/Can中的发送出口写入CAN BSP。
 */

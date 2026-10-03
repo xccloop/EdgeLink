@@ -17,10 +17,6 @@
 
 #define GD25_CS_PORT GPIOB
 #define GD25_CS_PIN GPIO_PIN_12
-/* GD25Q32一共4 MiB；一页256字节；最小擦除单位是4 KiB。 */
-#define GD25Q32_CAPACITY_BYTES 0x00400000UL
-#define GD25Q32_PAGE_SIZE 256U
-#define GD25Q32_SECTOR_SIZE 4096U
 /* 擦除时Flash会忙一段时间，两个上限防止接线异常时程序永远卡住。 */
 #define GD25_BUSY_TIMEOUT_MS 500U
 #define GD25_BUSY_MAX_POLLS 500000U

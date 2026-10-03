@@ -32,6 +32,9 @@
 /* CAN接收中断交给 TransmitTask 的原始标准帧。 */
 #define RTOS_CAN_RECEIVE_FRAME_QUEUE_LENGTH             4U
 
+/* OTA 固件数据帧（ID 0x50x），由 CAN 中断按 ID 分流，只给 OtaTask 消费。 */
+#define RTOS_OTA_FRAME_QUEUE_LENGTH                     8U
+
 /*
     TransmitTask 每发完一条就交一行显示用日志给 HMI。
     长度固定为 1：HMI 只画最新的几条，来不急取时用新的覆盖旧的，不积压。
@@ -80,11 +83,15 @@ QueueHandle_t rtos_tcp_ack_frame_queue_get(void);
 QueueHandle_t rtos_can_receive_frame_queue_get(void);
 QueueHandle_t rtos_transmit_to_hmi_log_queue_get(void);
 QueueHandle_t rtos_collect_to_hmi_queue_get(void);
+QueueHandle_t rtos_ota_frame_queue_get(void);
 
 /* 仅供优先级满足 FreeRTOS 规则的 USART1/CAN 接收中断调用。 */
 uint8_t rtos_tcp_ack_frame_send_from_isr(const tcp_ack_frame_t *frame,
                                          BaseType_t *higher_priority_task_woken);
 uint8_t rtos_can_receive_frame_send_from_isr(const can_receive_frame_t *frame,
                                              BaseType_t *higher_priority_task_woken);
+
+uint8_t rtos_ota_frame_send_from_isr(const can_receive_frame_t *frame,
+                                            BaseType_t *higher_priority_task_woken);
 
 #endif
