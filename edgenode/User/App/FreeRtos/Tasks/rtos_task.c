@@ -7,6 +7,7 @@
 #include "Model/message.h"
 #include "Output/Log/log.h"
 #include "Service/Transmit/transmit.h"
+#include "Service/Ota/ota.h"
 #include "Config/config.h"
 #include "Protocol/Tcp/tcp_frame.h"
 #include "Protocol/Can/can_frame.h"
@@ -960,5 +961,75 @@ void stack_monitor_task_create(void)
                                                    stack_monitor_task_stack,
                                                    &stack_monitor_task_tcb);
     configASSERT(stack_monitor_task_handle != NULL);
+}
+
+/*
+    OtaTask：固件接收的驱动层。
+
+    它不做任何协议判断 —— 判断全在 ota.c 里。这里只负责"搬"：
+    把 CAN 中断分流过来的固件帧取出来递给 ota.c，没帧的时候问它一声。
+
+    为什么不塞进现有任务：transmit_task 里发 TCP 要等 1 秒 ACK，log_task 会被
+    gd25_clear 的 45ms 卡住。绑进去的话，8 深的 ota_frame_queue 会瞬间被灌爆
+    （1 秒能来几千帧）。所以要独立任务，而且优先级要能单独调。
+
+    优先级 3 和 collect/transmit 同级，是设计文档里的起点值，真机再调：
+    太低排空 CAN 队列不及时，太高会饿死采集。
+*/
+static StaticTask_t ota_task_tcb;
+static StackType_t ota_task_stack[512];
+static TaskHandle_t ota_task_handle;
+
+static void ota_task(void *argument)
+{
+    QueueHandle_t ota_queue;
+    can_receive_frame_t frame;
+
+    (void)argument;
+
+    ota_queue = rtos_ota_frame_queue_get();
+    if(ota_queue == NULL)
+    {
+        task_block_forever();
+    }
+
+    while(1)
+    {
+        /*
+            超时值用 OTA_IDLE_REPLY_MS，它有两个用途：
+            ① 没帧可收时让 ota.c 有机会累计"闲着多久" —— Hub 半路挂了，只有这条路能发现
+            ② 将来回复的节流也靠它兜底（Task 7）
+
+            configTICK_RATE_HZ 是 1000，所以 3 就是 3 毫秒、不是 0，不会退化成忙等空转。
+        */
+        if(xQueueReceive(ota_queue,
+                         &frame,
+                         pdMS_TO_TICKS(OTA_IDLE_REPLY_MS)) == pdPASS)
+        {
+            /*
+                ota.c 返回的 result 现在先丢掉。它里面的 reply/contiguous
+                是要转给 TransmitTask 发出去的（CAN 的唯一发送者），那是 Task 7。
+            */
+            (void)ota_on_frame(frame.standard_id,
+                               frame.data,
+                               frame.data_length);
+        }
+        else
+        {
+            (void)ota_on_idle();
+        }
+    }
+}
+
+void ota_task_create(void)
+{
+    ota_task_handle = xTaskCreateStatic(ota_task,
+                                        "ota",
+                                        512,
+                                        NULL,
+                                        3,
+                                        ota_task_stack,
+                                        &ota_task_tcb);
+    configASSERT(ota_task_handle != NULL);
 }
 

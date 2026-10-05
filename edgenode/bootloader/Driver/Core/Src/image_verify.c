@@ -57,7 +57,7 @@ bool image_verify(uint32_t slot_base)
 
     //至少 8 B：需要容纳 MSP 和 Reset_Handler；不能超过 槽大小 - 256 B
     //这项检查必须在应用 CRC 之前完成。否则损坏的 application_length 可能让 Bootloader 把 CRC 算到槽外。
-    if ((header->application_length < 8U) ||
+    if ((header->application_length < OTA_APPLICATION_MIN_LENGTH) ||
         (header->application_length >
          (OTA_SLOT_SIZE - OTA_APPLICATION_OFFSET)))
     {

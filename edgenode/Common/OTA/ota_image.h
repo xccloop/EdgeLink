@@ -23,6 +23,13 @@
 #define OTA_IMAGE_MAGIC 0x3141544FUL //OTA1
 #define OTA_IMAGE_FORMAT_VERSION   1U
 
+/*
+    应用体最小长度：至少 8 字节，向量表前两项（MSP 初值 + Reset_Handler）得放得下。
+    ota.c（接收侧校验）和 bootloader 的 image_verify.c（搬运前校验）共用这一个数，
+    避免两处判据分叉 —— 分叉的后果就是「设备说好、bootloader 说坏」。
+*/
+#define OTA_APPLICATION_MIN_LENGTH 8U
+
 #define OTA_IMAGE_HEADER_DATA_SIZE 252U //像头里“数据部分”占 252 字节。为什么是 252 而不是 256？因为最后 4 字节要留给 header_crc32。
 #define OTA_IMAGE_HEADER_FIXED_SIZE 24U//结构体里固定字段的字节数。
 #define OTA_IMAGE_RESERVED_SIZE \

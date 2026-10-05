@@ -7,5 +7,6 @@ void collect_task_create(void);
 void transmit_task_create(void);
 void stack_monitor_task_create(void);
 void hmi_task_create(void);
+void ota_task_create(void);
 
 #endif
