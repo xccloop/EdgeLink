@@ -33,6 +33,27 @@
 /* 每段可用的 ID 数量（节点号 7 位）。 */
 #define CAN_ID_SEGMENT_SIZE    128U
 
+/* 回复帧 0x480 + node 的载荷长度。 */
+#define CAN_OTA_REPLY_LENGTH   4U
+
+#define CAN_OTA_REPLY_KIND_PROGRESS  1U   /* 进度：我连续收到第 N 号 */
+#define CAN_OTA_REPLY_KIND_RESULT    2U   /* 收完结果：成没成 */
+
+/*
+    一条"该回复什么"的请求。
+
+    放在协议层而不是队列层，理由和 can_receive_frame_t 当初的取舍一样：
+    它的字段就是 0x480 那 4 个字节，是协议形状，不是排队形状。
+    放队列层的话，can_output.c 要为了拿到这个类型去 include rtos_queue.h，
+    等于把 FreeRTOS 拖进 CAN 输出层。
+*/
+typedef struct
+{
+    uint8_t  kind;        /* CAN_OTA_REPLY_KIND_xxx */
+    uint16_t contiguous;  /* kind == PROGRESS 时有效：我连续收到第 N 号 */
+    uint8_t  success;     /* kind == RESULT 时有效 */
+} ota_reply_request_t;
+
 /*
     这里只定义CAN遥测协议，不访问CAN硬件。
     Message提供统一业务数据；编码结果交给Output/Can中的发送出口写入CAN BSP。

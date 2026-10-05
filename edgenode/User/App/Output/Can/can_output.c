@@ -32,3 +32,33 @@ uint8_t can_telemetry_send(uint8_t node_id,
 
     return (mailbox == CAN0_TX_MAILBOX_NONE) ? CAN_FRAME_FAIL : CAN_FRAME_SUCCESS;
 }
+
+/*
+    固件回复帧的载荷：
+        data[0]    = kind
+        data[1..2] = contiguous（高位在前，和固件数据帧的序号同端序）
+        data[3]    = success
+    节点号校验和"邮箱满返回 FAIL"都照 can_telemetry_send 来。
+*/
+uint8_t can_ota_reply_send(uint8_t node_id,
+                           const ota_reply_request_t *request)
+{
+    uint8_t data[CAN_OTA_REPLY_LENGTH];
+    uint8_t mailbox;
+    uint16_t can_id;
+
+    if((node_id == 0U) || (node_id > 127U) || (request == 0))
+    {
+        return CAN_FRAME_FAIL;
+    }
+
+    data[0] = request->kind;
+    data[1] = (uint8_t)(request->contiguous >> 8);
+    data[2] = (uint8_t)(request->contiguous & 0xFFU);
+    data[3] = request->success;
+
+    can_id = CAN_OTA_REPLY_BASE_ID + node_id;
+    mailbox = can0_data_send(can_id, data, CAN_OTA_REPLY_LENGTH);
+
+    return (mailbox == CAN0_TX_MAILBOX_NONE) ? CAN_FRAME_FAIL : CAN_FRAME_SUCCESS;
+}

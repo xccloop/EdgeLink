@@ -8,6 +8,7 @@
 #include "Output/Log/log.h"
 #include "Service/Transmit/transmit.h"
 #include "Service/Ota/ota.h"
+#include "Output/Can/can_output.h"
 #include "Config/config.h"
 #include "Protocol/Tcp/tcp_frame.h"
 #include "Protocol/Can/can_frame.h"
@@ -626,6 +627,8 @@ static void transmit_task(void *argument)
     QueueHandle_t tcp_ack_queue;
     QueueHandle_t can_receive_queue;
     QueueHandle_t log_queue;
+    QueueHandle_t ota_reply_queue;
+    ota_reply_request_t ota_reply;
     char log_line[HMI_LOG_LINE_SIZE];
     const char *link;
     TickType_t now_tick;
@@ -638,10 +641,11 @@ static void transmit_task(void *argument)
     tcp_ack_queue = rtos_tcp_ack_frame_queue_get();
     can_receive_queue = rtos_can_receive_frame_queue_get();
     log_queue = rtos_transmit_to_hmi_log_queue_get();
+    ota_reply_queue = rtos_ota_reply_queue_get();
 
     if((transmit_queue == NULL) || (confirm_queue == NULL) ||
        (tcp_ack_queue == NULL) || (can_receive_queue == NULL) ||
-       (log_queue == NULL))
+       (log_queue == NULL) || (ota_reply_queue == NULL))
     {
         task_block_forever();
     }
@@ -651,9 +655,24 @@ static void transmit_task(void *argument)
 
     while(1)
     {
+        /*
+            OTA 回复优先：Hub 发完一个窗口就停下来等它，它晚一步，整个传输就晚一步。
+            非阻塞取，取到就发、立刻回环，不占用等待遥测的时间。
+        */
+        if(xQueueReceive(ota_reply_queue, &ota_reply, 0U) == pdPASS)
+        {
+            (void)can_ota_reply_send(board_id, &ota_reply);
+            continue;
+        }
+
+        /*
+            超时不能用 portMAX_DELAY：那样本任务会一直睡在遥测队列上，
+            OTA 回复就永远没人取（遥测 1 秒才一条，回复延迟能到 1 秒）。
+            用一个短超时定期醒来看一眼上面那条队列 —— 代价只是多几次空转。
+        */
         if(xQueueReceive(transmit_queue,
                          &transmit_work,
-                         portMAX_DELAY) == pdPASS)
+                         pdMS_TO_TICKS(OTA_REPLY_POLL_MS)) == pdPASS)
         {
             /*
                 transmit_work.message：
@@ -983,12 +1002,15 @@ static TaskHandle_t ota_task_handle;
 static void ota_task(void *argument)
 {
     QueueHandle_t ota_queue;
+    QueueHandle_t ota_reply_queue;
     can_receive_frame_t frame;
+    ota_result_t result;
 
     (void)argument;
 
     ota_queue = rtos_ota_frame_queue_get();
-    if(ota_queue == NULL)
+    ota_reply_queue = rtos_ota_reply_queue_get();
+    if((ota_queue == NULL) || (ota_reply_queue == NULL))
     {
         task_block_forever();
     }
@@ -998,7 +1020,7 @@ static void ota_task(void *argument)
         /*
             超时值用 OTA_IDLE_REPLY_MS，它有两个用途：
             ① 没帧可收时让 ota.c 有机会累计"闲着多久" —— Hub 半路挂了，只有这条路能发现
-            ② 将来回复的节流也靠它兜底（Task 7）
+            ② 回复的节流也靠它兜底
 
             configTICK_RATE_HZ 是 1000，所以 3 就是 3 毫秒、不是 0，不会退化成忙等空转。
         */
@@ -1006,17 +1028,32 @@ static void ota_task(void *argument)
                          &frame,
                          pdMS_TO_TICKS(OTA_IDLE_REPLY_MS)) == pdPASS)
         {
-            /*
-                ota.c 返回的 result 现在先丢掉。它里面的 reply/contiguous
-                是要转给 TransmitTask 发出去的（CAN 的唯一发送者），那是 Task 7。
-            */
-            (void)ota_on_frame(frame.standard_id,
-                               frame.data,
-                               frame.data_length);
+            result = ota_on_frame(frame.standard_id,
+                                  frame.data,
+                                  frame.data_length);
         }
         else
         {
-            (void)ota_on_idle();
+            result = ota_on_idle();
+        }
+
+        /*
+            ota.c 只"决定"该回什么，不发帧 —— 项目里 CAN 的唯一发送者是 TransmitTask。
+            这里只负责把请求转过去，到了那边才真正写邮箱。
+
+            塞不进就算了（超时给 0）：丢一次回复只让 Hub 多等一个超时周期，靠自愈，
+            不值得为它卡住收帧。
+        */
+        if((result.reply != 0U) || (result.finished != 0U))
+        {
+            ota_reply_request_t request;
+
+            request.kind = (result.finished != 0U) ? CAN_OTA_REPLY_KIND_RESULT
+                                                   : CAN_OTA_REPLY_KIND_PROGRESS;
+            request.contiguous = result.contiguous;
+            request.success = result.success;
+
+            (void)xQueueSend(ota_reply_queue, &request, 0U);
         }
     }
 }

@@ -5,6 +5,7 @@
 #include "FreeRTOS.h"
 #include "queue.h"
 #include "Model/message.h"
+#include "Protocol/Can/can_frame.h"
 #include "Protocol/Tcp/tcp_frame.h"
 #include "Presentation/Hmi/hmi_types.h"
 
@@ -32,8 +33,15 @@
 /* CAN接收中断交给 TransmitTask 的原始标准帧。 */
 #define RTOS_CAN_RECEIVE_FRAME_QUEUE_LENGTH             4U
 
-/* OTA 固件数据帧（ID 0x50x），由 CAN 中断按 ID 分流，只给 OtaTask 消费。 */
+/* OTA 固件数据帧（ID 0x380 + node），由 CAN 中断按 ID 分流，只给 OtaTask 消费。 */
 #define RTOS_OTA_FRAME_QUEUE_LENGTH                     8U
+
+/*
+    OtaTask -> TransmitTask 的回复请求。
+    长度 4：丢了只让 Hub 多等一个超时，靠自愈，不值得为它积压。
+    OtaTask 不自己发帧 —— 项目里 CAN 的唯一发送者是 TransmitTask。
+*/
+#define RTOS_OTA_REPLY_QUEUE_LENGTH                     4U
 
 /*
     TransmitTask 每发完一条就交一行显示用日志给 HMI。
@@ -84,6 +92,7 @@ QueueHandle_t rtos_can_receive_frame_queue_get(void);
 QueueHandle_t rtos_transmit_to_hmi_log_queue_get(void);
 QueueHandle_t rtos_collect_to_hmi_queue_get(void);
 QueueHandle_t rtos_ota_frame_queue_get(void);
+QueueHandle_t rtos_ota_reply_queue_get(void);
 
 /* 仅供优先级满足 FreeRTOS 规则的 USART1/CAN 接收中断调用。 */
 uint8_t rtos_tcp_ack_frame_send_from_isr(const tcp_ack_frame_t *frame,

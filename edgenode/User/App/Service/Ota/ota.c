@@ -61,6 +61,8 @@ typedef struct
     uint32_t image_total;     /* 镜像总长；0 = 还没解析到镜像头 */
     uint32_t image_crc32;     /* 镜像头里的 application_crc32 */
     uint32_t idle_ms;         /* 已经闲着多久（毫秒），用来推断传输死没死 */
+    uint16_t frames_since_reply; /* 距上次回复又收了几帧 */
+    uint8_t  idle_replied;    /* 这次卡住已经报过一次了，别刷屏 */
     uint8_t  done;            /* 1 = 收完且校验通过；后面再来的帧一律不理 */
 } ota_rx_state_t;
 
@@ -190,6 +192,16 @@ static uint8_t ota_receive_finished(void)
 }
 
 /*
+    「我连续收到第 N 号」里的 N = 最后一个成功收到的序号。
+    expected_seq 是"我期待的下一个"，所以减 1。
+    能走到这里说明至少收过一帧，不会下溢。
+*/
+static uint16_t ota_reported_seq(void)
+{
+    return (uint16_t)(ota_state.expected_seq - 1U);
+}
+
+/*
     收满总长之后跑一次：
     ① 刷最后一块（那个不满 768 的尾巴，还可能带末帧填充）
     ② 读回中转区算 CRC，和镜像头里的比对
@@ -305,7 +317,17 @@ ota_result_t ota_on_frame(uint16_t standard_id,const uint8_t data[OTA_FRAME_LENG
     ota_state.block_bytes   += OTA_FRAME_PAYLOAD;
     ota_state.expected_seq  += 1U;
     ota_state.received_bytes += OTA_FRAME_PAYLOAD;
-    ota_state.idle_ms = 0U;     /* 有帧进来，说明传输还活着 */
+    ota_state.idle_ms = 0U;         /* 有帧进来，说明传输还活着 */
+    ota_state.idle_replied = 0U;    /* 之前那次"卡住"已经解除 */
+
+    /* 回复触发点①：正常推进时，每攒够一个窗口报一次进度。 */
+    ota_state.frames_since_reply += 1U;
+    if(ota_state.frames_since_reply >= OTA_REPLY_EVERY_FRAMES)
+    {
+        ota_state.frames_since_reply = 0U;
+        result.reply = 1U;
+        result.contiguous = ota_reported_seq();
+    }
 
     /* 镜像头解析：收满 256 字节就可以读了，只做一次。 */
     if((ota_state.image_total == 0U) && (ota_state.received_bytes >= OTA_IMAGE_HEADER_SIZE))
@@ -340,6 +362,7 @@ ota_result_t ota_on_frame(uint16_t standard_id,const uint8_t data[OTA_FRAME_LENG
             ota_state.done  = 1U;   /* 停手，别再往后收 */
             result.finished = 1U;
             result.success  = 1U;
+            result.contiguous = ota_reported_seq();
             /* Task 8 在此接上：写「待装」标志，然后复位整机。 */
         }
         else
@@ -373,6 +396,17 @@ ota_result_t ota_on_idle(void)
     }
 
     ota_state.idle_ms += OTA_IDLE_REPLY_MS;
+
+    /*
+        回复触发点②：卡住了，再报一次自己在哪。
+        只报一次 —— 每 3ms 报一次会把这个队列灌爆，而且还挤占 CAN 总线。
+    */
+    if((ota_state.idle_ms >= OTA_IDLE_REPLY_AFTER_MS) && (ota_state.idle_replied == 0U))
+    {
+        ota_state.idle_replied = 1U;
+        result.reply = 1U;
+        result.contiguous = ota_reported_seq();
+    }
 
     if(ota_state.idle_ms >= OTA_TRANSFER_TIMEOUT_MS)
     {

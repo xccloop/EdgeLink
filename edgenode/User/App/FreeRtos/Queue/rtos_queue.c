@@ -58,6 +58,12 @@ static uint8_t ota_frame_queue_storage[
     RTOS_OTA_FRAME_QUEUE_LENGTH * sizeof(can_receive_frame_t)];
 static QueueHandle_t ota_frame_queue;
 
+/* OtaTask 把"该回复什么"交给 TransmitTask，由唯一发送者真正发帧。 */
+static StaticQueue_t ota_reply_queue_control;
+static uint8_t ota_reply_queue_storage[
+    RTOS_OTA_REPLY_QUEUE_LENGTH * sizeof(ota_reply_request_t)];
+static QueueHandle_t ota_reply_queue;
+
 static uint8_t rtos_queue_ready;
 
 uint8_t rtos_queue_init(void)
@@ -123,9 +129,15 @@ uint8_t rtos_queue_init(void)
     
     ota_frame_queue = xQueueCreateStatic(
         RTOS_OTA_FRAME_QUEUE_LENGTH,
-        sizeof(can_receive_frame_t), 
+        sizeof(can_receive_frame_t),
         ota_frame_queue_storage,
         &ota_frame_queue_control);
+
+    ota_reply_queue = xQueueCreateStatic(
+        RTOS_OTA_REPLY_QUEUE_LENGTH,
+        sizeof(ota_reply_request_t),
+        ota_reply_queue_storage,
+        &ota_reply_queue_control);
 
     if((log_to_collect_sequence_queue == NULL) ||
        (log_to_collect_permission_queue == NULL) ||
@@ -136,7 +148,8 @@ uint8_t rtos_queue_init(void)
        (can_receive_frame_queue == NULL) ||
        (collect_to_hmi_queue == NULL) ||
        (transmit_to_hmi_log_queue == NULL) ||
-       (ota_frame_queue == NULL))
+       (ota_frame_queue == NULL) ||
+       (ota_reply_queue == NULL))
     {
         log_to_collect_sequence_queue = NULL;
         log_to_collect_permission_queue = NULL;
@@ -148,6 +161,7 @@ uint8_t rtos_queue_init(void)
         can_receive_frame_queue = NULL;
         transmit_to_hmi_log_queue = NULL;
         ota_frame_queue = NULL;
+        ota_reply_queue = NULL;
         return RTOS_QUEUE_FAIL;
     }
 
@@ -233,6 +247,11 @@ QueueHandle_t rtos_transmit_to_hmi_log_queue_get(void)
 QueueHandle_t rtos_ota_frame_queue_get(void)
 {
     return (rtos_queue_ready != 0U) ? ota_frame_queue : NULL;
+}
+
+QueueHandle_t rtos_ota_reply_queue_get(void)
+{
+    return (rtos_queue_ready != 0U) ? ota_reply_queue : NULL;
 }
 
 uint8_t rtos_tcp_ack_frame_send_from_isr(const tcp_ack_frame_t *frame,
