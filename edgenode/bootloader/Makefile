@@ -9,8 +9,8 @@ SIZE := "$(TOOLCHAIN)/arm-none-eabi-size.exe"
 MCU := -mcpu=cortex-m3 -mthumb
 DEFS := -DGD32F10X_HD -DUSE_STDPERIPH_DRIVER
 # -I../Drivers/BSP 放在最后：它里面是 gd25.h 和一堆外设驱动，
-# 一旦和 -IDriver/Bsp 里有同名头文件，必须让 Bootloader 自己那份赢。
-INCLUDES := -IUser -IDriver/Core/Inc -IDriver/Bsp -I../Common -I../Common/OTA -I../Common/CRC -I../User -I../Drivers/CMSIS/Include -I../Drivers/CMSIS/Device/GD/GD32F10x/Include -I../Drivers/GD32F10x_Standard_Peripheral/Inc -I../Drivers/BSP
+# 一旦和 -IDriver/Bsp/GD25 里有同名头文件，必须让 Bootloader 自己那份赢。
+INCLUDES := -IUser -IUser/Boot -IDriver/Core/Inc -IDriver/Bsp/GD25 -IDriver/BOARD -IDriver/Bsp -I../Common -I../Common/OTA -I../Common/CRC -I../User -I../Drivers/CMSIS/Include -I../Drivers/CMSIS/Device/GD/GD32F10x/Include -I../Drivers/GD32F10x_Standard_Peripheral/Inc -I../Drivers/BSP
 CFLAGS := $(MCU) $(DEFS) $(INCLUDES) -std=c11 -g3 -Og -Wall -Wextra -ffunction-sections -fdata-sections
 LDFLAGS := $(MCU) -TOCD/linker/gd32f103rct6_bootloader.ld -Wl,--gc-sections -Wl,-Map=$(BUILD_DIR)/$(PROJECT).map -specs=nano.specs -specs=nosys.specs
 
@@ -60,7 +60,7 @@ $(BUILD_DIR)/boot_jump.o: Driver/Core/Src/boot_jump.c
 	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
-$(BUILD_DIR)/boot_relay.o: User/boot_relay.c
+$(BUILD_DIR)/boot_relay.o: User/Boot/boot_relay.c
 	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
@@ -72,7 +72,7 @@ $(BUILD_DIR)/ota_metadata.o: ../Common/OTA/ota_metadata.c
 	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
-$(BUILD_DIR)/gd25.o: Driver/Bsp/gd25.c
+$(BUILD_DIR)/gd25.o: Driver/Bsp/GD25/gd25.c
 	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
@@ -108,11 +108,11 @@ $(BUILD_DIR)/gd32f10x_dbg.o: ../Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10
 	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
-$(BUILD_DIR)/board_time.o: Driver/Bsp/board_time.c
+$(BUILD_DIR)/board_time.o: Driver/BOARD/board_time.c
 	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
-$(BUILD_DIR)/board_debug.o: Driver/Bsp/board_debug.c
+$(BUILD_DIR)/board_debug.o: Driver/BOARD/board_debug.c
 	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
@@ -120,7 +120,7 @@ $(BUILD_DIR)/ips.o: ../Common/IPS/ips.c
 	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
-$(BUILD_DIR)/boot_screen.o: User/boot_screen.c
+$(BUILD_DIR)/boot_screen.o: User/Boot/boot_screen.c
 	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 

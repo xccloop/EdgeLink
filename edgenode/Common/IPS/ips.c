@@ -8,7 +8,7 @@
 /*
     这个头文件不由本目录提供，而是由【编译它的那个镜像自己的 BSP】提供：
         应用       Drivers/BOARD/board_time.h        调度器已启动时让出 CPU
-        Bootloader bootloader/Driver/Bsp/board_time.h 没有 RTOS，只有忙等
+        Bootloader bootloader/Driver/BOARD/board_time.h 没有 RTOS，只有忙等
     两份实现不同，但都只暴露 delay_ms() 和 board_systick_ms —— 本文件只依赖这两样。
     这也是本文件能和两个镜像共用、而 board_time 不能的原因；
     改动任一份 board_time.h 的接口，等于同时改了两个镜像。

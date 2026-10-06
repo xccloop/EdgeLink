@@ -19,8 +19,8 @@ crc32.c 用的就是标准 CRC-32：初值 0xFFFFFFFF、反射多项式 0xEDB883
 用法
 ----
     python tools/make_ota_image.py \\
-        --input  build_slot_a/edegnode.bin \\
-        --output build_slot_a/edegnode_image.bin \\
+        --input  build/a/edegnode.bin \\
+        --output build/a/edegnode_image.bin \\
         --version 1 --slot a
 """
 

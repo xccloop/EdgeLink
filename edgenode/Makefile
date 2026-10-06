@@ -1,24 +1,30 @@
 PROJECT := edegnode
 
-# ── 槽位选择（命令行覆盖：make SLOT=a） ──
+# 默认编译三种布局；SLOT=plain/a/b 可单独编译一种。
 #   plain —— 老的 0x08000000 布局，Bootloader 还没接管时用
 #   a / b —— A / B 槽应用：分别链接到各自槽内地址，并给 SystemInit 传
 #            对应的 VTOR 偏移，否则应用启动时会把向量表指回 0x08000000
 #            （也就是 Bootloader 的向量表），第一个中断就跑飞了。
-SLOT ?= plain
+SLOT ?= all
 
 ifeq ($(SLOT),a)
-BUILD_DIR := build_slot_a
+BUILD_DIR := build/a
 LDSCRIPT  := OCD/linker/gd32f103rct6_slot_a.ld
 VECT_DEF  := -DVECT_TAB_OFFSET=0x4100U
 else ifeq ($(SLOT),b)
-BUILD_DIR := build_slot_b
+BUILD_DIR := build/b
 LDSCRIPT  := OCD/linker/gd32f103rct6_slot_b.ld
 VECT_DEF  := -DVECT_TAB_OFFSET=0x21900U
-else
-BUILD_DIR := build
+else ifeq ($(SLOT),plain)
+BUILD_DIR := build/default
 LDSCRIPT  := OCD/linker/gd32f103rct6.ld
 VECT_DEF  :=
+else ifeq ($(SLOT),all)
+BUILD_DIR := build/default
+LDSCRIPT  := OCD/linker/gd32f103rct6.ld
+VECT_DEF  :=
+else
+$(error SLOT must be all, plain, a or b)
 endif
 
 # 写进镜像头的固件版本号
@@ -58,15 +64,35 @@ SOURCES := $(wildcard User/*.c) $(APP_SOURCES) $(BSP_SOURCES) $(BOARD_SOURCES) $
 STARTUP := OCD/startup/startup_gd32f10x_hd.s
 OBJECTS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(SOURCES)) $(BUILD_DIR)/$(STARTUP:.s=.o)
 
-.PHONY: all clean image
+.PHONY: all firmware clean image FORCE
 
-all: $(BUILD_DIR)/$(PROJECT).elf $(BUILD_DIR)/$(PROJECT).bin
+ifeq ($(SLOT),all)
+all:
+	$(MAKE) SLOT=plain firmware
+	$(MAKE) SLOT=a firmware
+	$(MAKE) SLOT=b firmware
+else
+all: firmware
+endif
+
+firmware: $(BUILD_DIR)/$(PROJECT).elf $(BUILD_DIR)/$(PROJECT).bin
+ifneq ($(filter $(SLOT),a b),)
+firmware: image
+endif
 
 # 带镜像头的可烧镜像。只有 SLOT=a / SLOT=b 时才该用这个目标 ——
 # plain 布局下加了头反而烧不了。
+ifeq ($(filter $(SLOT),a b),)
+image:
+	@echo Image requires SLOT=a or SLOT=b
+	@exit 1
+else
 image: $(BUILD_DIR)/$(PROJECT)_image.bin
+endif
 
-$(BUILD_DIR)/$(PROJECT)_image.bin: $(BUILD_DIR)/$(PROJECT).bin tools/make_ota_image.py
+FORCE:
+
+$(BUILD_DIR)/$(PROJECT)_image.bin: $(BUILD_DIR)/$(PROJECT).bin tools/make_ota_image.py FORCE
 	python tools/make_ota_image.py --input $(BUILD_DIR)/$(PROJECT).bin --output $@ --version $(IMAGE_VERSION) --slot $(SLOT)
 
 $(BUILD_DIR)/$(PROJECT).elf: $(OBJECTS)
@@ -86,6 +112,10 @@ $(BUILD_DIR)/%.o: %.s
 	$(CC) $(MCU) -x assembler-with-cpp -MMD -MP -c $< -o $@
 
 clean:
+ifeq ($(SLOT),all)
+	@if exist "build" rmdir /S /Q "build"
+else
 	@if exist "$(BUILD_DIR)" rmdir /S /Q "$(BUILD_DIR)"
+endif
 
 -include $(OBJECTS:.o=.d)

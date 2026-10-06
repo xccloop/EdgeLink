@@ -6,7 +6,13 @@
 #include <stdio.h>
 #include "FreeRTOS.h"
 #include "task.h"
-#include "FreeRtos/Tasks/rtos_task.h"
+#include "FreeRtos/Tasks/Collect/collect_task.h"
+#include "FreeRtos/Tasks/Log/log_task.h"
+#include "FreeRtos/Tasks/Transmit/transmit_task.h"
+#include "FreeRtos/Tasks/LED/led_task.h"
+#include "FreeRtos/Tasks/StackMonitor/stack_monitor_task.h"
+#include "FreeRtos/Tasks/Hmi/hmi_task.h"
+#include "FreeRtos/Tasks/Ota/ota_task.h"
 #include "FreeRtos/Queue/rtos_queue.h"
 
 /*

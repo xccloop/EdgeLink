@@ -6,7 +6,10 @@
 -DUSE_STDPERIPH_DRIVER
 -std=c11
 -IUser
+-IUser/Boot
 -IDriver/Core/Inc
+-IDriver/Bsp/GD25
+-IDriver/BOARD
 -IDriver/Bsp
 -I../Common
 -I../Common/OTA
@@ -15,3 +18,4 @@
 -I../Drivers/CMSIS/Include
 -I../Drivers/CMSIS/Device/GD/GD32F10x/Include
 -I../Drivers/GD32F10x_Standard_Peripheral/Inc
+-I../Drivers/BSP
