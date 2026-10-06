@@ -52,7 +52,9 @@ FREERTOS_SOURCES := ThirdParty/FreeRTOS-Kernel/tasks.c \
                     ThirdParty/FreeRTOS-Kernel/queue.c \
                     ThirdParty/FreeRTOS-Kernel/list.c \
                     ThirdParty/FreeRTOS-Kernel/portable/GCC/ARM_CM3/port.c
-SOURCES := $(wildcard User/*.c) $(APP_SOURCES) $(BSP_SOURCES) $(BOARD_SOURCES) $(FREERTOS_SOURCES) Common/CRC/crc32.c Common/IPS/ips.c Common/Hmi/hmi_widget.c Drivers/CMSIS/Device/GD/GD32F10x/Source/Templates/system_gd32f10x.c $(DRIVER_SOURCES)
+# Common/OTA/ota_metadata.c：应用侧销账要写元数据（ota_confirm_boot）。
+# gd32f10x_fmc.c：内部 Flash 的擦/写，只有元数据写入用到。
+SOURCES := $(wildcard User/*.c) $(APP_SOURCES) $(BSP_SOURCES) $(BOARD_SOURCES) $(FREERTOS_SOURCES) Common/CRC/crc32.c Common/IPS/ips.c Common/Hmi/hmi_widget.c Common/OTA/ota_metadata.c Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_fmc.c Drivers/CMSIS/Device/GD/GD32F10x/Source/Templates/system_gd32f10x.c $(DRIVER_SOURCES)
 STARTUP := OCD/startup/startup_gd32f10x_hd.s
 OBJECTS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(SOURCES)) $(BUILD_DIR)/$(STARTUP:.s=.o)
 
@@ -65,7 +67,7 @@ all: $(BUILD_DIR)/$(PROJECT).elf $(BUILD_DIR)/$(PROJECT).bin
 image: $(BUILD_DIR)/$(PROJECT)_image.bin
 
 $(BUILD_DIR)/$(PROJECT)_image.bin: $(BUILD_DIR)/$(PROJECT).bin tools/make_ota_image.py
-	python tools/make_ota_image.py --input $(BUILD_DIR)/$(PROJECT).bin --output $@ --version $(IMAGE_VERSION)
+	python tools/make_ota_image.py --input $(BUILD_DIR)/$(PROJECT).bin --output $@ --version $(IMAGE_VERSION) --slot $(SLOT)
 
 $(BUILD_DIR)/$(PROJECT).elf: $(OBJECTS)
 	@if not exist "$(@D)" mkdir "$(@D)"

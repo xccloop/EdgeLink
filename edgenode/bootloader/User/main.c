@@ -2,6 +2,7 @@
 #include "ota_image.h"      /* ota_image_header_t / OTA_APPLICATION_OFFSET */
 #include "ota_metadata.h"   /* ota_metadata_t / load / save / OTA_SLOT_NONE */
 #include "boot_jump.h"
+#include "boot_relay.h"
 #include "image_verify.h"
 #include "CH340/ch340.h"
 #include "board_time.h"
@@ -217,6 +218,20 @@ int main(void)
     ch340_puts("\r\n[boot] EdgeNode bootloader\r\n");
 
     load_result = ota_metadata_load(&meta);
+
+    /*
+        搬运：中转区里如果有完整镜像，就在这儿装进槽里，并把 pending_slot 写进 meta。
+
+        为什么排在元数据读取【之后】而不是之前：
+            它要拿 active_slot 做否决（不能往正在跑的槽里写），所以得先有 meta。
+            写完之后 meta 立刻就是最新的，下面那整套决策逻辑一行都不用改 ——
+            「搬运只是填 pending_slot 的另一种方式」这句话就是在这一步兑现的。
+    */
+    if (boot_relay_install(&meta) != 0U)
+    {
+        /* 刚写进去一条真实记录，"读到的是默认值"那个判断已经过期了。 */
+        load_result = OTA_METADATA_LOAD_REAL;
+    }
 
     /* 记下来：卡住时屏幕上的"体检表"要显示元数据到底读没读到。 */
     boot_meta_was_real = (load_result == OTA_METADATA_LOAD_REAL) ? 1U : 0U;

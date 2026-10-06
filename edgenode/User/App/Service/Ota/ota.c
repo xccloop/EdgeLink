@@ -10,7 +10,7 @@
     【收尾】—— 收满总长时跑一次
     ⑥ 刷最后一块    那个"不满 768"的坑
     ⑦ 读回算 CRC    数据在 flash 里，要读回来验
-    ⑧ 通过 → 写"待装"标志
+    ⑧ 通过 → 到此为止（数据在中转区里；bootloader 自己读镜像头就会发现它，不用留话）
     ⑨ 任何一步失败 → 清理状态，退回 IDLE（绝不能卡死）
     【对外】
     ⑩ 该回复进度时，发「我连续收到第 N 号」
@@ -25,19 +25,20 @@
 #include "GD25Q32/gd25.h"
 #include "ExFlash/external_flash_layout.h"
 #include "OTA/ota_image.h"
+#include "OTA/ota_metadata.h"
 #include "CRC/crc32.h"
+#include "gd32f10x.h"        /* SCB->VTOR：问"我在哪个槽" */
 #include <stdint.h>
 #include <string.h>
 
 /*
-    中转区内部的布局（见设计文档）：
-        OTA_RELAY_BASE_ADDRESS + 0       头部 1 个扇区：「待装」标志
-        OTA_RELAY_BASE_ADDRESS + 4096    镜像本体        ← 本文件只碰这里
-
-    开头那个扇区是 Task 8（待装标志）的事，本文件一个字都不写它。
-    少加这 4096，写镜像的第一步就会把待装标志覆盖掉。
+    中转区：从 OTA_RELAY_BASE_ADDRESS 一直到末尾，【整块】都是镜像存储。
+    没有单独的标志扇区 —— 「有没有东西等着装」由镜像头自己回答：
+        magic 不对 / header_crc32 不过 / application_crc32 不过
+        → bootloader 当没看见（半截的镜像过不了这三关）。
+    装完之后 bootloader 把头所在的那个扇区擦掉，那就是"我处理过了"。
 */
-#define OTA_RELAY_IMAGE_BASE  (OTA_RELAY_BASE_ADDRESS + GD25Q32_SECTOR_SIZE)
+#define OTA_RELAY_IMAGE_BASE  OTA_RELAY_BASE_ADDRESS
 
 /* 镜像本体最大能有多大；超过就放弃，绝不让写入地址跑出中转区踩到日志区。 */
 #define OTA_RELAY_IMAGE_CAPACITY  (OTA_RELAY_END_ADDRESS - OTA_RELAY_IMAGE_BASE)
@@ -359,11 +360,18 @@ ota_result_t ota_on_frame(uint16_t standard_id,const uint8_t data[OTA_FRAME_LENG
     {
         if(ota_finalize() != 0U)
         {
+            /*
+                ota.c 的活到此为止 —— 数据躺在中转区里，CRC 也验过了。
+                bootloader 下次上电自己读镜像头就能发现它，不需要谁留话。
+            */
             ota_state.done  = 1U;   /* 停手，别再往后收 */
             result.finished = 1U;
             result.success  = 1U;
             result.contiguous = ota_reported_seq();
-            /* Task 8 在此接上：写「待装」标志，然后复位整机。 */
+            /*
+                剩下的交给外壳：先把这个结果回给 Hub，再复位整机。
+                ota.c 自己不复位 —— 一复位，这最后一条回复就永远发不出去了。
+            */
         }
         else
         {
@@ -414,4 +422,56 @@ ota_result_t ota_on_idle(void)
     }
 
     return result;
+}
+
+/*
+    销账：告诉 bootloader"我这次真的跑起来了"。
+
+    写什么：active_slot = 我自己，pending_slot = 清空，试启动次数归零。
+    写完之后 bootloader 下次上电就不再数次数了（没有 pending 了），
+    设备从此稳定停在新槽上。
+*/
+uint8_t ota_confirm_boot(void)
+{
+    ota_metadata_t meta;
+    uint32_t my_slot;
+
+    /*
+        我在哪个槽？问 VTOR。
+
+        为什么不用"元数据里 pending 是谁"来推断：万一 bootloader 那一次
+        ota_metadata_save 失败了，Flash 上的元数据会停在旧状态，我就把自己
+        认成别的槽了 —— 而销账写错槽，等于往 bootloader 的记事本上撒谎。
+
+        VTOR 是启动时按槽设死的（Makefile 里 VECT_TAB_OFFSET），
+        它是"我此刻实际从哪跑"这个事实本身。
+    */
+    my_slot = SCB->VTOR - OTA_IMAGE_HEADER_SIZE;
+
+    if((my_slot != OTA_SLOT_A_BASE_ADDRESS) && (my_slot != OTA_SLOT_B_BASE_ADDRESS))
+    {
+        /* 不是 A/B 槽（例如 plain 构建，VTOR 指在 0x08000000）。
+           没有槽可销，直接说"没什么要做的"。 */
+        return 0U;
+    }
+
+    if(ota_metadata_load(&meta) != OTA_METADATA_LOAD_REAL)
+    {
+        /* 记事本不可读：bootloader 那边会走"灾后恢复"重建一份，这里别插一脚 ——
+           在一份读不出来的记录上写，只会把它搅得更乱。 */
+        return 0U;
+    }
+
+    /* 已经销过账了就别再写。每次上电都擦一遍内部 Flash 是白耗寿命。 */
+    if((meta.active_slot == my_slot) && (meta.pending_slot == OTA_SLOT_NONE))
+    {
+        return 1U;
+    }
+
+    meta.active_slot = my_slot;
+    meta.pending_slot = OTA_SLOT_NONE;
+    meta.boot_attempts = 0U;
+    meta.pending_version = 0U;
+
+    return (ota_metadata_save(&meta) == OTA_METADATA_OK) ? 1U : 0U;
 }

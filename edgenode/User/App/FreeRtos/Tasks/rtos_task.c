@@ -19,6 +19,7 @@
 #include "Presentation/Hmi/Control/hmi_control.h"
 #include "KEY/key.h"
 #include "Output/Tcp/tcp.h"
+#include "gd32f10x.h"        /* NVIC_SystemReset() */
 #include <string.h>
 
 /* 初始化失败时本任务不再访问外设或队列，但继续阻塞让其他任务可以运行。 */
@@ -1005,6 +1006,8 @@ static void ota_task(void *argument)
     QueueHandle_t ota_reply_queue;
     can_receive_frame_t frame;
     ota_result_t result;
+    TickType_t boot_tick;
+    uint8_t confirmed;
 
     (void)argument;
 
@@ -1015,8 +1018,28 @@ static void ota_task(void *argument)
         task_block_forever();
     }
 
+    boot_tick = xTaskGetTickCount();
+    confirmed = 0U;
+
     while(1)
     {
+        /*
+            跑满 OTA_CONFIRM_DELAY_MS 之后，向 bootloader 销账一次。
+
+            为什么由这里做：这是 OTA 模块自己的事 —— "我这份固件被确认了"。
+            为什么等这么久才做：太早销账等于把安全网拆了（见 ota_confirm_boot 的注释）。
+
+            代价：真的写那一次会冻 CPU 约 30ms（内部 Flash 擦页）。
+            但它只在"刚升级完的第一次启动"上真写（其余时候读一下就返回），
+            而那一刻没有 OTA 传输在进行，所以不会丢帧。
+        */
+        if((confirmed == 0U) &&
+           ((xTaskGetTickCount() - boot_tick) >= pdMS_TO_TICKS(OTA_CONFIRM_DELAY_MS)))
+        {
+            (void)ota_confirm_boot();
+            confirmed = 1U;
+        }
+
         /*
             超时值用 OTA_IDLE_REPLY_MS，它有两个用途：
             ① 没帧可收时让 ota.c 有机会累计"闲着多久" —— Hub 半路挂了，只有这条路能发现
@@ -1054,6 +1077,33 @@ static void ota_task(void *argument)
             request.success = result.success;
 
             (void)xQueueSend(ota_reply_queue, &request, 0U);
+        }
+
+        /*
+            整个 OTA 收完了：结果回复已经进了队列，但 TransmitTask 还没取走。
+
+            先等它出队，再留一点余量让 CAN 帧真的离开总线，然后复位整机 ——
+            复位之后就没机会再说"我成功了"。**复位才是这次升级的终点**：
+            复位 → bootloader 上电 → 发现中转区有完整镜像 → 搬进槽 → 试启动。
+            少了这一步，新固件会一直躺在中转区，直到下一次碰巧掉电。
+
+            等不到也照样复位：不能因为 Hub 没收到最后一句就停在这儿。
+        */
+        if(result.finished != 0U)
+        {
+            uint32_t wait;
+
+            for(wait = 0U; wait < OTA_RESET_FLUSH_WAIT_MS; wait++)
+            {
+                if(uxQueueMessagesWaiting(ota_reply_queue) == 0U)
+                {
+                    break;
+                }
+                vTaskDelay(pdMS_TO_TICKS(1U));
+            }
+            vTaskDelay(pdMS_TO_TICKS(OTA_RESET_FLUSH_MS));
+
+            NVIC_SystemReset();     /* 不返回 */
         }
     }
 }

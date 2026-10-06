@@ -57,6 +57,29 @@ typedef struct
 #define OTA_IDLE_REPLY_AFTER_MS   20U
 #define OTA_REPLY_POLL_MS         5U
 
+/*
+    应用启动后跑满这么久，才向 bootloader 销账（宣布"我这次真的跑起来了"）。
+
+    为什么不能一上电就销账：那等于把安全网拆了。
+    新固件如果"启动后 200ms 就崩"，销账已经发生 → bootloader 不再数试启动次数
+    → 永远退不回旧槽，只能拆机重烧。
+
+    10 秒：短到用户无感，长到足够暴露"一启动就崩"这种毛病。
+*/
+#define OTA_CONFIRM_DELAY_MS      10000U
+
+/*
+    收满 + 校验通过之后，等结果回复真的发出去，再复位整机。
+
+    第一步等"回复出队"：TransmitTask 每 OTA_REPLY_POLL_MS 来取一次，取走就发。
+    第二步再留一点余量让 CAN 帧离开总线 —— 复位会掐断还没发完的帧。
+
+    两个都是【上限】，等不到也照样复位：复位才是升级的目的，
+    不能因为 Hub 没收到就停在这儿。最坏 150ms。
+*/
+#define OTA_RESET_FLUSH_WAIT_MS   100U
+#define OTA_RESET_FLUSH_MS        50U
+
 /* 1. 吃一帧 */
 ota_result_t ota_on_frame(uint16_t standard_id, const uint8_t *data, uint8_t data_length);
 
@@ -65,5 +88,19 @@ ota_result_t ota_on_idle(void);
 
 /* 3. 把状态清回初始  */
 void ota_reset(void);
+
+/*
+    4. 销账：宣布"我这次真的跑起来了"。
+
+    由应用自己做，因为 bootloader 做不了 —— 跳转之后它就是上一个生命周期的人了，
+    看不见"应用跑起来了"还是"刚跳过去就复位了"。只有应用自己知道。
+
+    少了这一步：bootloader 会一直数试启动次数，数到 3 就判新固件起不来，
+    把设备退回旧槽 —— 哪怕新固件跑得好好的。
+
+    幂等且很便宜：已经销过账时只读一次元数据就返回，不写 Flash。
+    返回 1 = 已经确认（本来就是，或者刚写成功）。
+*/
+uint8_t ota_confirm_boot(void);
 
 #endif
