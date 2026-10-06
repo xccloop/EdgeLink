@@ -11,7 +11,8 @@
 | 交付语义 | 节点 **at-least-once 重传**，Hub 以唯一索引实现幂等持久化 |
 | 链路恢复 | 运行期断线自动重连，重连成功后补发积压 pending |
 | 节点显示 | 320×240 IPS 四页：HOME / LINKS / LOG / STORAGE |
-| 当前边界 | 已有源码和阶段性实机证据；ACK 闭环、异常掉电恢复、CAN 回退、断线重连与补发均已实机验收通过，72 小时工作无死机 |
+| 固件更新 | Node 侧已有 CAN 接收、GD25Q32 中转、Bootloader 和内部 Flash A/B 槽代码；端到端升级仍待实机验证 |
+| 当前边界 | 遥测 ACK 闭环、异常掉电恢复、CAN 回退、断线重连与补发已有阶段性实机验收记录，72 小时工作无死机；这不代表 OTA 已通过同样的验证 |
 
 ## 快速开始
 
@@ -23,11 +24,14 @@
 # 1. 改配置：Wi-Fi SSID/密码、Hub 的 IP 与端口，以及本节点的 board_id
 #    edgenode/User/App/Config/config.c
 
-# 2. 编译（需要 ARM GNU Toolchain）
-mingw32-make -C edgenode -j2
+# 2. 编译三套 APP（默认布局、A 槽、B 槽；需要 ARM GNU Toolchain）
+./edgenode/tools/compiled.ps1
 
-# 3. 烧录（需要已连接的 ST-Link；脚本会先强制重新编译再烧写校验）
-./edgenode/flash.ps1
+# 3. 裸板首次烧录默认布局（需要已连接的 ST-Link）
+./edgenode/tools/flash.ps1 default
+
+# 已安装 Bootloader 的设备可改用 a 或 b 槽
+# ./edgenode/tools/flash.ps1 a
 ```
 
 `board_id` 决定 TCP Frame 的 source 和 CAN 仲裁 ID，**同一个 Hub 下的节点不能重复**。
@@ -50,6 +54,7 @@ cd edgehub && ./build.sh
 - [总体架构](#总体架构)
 - [EdgeNode：分层与任务协作](#edgenode分层与任务协作)
 - [EdgeNode：节点侧 HMI](#edgenode节点侧-hmi)
+- [EdgeNode：固件更新](#edgenode固件更新)
 - [Flash 日志：恢复逻辑与容量边界](#flash-日志恢复逻辑与容量边界)
 - [EdgeHub：事件循环、解析与幂等持久化](#edgehub事件循环解析与幂等持久化)
 - [协议契约](#协议契约)
@@ -105,9 +110,9 @@ flowchart LR
     subgraph Node[EdgeNode - GD32F103RCT6]
         Sensor[BMP280]
         Collect[CollectTask\n统一 Message]
-        Storage[StorageTask\nGD25Q32 pending log]
+        Log[LogTask\nGD25Q32 pending log]
         Tx[TransmitTask\nTCP / CAN]
-        Sensor --> Collect --> Storage --> Tx
+        Sensor --> Collect --> Log --> Tx
     end
 
     Tcp[TCP V5\n主链路]
@@ -143,16 +148,18 @@ Flash 是数据链的本地恢复点，SQLite 是 Hub 侧的持久化事实源�
 | --- | --- | --- |
 | BOARD | [`edgenode/Drivers/BOARD/`](edgenode/Drivers/BOARD/) | 时基、共享 SPI 总线与板级通用策略。 |
 | BSP | [`edgenode/Drivers/BSP/`](edgenode/Drivers/BSP/) | BMP280、GD25Q32、CAN、ESP-AT 串口、IPS 等具体器件访问。 |
-| APP / Protocol | [`edgenode/User/App/`](edgenode/User/App/) | Message、CRC、TCP V5/CAN 编码、FreeRTOS 队列和业务状态。 |
-| Output | `Output/Storage`、`Output/Tcp`、`Output/Can` | 把统一 Message 变为 Flash、TCP 或 CAN 的实际输出。 |
+| APP / Protocol | [`edgenode/User/App/`](edgenode/User/App/) | Message、TCP V5/CAN 编码、队列和业务状态；OTA 的协议判断位于 `Service/Ota`。 |
+| FreeRTOS Tasks | [`edgenode/User/App/FreeRtos/Tasks/`](edgenode/User/App/FreeRtos/Tasks/) | Collect、Log、Transmit、Ota、Hmi、LED、StackMonitor 各有独立任务文件；任务负责调度和队列交接。 |
+| Output | `Output/Log`、`Output/Tcp`、`Output/Can` | 把统一 Message 变为 Flash 日志、TCP 或 CAN 的实际输出。 |
+| Bootloader / OTA | [`edgenode/bootloader/`](edgenode/bootloader/)、[`edgenode/Common/OTA/`](edgenode/Common/OTA/) | 校验镜像、管理内部 Flash 槽位和启动元数据；Bootloader 是独立工程。 |
 
 这使“协议重试、Flash 确认”留在 APP，而不是污染设备驱动；也使 BMP280 与 GD25Q32 共用总线时，设备选择与底层时序仍属于 BOARD/BSP。
 
-### 三个核心任务
+### 遥测主链上的三个任务
 
 ```mermaid
 sequenceDiagram
-    participant S as StorageTask
+    participant S as LogTask
     participant C as CollectTask
     participant T as TransmitTask
     participant H as EdgeHub
@@ -174,11 +181,13 @@ sequenceDiagram
     S->>T: 写入成功后才投递发送任务
 ```
 
-**StorageTask 是唯一写 Flash 的任务。** 它在启动时全量扫描日志区，恢复写指针和下一个 `sequence`；若存在历史 pending，会优先顺序补发。单条记录连续三次无法确认时，本轮补发停止，记录保留给后续重试，避免一条坏链路永久卡住启动。
+**LogTask 负责遥测日志的 Flash 写入与确认。** 它在启动时全量扫描日志区，恢复写指针和下一个 `sequence`；若存在历史 pending，会优先顺序补发。单条记录连续三次无法确认时，本轮补发停止，记录保留给后续重试，避免一条坏链路永久卡住启动。
 
-**CollectTask 不直接发送。** 它只有在 StorageTask 发放许可后才采样，并将统一 Message 交回 StorageTask。这样写 Flash 失败、缓存不可继续写入或补发期间，不会继续静默产生无处保存的新数据。
+**CollectTask 不直接发送。** 它只有在 LogTask 发放许可后才采样，并将统一 Message 交回 LogTask。这样写 Flash 失败、缓存不可继续写入或补发期间，不会继续静默产生无处保存的新数据。
 
 **TransmitTask 不直接确认 Flash。** 它发送 TCP V5，校验固定长度 ACK 的版本、目标节点、CRC、状态码和 `sequence`。无有效 ACK 时再尝试重连与 CAN 回退；两条链路都未确认时只报告失败，记录仍为 pending。
+
+其余任务各有自己的入口：`OtaTask` 接收 CAN 固件帧并把回复交给 TransmitTask 发送；`HmiTask` 绘制屏幕；LED 任务负责指示；StackMonitor 任务检查任务栈。它们不改变上面“先落盘、后发送、ACK 后确认”的遥测顺序。
 
 ### 节点侧失败分支
 
@@ -187,7 +196,7 @@ sequenceDiagram
 | 新采样还未写入 Flash 时掉电 | 没有提交给 TransmitTask。 | 本次未持久化样本无法恢复；已提交样本不被误确认。 |
 | 已写 pending、尚未得到 ACK | 重启后扫描为 pending 并参与补发。 | 允许重传。 |
 | ACK 丢失或 ACK 的 `sequence` 不匹配 | 不产生确认事件。 | 记录保持 pending，Hub 可用唯一索引消化重传。 |
-| Storage 写入、读回或确认校验失败 | StorageTask 停止继续访问队列/外设。 | 宁可停止采集，也不静默跳过 sequence 或覆盖未知数据。 |
+| 日志写入、读回或确认校验失败 | LogTask 停止继续访问队列/外设。 | 宁可停止采集，也不静默跳过 sequence 或覆盖未知数据。 |
 | CAN 无物理 ACK | CAN 控制器发送邮箱可能占满，TransmitTask 不会把它当 Hub 成功确认。 | Flash pending 保留。 |
 
 ## EdgeNode：节点侧 HMI
@@ -215,6 +224,21 @@ Widget  →  Page   →  Render  →  Control
 矩形/文本   配色       交 DMA      待刷新范围
 ```
 
+## EdgeNode：固件更新
+
+Node 的 OTA 链路与遥测链路分开：CAN 中断把固件帧交给 `OtaTask`，[`Service/Ota/ota.c`](edgenode/User/App/Service/Ota/ota.c) 判断序号、缓存数据并写入 GD25Q32 中转区。完整镜像校验通过后，节点复位；独立的 [`bootloader/`](edgenode/bootloader/) 再校验中转镜像、安装到内部 Flash 的目标槽，并根据启动元数据决定试启动或回退。新 APP 运行一段时间后才调用 `ota_confirm_boot()` 确认本次启动。CAN 回复由 TransmitTask 统一发送。
+
+| 内部 Flash 区域 | 起始地址 | 容量 | 内容 |
+| --- | --- | ---: | --- |
+| Bootloader | `0x08000000` | 16 KiB | 启动、校验、安装与回退逻辑 |
+| A 槽 | `0x08004000` | 118 KiB | 256 B 镜像头 + A 版 APP |
+| B 槽 | `0x08021800` | 118 KiB | 256 B 镜像头 + B 版 APP |
+| OTA 元数据 | `0x0803F000` | 4 KiB | 活动槽、待确认槽等启动状态 |
+
+[`tools/compiled.ps1`](edgenode/tools/compiled.ps1) 一次编出 `build/default`、`build/a`、`build/b`。A/B 槽必须烧录带镜像头的 `edegnode_image.bin`；[`tools/flash.ps1`](edgenode/tools/flash.ps1) 按 `default`、`a`、`b` 选择文件和固定地址，A/B 烧录前检查镜像格式、槽位和 CRC。`default` 是从 `0x08000000` 启动的旧布局，烧录它会覆盖 Bootloader。
+
+**验证边界：**当前源码和三套 APP、Bootloader 均已编译通过；烧录脚本只做过 `-WhatIf` 地址检查。CAN 传输、中转安装、试启动确认、回退和异常掉电恢复尚未作为一条完整 OTA 链路在实机上验收。镜像 CRC 用于发现损坏，不提供固件身份认证。
+
 ## Flash 日志：恢复逻辑与容量边界
 
 每条 Flash 记录固定为 16 字节：
@@ -234,7 +258,7 @@ byte 15      status                 0x00 = confirmed；其他值 = pending
 - CRC 正确且未 confirmed 的最小 `sequence` 用来确定最先补发的记录；
 - 非空但 CRC 错的槽位可能是掉电半写，不能当作有效数据，也不能再次编程。
 
-当前实现在进入新 4 KiB 扇区前，会检查目标扇区是否仍含有效 pending；若存在则拒绝擦除。因此“长期离线时覆盖最旧 pending 以保持持续采集”目前只是待定容量策略，不应被包装成已经完成的功能。实现入口见 [`storage.c`](edgenode/User/App/Output/Storage/storage.c)。
+当前实现在进入新 4 KiB 扇区前，会检查目标扇区是否仍含有效 pending；若存在则拒绝擦除。因此“长期离线时覆盖最旧 pending 以保持持续采集”目前只是待定容量策略，不应被包装成已经完成的功能。实现入口见 [`log.c`](edgenode/User/App/Output/Log/log.c)。
 
 ## EdgeHub：事件循环、解析与幂等持久化
 
@@ -301,7 +325,8 @@ TCP 与 CAN 都承载同一个 Message，却不强行共用同一份线上帧：
 ### EdgeNode
 
 - 构建规则：[`edgenode/Makefile`](edgenode/Makefile)，使用 ARM GNU Toolchain 生成 ELF 和 BIN。
-- Windows 烧录入口：[`edgenode/flash.ps1`](edgenode/flash.ps1)。脚本会强制重新编译，再通过 ST-Link/OpenOCD 烧录、校验并复位。
+- Windows 编译入口：[`edgenode/tools/compiled.ps1`](edgenode/tools/compiled.ps1)，生成 `build/default`、`build/a`、`build/b` 三套产物。
+- Windows 烧录入口：[`edgenode/tools/flash.ps1`](edgenode/tools/flash.ps1)，传入 `default`、`a` 或 `b`，将对应的已编译镜像写入该布局的 Flash 起始地址并校验。`default` 会覆盖 `0x08000000` 上的 Bootloader；A/B 槽需要设备已有 Bootloader，烧录前会校验镜像完整性。
 - **节点配置**：Wi-Fi 凭据、Hub 地址和 `board_id` 都在 [`edgenode/User/App/Config/config.c`](edgenode/User/App/Config/config.c)，由 `config_tcp_get()` 提供给 TCP 层。`board_id` 同时决定 TCP Frame 的 source 和 CAN 仲裁 ID，**同一个 Hub 下的节点不能重复**。
 
 ### EdgeHub
