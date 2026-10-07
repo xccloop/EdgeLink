@@ -5,6 +5,8 @@
 #include "Epoll.hpp"
 #include "Ringbuffer.hpp"
 #include "Storage.hpp"
+#include "Http.hpp"
+#include "Httphandle.hpp"
 #include <cstdint>
 #include <cstdio>
 #include <sys/epoll.h>
@@ -57,6 +59,8 @@ private:
     Can _can;
     Epoll _epoll;
     Storage _storage;
+    Http http_serve;
+    HttpHandle http_hanlde;
 
     std::unordered_map<int, FdType> fd_table;
     std::array<std::unique_ptr<ClientState>,MAX_CLIENTS> clients{};

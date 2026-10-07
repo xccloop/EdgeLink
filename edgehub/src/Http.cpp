@@ -57,7 +57,7 @@ static const char* status_reason(int status)
         case 405: return "Method Not Allowed";
         case 413: return "Payload Too Large";
         case 500: return "Internal Server Error";
-        default:  return "OK";
+        default:  return "ERROR";
     }
 }
 
