@@ -12,6 +12,7 @@ public:
 
     void clear();
 
+    uint8_t firmwareQueryNode() const { return query_node; }
     int statusCode() const { return status; }
     const std::string& responseBody() const { return body; }
 
@@ -20,6 +21,8 @@ private:
     int status;
 
     std::string body;
+    std::string request_path;
+    uint8_t query_node{0};
 
     // 给“成员函数指针类型”起名为 Handler。
     //Handler 代表一个指向 HttpHandle 类成员函数的指针，这个成员函数无参数、返回 void。
@@ -30,10 +33,12 @@ private:
     {
         std::string path;
         Handler handler;
+        bool prefix{false};
     };
 
     // 声明整张表，具体内容写在 cpp 中。
     static const Route routes[];
 
     void hanlde_hubstatus();
+    void handleFirmwareSlotQuery();
 };

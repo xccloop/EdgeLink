@@ -142,7 +142,16 @@ bool Gateruntime::run(volatile sig_atomic_t *g_running)
     struct epoll_event events[EPOLLEVENT_SIZE];
     while(*g_running != 0)
     {
-        int nready = _epoll.wait(events, EPOLLEVENT_SIZE);
+        int timeout_ms = -1;
+        for(const auto& client : httpclients)
+        {
+            if(client && client->waiting_slot_reply)
+            {
+                timeout_ms = 100;
+                break;
+            }
+        }
+        int nready = _epoll.wait(events, EPOLLEVENT_SIZE, timeout_ms);
         if(nready == -1)
         {
             //修复：EINTR只是epoll_wait被信号临时中断，重新等待就可以；其他错误才说明事件循环无法继续
@@ -159,6 +168,7 @@ bool Gateruntime::run(volatile sig_atomic_t *g_running)
             int fd = events[event_index].data.fd;
             dispatchEvent(fd, events[event_index].events);
         }
+        serviceFirmwareSlotQueries();
     }
 
     return true;
@@ -534,6 +544,12 @@ bool Gateruntime::handleCan(unsigned int event_mask)
                 uint32_t can_id = can_frame.can_id & CAN_SFF_MASK;
                 uint16_t temperature_raw;
 
+                // OTA 帧先分流，不进入遥测入库和遥测 ACK 流程。
+                if(handleCanOtaFrame(can_frame))
+                {
+                    continue;
+                }
+
                 /* 不使用固定ID过滤：每个节点的ID不同，先接收后按遥测ID范围和DLC确认格式。 */
                 if(((can_frame.can_id & (CAN_EFF_FLAG | CAN_RTR_FLAG | CAN_ERR_FLAG)) != 0U) ||
                     (can_frame.can_dlc != CAN_TELEMETRY_LENGTH) ||
@@ -679,7 +695,7 @@ bool Gateruntime::handleHttpClient(int fd,uint32_t event_mask)
 
     bool close_client = (event_mask & (EPOLLERR | EPOLLHUP)) != 0;
     HttpClientState& client = *httpclients[slot];
-    if(close_client == false && client.response.empty())
+    if(close_client == false && client.response.empty() && !client.waiting_slot_reply)
     {
         // 对端停止发送也要先读取最后的数据，完整请求仍然可以回复。
         if((event_mask & (EPOLLIN | EPOLLRDHUP)) != 0)
@@ -690,7 +706,14 @@ bool Gateruntime::handleHttpClient(int fd,uint32_t event_mask)
         {
             HttpHandle handler;
             handler.handle(client.http.request());
-            client.response = Http::serialize(handler.statusCode(), handler.responseBody());
+            if(handler.firmwareQueryNode() != 0U)
+            {
+                startFirmwareSlotQuery(slot, handler.firmwareQueryNode());
+            }
+            else
+            {
+                client.response = Http::serialize(handler.statusCode(), handler.responseBody());
+            }
         }
         else if((event_mask & EPOLLRDHUP) != 0)
         {
@@ -807,4 +830,196 @@ void Gateruntime::sendHttpResponse(int slot, bool &close_client)
 
     // 第一版一条连接处理一个请求，响应全部发送后关闭。
     close_client = true;
+}
+
+
+bool Gateruntime::handleCanOtaFrame(const can_frame& frame)
+{
+    if((frame.can_id & (CAN_EFF_FLAG | CAN_RTR_FLAG | CAN_ERR_FLAG)) != 0U)
+    {
+        return false;
+    }
+
+    uint32_t id = frame.can_id & CAN_SFF_MASK;
+    uint32_t base;
+    const char* kind;
+    if(id >= CAN_OTA_DATA_BASE_ID && id < CAN_OTA_DATA_BASE_ID + CAN_ID_SEGMENT_SIZE)
+    {
+        base = CAN_OTA_DATA_BASE_ID;
+        kind = "data";
+    }
+    else if(id >= CAN_OTA_CTRL_BASE_ID && id < CAN_OTA_CTRL_BASE_ID + CAN_ID_SEGMENT_SIZE)
+    {
+        base = CAN_OTA_CTRL_BASE_ID;
+        kind = "control";
+    }
+    else if(id >= CAN_OTA_REPLY_BASE_ID && id < CAN_OTA_REPLY_BASE_ID + CAN_ID_SEGMENT_SIZE)
+    {
+        base = CAN_OTA_REPLY_BASE_ID;
+        kind = "reply";
+    }
+    else
+    {
+        return false;
+    }
+
+    uint32_t node = id - base;
+    // 节点 0 保留；控制载荷尚未定义，只校验经典 CAN 的长度范围。
+    if(node == 0U || frame.can_dlc > CAN_MAX_DLEN ||
+       (base == CAN_OTA_DATA_BASE_ID && frame.can_dlc != CAN_OTA_DATA_LENGTH) ||
+       (base == CAN_OTA_REPLY_BASE_ID && frame.can_dlc != CAN_OTA_REPLY_LENGTH &&
+        frame.can_dlc != 8U))
+    {
+        fprintf(stderr, "CAN OTA invalid: id=0x%03X dlc=%u\n", id,
+            static_cast<unsigned int>(frame.can_dlc));
+        return true;
+    }
+
+    if(base == CAN_OTA_REPLY_BASE_ID)
+    {
+        if(frame.data[0] == CAN_OTA_REPLY_KIND_SLOT && frame.can_dlc == 8U)
+        {
+            finishFirmwareSlotQuery(static_cast<uint8_t>(node), frame);
+            return true;
+        }
+        if(frame.can_dlc != CAN_OTA_REPLY_LENGTH || frame.data[0] == CAN_OTA_REPLY_KIND_SLOT)
+        {
+            fprintf(stderr, "CAN OTA invalid reply length: node=%u kind=%u dlc=%u\n",
+                node, static_cast<unsigned int>(frame.data[0]),
+                static_cast<unsigned int>(frame.can_dlc));
+            return true;
+        }
+        uint16_t contiguous = (static_cast<uint16_t>(frame.data[1]) << 8) |
+            static_cast<uint16_t>(frame.data[2]);
+        if(frame.data[0] == CAN_OTA_REPLY_KIND_PROGRESS)
+        {
+            printf("CAN OTA progress: node=%u contiguous=%u\n", node,
+                static_cast<unsigned int>(contiguous));
+        }
+        else if(frame.data[0] == CAN_OTA_REPLY_KIND_RESULT && frame.data[3] <= 1U)
+        {
+            printf("CAN OTA result: node=%u success=%u\n", node,
+                static_cast<unsigned int>(frame.data[3]));
+        }
+        else
+        {
+            fprintf(stderr, "CAN OTA invalid reply: node=%u kind=%u success=%u\n",
+                node, static_cast<unsigned int>(frame.data[0]),
+                static_cast<unsigned int>(frame.data[3]));
+        }
+        return true;
+    }
+
+    // 数据/控制帧正常方向为 Hub -> Node，收到时仅记录，不执行升级动作。
+    printf("CAN OTA %s observed: node=%u dlc=%u data=", kind, node,
+        static_cast<unsigned int>(frame.can_dlc));
+    for(uint8_t index = 0; index < frame.can_dlc; ++index)
+    {
+        printf("%02X", static_cast<unsigned int>(frame.data[index]));
+    }
+    printf("\n");
+    return true;
+}
+
+
+void Gateruntime::startFirmwareSlotQuery(int slot, uint8_t node)
+{
+    HttpClientState& client = *httpclients[slot];
+    bool in_use;
+    //这里的next_query是curl的查询编号，不是node编号
+    do
+    {
+        ++next_query_id;
+        if(next_query_id == 0U)
+        {
+            ++next_query_id;
+        }
+        in_use = false;
+        for(const auto& pending : httpclients)
+        {
+            if(pending && pending->waiting_slot_reply && pending->query_id == next_query_id)
+            {
+                in_use = true;
+                break;
+            }
+        }
+    } while(in_use);
+
+    client.query_node = node;
+    client.query_id = next_query_id;
+    uint8_t data[4] = {1U, static_cast<uint8_t>(client.query_id >> 8),
+        static_cast<uint8_t>(client.query_id), 0U};
+    if(!_can.send(CAN_OTA_CTRL_BASE_ID + node, data, sizeof(data)))
+    {
+        client.response = Http::serialize(503, "{\"error\":\"CAN query send failed\"}\n");
+        return;
+    }
+    client.waiting_slot_reply = true;
+    client.query_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+}
+
+void Gateruntime::finishFirmwareSlotQuery(uint8_t node, const can_frame& frame)
+{
+    uint16_t request_id = (static_cast<uint16_t>(frame.data[1]) << 8) | frame.data[2];
+    uint32_t target = (static_cast<uint32_t>(frame.data[4]) << 24) |
+        (static_cast<uint32_t>(frame.data[5]) << 16) |
+        (static_cast<uint32_t>(frame.data[6]) << 8) | frame.data[7];
+    for(int slot = 0; slot < MAX_CLIENTS; ++slot)
+    {
+        if(!httpclients[slot] || !httpclients[slot]->waiting_slot_reply ||
+           httpclients[slot]->query_node != node || httpclients[slot]->query_id != request_id)
+        {
+            continue;
+        }
+        HttpClientState& client = *httpclients[slot];
+        client.waiting_slot_reply = false;
+        int status = 502;
+        std::string body = "{\"error\":\"invalid node query reply\"}\n";
+        if(std::chrono::steady_clock::now() >= client.query_deadline)
+        {
+            status = 504;
+            body = "{\"error\":\"node query timed out\"}\n";
+        }
+        else if(frame.data[3] == 0U &&
+                (target == OTA_SLOT_A_BASE_ADDRESS || target == OTA_SLOT_B_BASE_ADDRESS))
+        {
+            status = 200;
+            body = (target == OTA_SLOT_A_BASE_ADDRESS) ?
+                "{\"slot\":\"A\"}\n" : "{\"slot\":\"B\"}\n";
+        }
+        else if(frame.data[3] == 1U && target == 0U)
+        {
+            body = "{\"error\":\"node metadata invalid\"}\n";
+        }
+        else if(frame.data[3] == 2U && target == 0U)
+        {
+            status = 409;
+            body = "{\"error\":\"node has an unconfirmed slot\"}\n";
+        }
+        client.response = Http::serialize(status, body);
+        // 本批事件处理完再发送，避免在 CAN 回调中关闭另一个仍有事件的 fd。
+        return;
+    }
+}
+
+void Gateruntime::serviceFirmwareSlotQueries()
+{
+    const auto now = std::chrono::steady_clock::now();
+    for(int slot = 0; slot < MAX_CLIENTS; ++slot)
+    {
+        if(httpclients[slot] && httpclients[slot]->waiting_slot_reply &&
+           now >= httpclients[slot]->query_deadline)
+        {
+            HttpClientState& client = *httpclients[slot];
+            client.waiting_slot_reply = false;
+            client.response = Http::serialize(504, "{\"error\":\"node query timed out\"}\n");
+        }
+        if(httpclients[slot] && !httpclients[slot]->waiting_slot_reply &&
+           httpclients[slot]->query_id != 0U && !httpclients[slot]->response.empty())
+        {
+            // 此函数只在当前 epoll 事件批次结束后执行。
+            httpclients[slot]->query_id = 0U;
+            handleHttpClient(httpclients[slot]->connection.fd(), 0U);
+        }
+    }
 }
