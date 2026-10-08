@@ -242,6 +242,11 @@ std::string Http::serialize(int status, const std::string& body)
     out += status_reason(status);
     out += "\r\n";
     out += "Content-Type: application/json\r\n";
+    out += "Connection: close\r\n";
+    if(status == 405)
+    {
+        out += "Allow: GET\r\n";
+    }
     out += "Content-Length: ";
     out += std::to_string(body.size());
     out += "\r\n";

@@ -12,6 +12,9 @@ public:
 
     void clear();
 
+    int statusCode() const { return status; }
+    const std::string& responseBody() const { return body; }
+
 private:
 
     int status;

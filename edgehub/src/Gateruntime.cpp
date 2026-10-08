@@ -1,6 +1,7 @@
 #include "Gateruntime.hpp"
 #include "TcpFrame.hpp"
 #include "Can.hpp"
+#include <sys/epoll.h>
 
 /*
     GateRuntime 负责拥有并初始化 EdgeHub 的运行时资源：TcpServe、Can、Epoll、
@@ -35,6 +36,7 @@
 
 Gateruntime::Gateruntime()
     : _tcpserve(TCPSERVE_PORT, TCPSERVE_BACKLOG)
+    ,_httpserve(HTTPSERVE_PORT, HTTPSERVE_BACKLOG)
 {
 }
 
@@ -75,6 +77,20 @@ bool Gateruntime::init()
 
     int tcp_fd = _tcpserve.fd();
 
+    if(_httpserve.init() == false)
+    {
+        printf("Failed to set HTTP listen socket non-blocking.\n");
+        return false;
+    }
+
+    if(_httpserve.setnoblocking() == false)
+    {
+        printf("Failed to set HTTP listen socket non-blocking.\n");
+        return false;
+    }
+
+    int http_fd = _httpserve.fd();
+
     if(_epoll.create() == -1)
     {
         printf("epoll creation failed.\n");
@@ -93,8 +109,15 @@ bool Gateruntime::init()
         return false;
     }
 
+    if(_epoll.add(http_fd,EPOLLIN|EPOLLET) == -1)
+    {
+        printf("Failed to add HTTP socket to epoll");
+        return false;
+    }
+
     //这句话的意思是将tcp_fd插入进哈希表，并且属于Tcpserve
     fd_table.emplace(tcp_fd, FdType::Tcpserve);
+    fd_table.emplace(http_fd,FdType::Httpserve);
 
     if(_storage.open("/home/qxc/Desktop/EdgeLink/edgehub/data/edgehub.db") == false)
     {
@@ -157,11 +180,15 @@ bool Gateruntime::dispatchEvent(int fd, uint32_t event_mask)
     switch(fd_iterator->second)
     {
         case FdType::Tcpserve:
-            return handleTcpserve();
+            return handleTcpServe();
         case FdType::Tcpclient:
             return handleTcpclient(fd, event_mask);
         case FdType::Can:
             return handleCan(event_mask);
+        case FdType::Httpserve:
+            return handleHttpServe();
+        case FdType::Httpclient:
+            return handleHttpClient(fd,event_mask);
     }
 
     return false;
@@ -172,7 +199,7 @@ bool Gateruntime::dispatchEvent(int fd, uint32_t event_mask)
     每个连接占用一个 ClientState 槽位；没有槽位时明确拒绝新连接。
     本函数只处理连接建立，不读取客户端业务数据。
 */
-bool Gateruntime::handleTcpserve()
+bool Gateruntime::handleTcpServe()
 {
     int client_fd;
     while(true)
@@ -216,7 +243,7 @@ bool Gateruntime::handleTcpserve()
         if(slot == -1)
         {
             //这里就是当有新的客户端连接但是我们没有空余的clients了
-            rejectTcpclient(client_fd);
+            rejectClient(client_fd);
             continue;
         }
         if(registerTcpclient(client_fd, slot) == false)
@@ -288,7 +315,7 @@ bool Gateruntime::registerTcpclient(int client_fd, int slot)
     当前客户端容量已满时的拒绝策略：记录原因并立即关闭刚 accept 的 fd。
     它没有进入 clients、fd_table 或 epoll，因此只需直接 close。
 */
-void Gateruntime::rejectTcpclient(int client_fd)
+void Gateruntime::rejectClient(int client_fd)
 {
     //对于额外的客户端连接暂时没有想好要做什么直接关闭
     printf("Too many clients, closing new connection.\n");
@@ -570,4 +597,214 @@ bool Gateruntime::handleCan(unsigned int event_mask)
         }
     }
     return true;
+}
+
+
+bool Gateruntime::handleHttpServe()
+{
+    int httpclient_fd;
+    while(true)
+    {
+        httpclient_fd = _httpserve.client_accept();
+        if(httpclient_fd == -1)
+        {
+            if(errno == EAGAIN || errno == EWOULDBLOCK)
+            {
+                break;
+            }
+            if(errno == EINTR)
+            {
+                continue;
+            }
+            break;
+        }
+        //现在我们要给我们的httpclient安排一个空位
+        int slot = findFreeHttpClientSlot();
+        if(slot == -1)
+        {
+            //拒绝新连接
+            rejectClient(httpclient_fd);
+            continue;
+        }
+        if(registerHttpClient(httpclient_fd, slot) == false)
+        {
+            continue;
+        }
+    }
+
+    return true;
+}
+
+int Gateruntime::findFreeHttpClientSlot() const
+{
+    for(int slot = 0;slot < MAX_CLIENTS;slot++)
+    {
+        if(httpclients[slot] == nullptr)
+        {
+            return slot;
+        }
+    }
+    return -1;
+}
+
+bool Gateruntime::registerHttpClient(int client_fd, int slot)
+{
+    httpclients[slot] = std::make_unique<HttpClientState>(client_fd);
+    if(httpclients[slot]->connection.setnoblocking() == false)
+    {
+        httpclients[slot].reset();
+        return false;
+    }
+    if(_epoll.add(client_fd, EPOLLIN | EPOLLRDHUP | EPOLLET) == -1)
+    {
+        httpclients[slot].reset();
+        return false;
+    }
+
+    fd_table.emplace(client_fd, FdType::Httpclient);
+    return true;
+}
+
+
+bool Gateruntime::handleHttpClient(int fd,uint32_t event_mask)
+{
+    int slot = findHttpClientSlot(fd);
+    if(slot == -1)
+    {
+        _epoll.del(fd, 0);
+        fd_table.erase(fd);
+        close(fd);
+        return false;
+    }
+
+    bool close_client = (event_mask & (EPOLLERR | EPOLLHUP)) != 0;
+    HttpClientState& client = *httpclients[slot];
+    if(close_client == false && client.response.empty())
+    {
+        // 对端停止发送也要先读取最后的数据，完整请求仍然可以回复。
+        if((event_mask & (EPOLLIN | EPOLLRDHUP)) != 0)
+        {
+            drainHttpclient(slot, close_client);
+        }
+        if(close_client == false && client.http.parsed())
+        {
+            HttpHandle handler;
+            handler.handle(client.http.request());
+            client.response = Http::serialize(handler.statusCode(), handler.responseBody());
+        }
+        else if((event_mask & EPOLLRDHUP) != 0)
+        {
+            close_client = true;
+        }
+    }
+
+    if(close_client == false && client.response.empty() == false)
+    {
+        sendHttpResponse(slot, close_client);
+    }
+    if(close_client)
+    {
+        _epoll.del(fd, 0);
+        fd_table.erase(fd);
+        httpclients[slot].reset();
+    }
+    return true;
+}
+
+int Gateruntime::findHttpClientSlot(int fd) const
+{
+    for(int slot = 0;slot < MAX_CLIENTS;slot++)
+    {
+        if(httpclients[slot] != nullptr && httpclients[slot]->connection.fd() == fd)
+        {
+            return slot;
+        }
+    }
+    return -1;
+}
+
+void Gateruntime::drainHttpclient(int slot, bool &close_client)
+{
+    // 第一版每条连接只处理一个请求，完整请求保留给后续业务处理。
+    if(httpclients[slot]->http.parsed())
+    {
+        return;
+    }
+
+    uint8_t data_tmp[READ_BUFFER_LENGTH]{};
+    while(true)
+    {
+        ssize_t receive_result = httpclients[slot]->connection.data_receive(
+            data_tmp, sizeof(data_tmp));
+        if(receive_result > 0)
+        {
+            static constexpr size_t HTTP_MAX_REQUEST_BYTES = 1024U * 1024U;
+            size_t received_length = static_cast<size_t>(receive_result);
+            if(received_length > HTTP_MAX_REQUEST_BYTES - httpclients[slot]->received_bytes)
+            {
+                close_client = true;
+                return;
+            }
+            httpclients[slot]->received_bytes += received_length;
+            httpclients[slot]->http.feed(data_tmp, received_length);
+            if(httpclients[slot]->http.poll())
+            {
+                return;
+            }
+            continue;
+        }
+
+        if(receive_result == 0)
+        {
+            // 请求尚未收完整，对端已结束发送，无法继续解析。
+            close_client = true;
+            return;
+        }
+        if(errno == EINTR)
+        {
+            continue;
+        }
+        if(errno == EAGAIN || errno == EWOULDBLOCK)
+        {
+            // 当前读空，Http 中的半包保留到下一次可读事件。
+            return;
+        }
+
+        close_client = true;
+        return;
+    }
+}
+
+void Gateruntime::sendHttpResponse(int slot, bool &close_client)
+{
+    HttpClientState& client = *httpclients[slot];
+    while(client.sent_bytes < client.response.size())
+    {
+        ssize_t sent = client.connection.data_send(
+            client.response.data() + client.sent_bytes,
+            client.response.size() - client.sent_bytes);
+        if(sent > 0)
+        {
+            client.sent_bytes += static_cast<size_t>(sent);
+            continue;
+        }
+        if(sent == -1 && errno == EINTR)
+        {
+            continue;
+        }
+        if(sent == -1 && (errno == EAGAIN || errno == EWOULDBLOCK))
+        {
+            // 只在有剩余响应时监听可写事件，稍后从 sent_bytes 继续。
+            if(_epoll.mod(client.connection.fd(), EPOLLOUT | EPOLLET) == -1)
+            {
+                close_client = true;
+            }
+            return;
+        }
+        close_client = true;
+        return;
+    }
+
+    // 第一版一条连接处理一个请求，响应全部发送后关闭。
+    close_client = true;
 }

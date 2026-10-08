@@ -29,11 +29,19 @@ void HttpHandle::handle(HttpRequest request)
     clear();
 
     this->status = 404;
+    body = "{\"error\":\"not found\"}";
 
     std::string method = request.method;
     std::string path = request.path;
 
     size_t routes_count = sizeof(routes) / sizeof(routes[0]);
+
+    if(method != "GET")
+    {
+        status = 405;
+        body = "{\"error\":\"method not allowed\"}";
+        return;
+    }
 
     //这个时候获取参数信息
     if(method == "GET")
@@ -49,7 +57,7 @@ void HttpHandle::handle(HttpRequest request)
             this->handle_nodes();
             这种好处就是我们不需要再去写一大段if-else了，现在当我们增加一个新的命令只需要在表中增加并且增加对应的业务就好了
         */
-        for(int index = 0;index < routes_count;++index)
+        for(size_t index = 0;index < routes_count;++index)
         {
             if(strcmp(routes[index].path.c_str(), path.c_str()) == 0)
             {
