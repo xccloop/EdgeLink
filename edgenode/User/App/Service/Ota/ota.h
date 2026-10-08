@@ -30,6 +30,10 @@ typedef struct
     uint16_t contiguous;
     uint8_t finished;
     uint8_t success;
+    uint8_t reply_kind;   /* 0 沿用进度/完成回复；槽位查询使用类型 3 */
+    uint16_t request_id;
+    uint8_t query_status;
+    uint32_t target_slot;
 } ota_result_t;
 
 /*

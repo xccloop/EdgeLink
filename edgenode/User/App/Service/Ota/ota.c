@@ -274,7 +274,7 @@ void ota_reset(void)
 /*
     这个函数处理一个固件帧，然后返回下一步需要干什么
 */
-ota_result_t ota_on_frame(uint16_t standard_id,const uint8_t data[OTA_FRAME_LENGTH],uint8_t data_length)
+ota_result_t ota_on_frame(uint16_t standard_id,const uint8_t *data,uint8_t data_length)
 {
     ota_result_t result;
     uint16_t raw_seq;
@@ -282,6 +282,44 @@ ota_result_t ota_on_frame(uint16_t standard_id,const uint8_t data[OTA_FRAME_LENG
     /* result 是"这一次调用的输出"，所以它是局部的。
        做成文件级的话，ota_on_idle 会返回"上一帧留下的结论"。 */
     memset(&result, 0, sizeof(result));
+
+    if(data == 0)
+    {
+        return result;
+    }
+
+    // 控制查询独立于固件接收状态，不重置、不擦写，也不触发复位。
+    if(standard_id == (CAN_OTA_CTRL_BASE_ID + board_id))
+    {
+        ota_metadata_t meta;
+
+        if((data_length != CAN_OTA_CTRL_QUERY_LENGTH) ||
+           (data[0] != CAN_OTA_CTRL_KIND_QUERY_SLOT) || (data[3] != 0U))
+        {
+            return result;
+        }
+
+        result.reply = 1U;
+        result.reply_kind = CAN_OTA_REPLY_KIND_SLOT;
+        result.request_id = ((uint16_t)data[1] << 8) | (uint16_t)data[2];
+        result.query_status = CAN_OTA_SLOT_QUERY_INVALID;
+        if((ota_metadata_load(&meta) != OTA_METADATA_LOAD_REAL) ||
+           ((meta.active_slot != OTA_SLOT_A_BASE_ADDRESS) &&
+            (meta.active_slot != OTA_SLOT_B_BASE_ADDRESS)))
+        {
+            return result;
+        }
+        if(meta.pending_slot != OTA_SLOT_NONE)
+        {
+            result.query_status = CAN_OTA_SLOT_QUERY_PENDING;
+            return result;
+        }
+
+        result.query_status = CAN_OTA_SLOT_QUERY_OK;
+        result.target_slot = (meta.active_slot == OTA_SLOT_A_BASE_ADDRESS) ?
+            OTA_SLOT_B_BASE_ADDRESS : OTA_SLOT_A_BASE_ADDRESS;
+        return result;
+    }
 
     /* 已经收完并校验通过了：后面再来的帧一律不理。
        少了这一句，Hub 窗口尾巴多送几帧，就会把 ota_finalize 从头再跑一遍

@@ -38,12 +38,14 @@ uint8_t can_telemetry_send(uint8_t node_id,
         data[0]    = kind
         data[1..2] = contiguous（高位在前，和固件数据帧的序号同端序）
         data[3]    = success
+    槽位查询使用 8 字节：kind、request_id 高/低、query_status、target_slot 高位在前。
     节点号校验和"邮箱满返回 FAIL"都照 can_telemetry_send 来。
 */
 uint8_t can_ota_reply_send(uint8_t node_id,
                            const ota_reply_request_t *request)
 {
-    uint8_t data[CAN_OTA_REPLY_LENGTH];
+    uint8_t data[CAN_OTA_REPLY_SLOT_LENGTH];
+    uint8_t length;
     uint8_t mailbox;
     uint16_t can_id;
 
@@ -53,12 +55,27 @@ uint8_t can_ota_reply_send(uint8_t node_id,
     }
 
     data[0] = request->kind;
-    data[1] = (uint8_t)(request->contiguous >> 8);
-    data[2] = (uint8_t)(request->contiguous & 0xFFU);
-    data[3] = request->success;
+    if(request->kind == CAN_OTA_REPLY_KIND_SLOT)
+    {
+        length = CAN_OTA_REPLY_SLOT_LENGTH;
+        data[1] = (uint8_t)(request->request_id >> 8);
+        data[2] = (uint8_t)(request->request_id & 0xFFU);
+        data[3] = request->query_status;
+        data[4] = (uint8_t)(request->target_slot >> 24);
+        data[5] = (uint8_t)(request->target_slot >> 16);
+        data[6] = (uint8_t)(request->target_slot >> 8);
+        data[7] = (uint8_t)(request->target_slot & 0xFFU);
+    }
+    else
+    {
+        length = CAN_OTA_REPLY_LENGTH;
+        data[1] = (uint8_t)(request->contiguous >> 8);
+        data[2] = (uint8_t)(request->contiguous & 0xFFU);
+        data[3] = request->success;
+    }
 
     can_id = CAN_OTA_REPLY_BASE_ID + node_id;
-    mailbox = can0_data_send(can_id, data, CAN_OTA_REPLY_LENGTH);
+    mailbox = can0_data_send(can_id, data, length);
 
     return (mailbox == CAN0_TX_MAILBOX_NONE) ? CAN_FRAME_FAIL : CAN_FRAME_SUCCESS;
 }

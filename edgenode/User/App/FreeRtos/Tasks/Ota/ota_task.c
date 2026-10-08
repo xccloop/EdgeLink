@@ -92,12 +92,19 @@ static void ota_task(void *argument)
         */
         if((result.reply != 0U) || (result.finished != 0U))
         {
-            ota_reply_request_t request;
+            ota_reply_request_t request = {0};
 
             request.kind = (result.finished != 0U) ? CAN_OTA_REPLY_KIND_RESULT
                                                    : CAN_OTA_REPLY_KIND_PROGRESS;
+            if(result.reply_kind != 0U)
+            {
+                request.kind = result.reply_kind;
+            }
             request.contiguous = result.contiguous;
             request.success = result.success;
+            request.request_id = result.request_id;
+            request.query_status = result.query_status;
+            request.target_slot = result.target_slot;
 
             (void)xQueueSend(ota_reply_queue, &request, 0U);
         }

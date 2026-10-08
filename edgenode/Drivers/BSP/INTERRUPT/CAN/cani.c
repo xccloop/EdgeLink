@@ -33,13 +33,16 @@ void USBD_LP_CAN0_RX0_IRQHandler()
                 固件帧和遥测/ACK 不能共用一个队列：队列是"取走即消失"的，
                 两个任务抢读会互相偷帧（遥测 ACK 被 OtaTask 吃掉，或反之）。
 
-                按 ID 分成两族，整族走各自的队列。别人的固件帧也会进来
+                OTA 数据帧和控制帧走 OTA 队列，其余帧走普通 CAN 队列。别人的固件帧也会进来
                 （CAN 是广播的），由 OtaTask 按节点号丢弃 —— 中断里不查节点号，
                 这样中断不必知道 board_id，遥测那条路也一个字不改。
             */
-            if((received_frame.standard_id >= CAN_OTA_DATA_BASE_ID) &&
-               (received_frame.standard_id <
-                (CAN_OTA_DATA_BASE_ID + CAN_ID_SEGMENT_SIZE)))
+            if(((received_frame.standard_id >= CAN_OTA_DATA_BASE_ID) &&
+                (received_frame.standard_id <
+                 (CAN_OTA_DATA_BASE_ID + CAN_ID_SEGMENT_SIZE))) ||
+               ((received_frame.standard_id >= CAN_OTA_CTRL_BASE_ID) &&
+                (received_frame.standard_id <
+                 (CAN_OTA_CTRL_BASE_ID + CAN_ID_SEGMENT_SIZE))))
             {
                 (void)rtos_ota_frame_send_from_isr(&received_frame,
                                                    &higher_priority_task_woken);
