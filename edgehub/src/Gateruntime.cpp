@@ -1,8 +1,6 @@
 #include "Gateruntime.hpp"
 #include "TcpFrame.hpp"
 #include "Can.hpp"
-#include <fcntl.h>
-#include <sys/stat.h>
 #include <ratio>
 #include <sys/epoll.h>
 
@@ -39,6 +37,7 @@
 
 Gateruntime::Gateruntime()
     : _tcpserve(TCPSERVE_PORT, TCPSERVE_BACKLOG)
+    ,_ota(_can)
     ,_httpserve(HTTPSERVE_PORT, HTTPSERVE_BACKLOG)
 {
 }
@@ -145,15 +144,7 @@ bool Gateruntime::run(volatile sig_atomic_t *g_running)
     struct epoll_event events[EPOLLEVENT_SIZE];
     while(*g_running != 0)
     {
-        int timeout_ms = -1;
-        for(const auto& client : httpclients)
-        {
-            if(client && client->slot_query.waiting)
-            {
-                timeout_ms = 100;
-                break;
-            }
-        }
+        int timeout_ms = _ota.hasPendingQueries() ? 100 : -1;
         int nready = _epoll.wait(events, EPOLLEVENT_SIZE, timeout_ms);
         if(nready == -1)
         {
@@ -171,7 +162,15 @@ bool Gateruntime::run(volatile sig_atomic_t *g_running)
             int fd = events[event_index].data.fd;
             dispatchEvent(fd, events[event_index].events);
         }
-        serviceFirmwareSlotQueries();
+        OTA::Result result;
+        while(_ota.pollTimeout(result))
+            completeHttpRequest(result);
+        // CAN 回调只准备响应，当前事件批次结束后统一推进 HTTP 发送。
+        for(int slot = 0; slot < MAX_CLIENTS; ++slot)
+        {
+            if(httpclients[slot] && !httpclients[slot]->response.empty())
+                handleHttpClient(httpclients[slot]->connection.fd(), 0U);
+        }
     }
 
     return true;
@@ -548,8 +547,10 @@ bool Gateruntime::handleCan(unsigned int event_mask)
                 uint16_t temperature_raw;
 
                 // OTA 帧先分流，不进入遥测入库和遥测 ACK 流程。
-                if(handleCanOtaFrame(can_frame))
+                OTA::Result result;
+                if(_ota.onCanFrame(can_frame, result))
                 {
+                    if(result.request_id != 0U) completeHttpRequest(result);
                     continue;
                 }
 
@@ -700,7 +701,7 @@ bool Gateruntime::handleHttpClient(int fd,uint32_t event_mask)
     bool close_client = (event_mask & (EPOLLERR | EPOLLHUP)) != 0;
     //用一个client代指取出
     HttpClientState& client = *httpclients[slot];
-    if(close_client == false && client.response.empty() && !client.slot_query.waiting)
+    if(close_client == false && client.response.empty() && client.request_id == 0U)
     {
         // 对端停止发送也要先读取最后的数据，完整请求仍然可以回复。
         if((event_mask & (EPOLLIN | EPOLLRDHUP)) != 0)
@@ -715,12 +716,19 @@ bool Gateruntime::handleHttpClient(int fd,uint32_t event_mask)
             handler.handle(client.http.request());
             if(handler.firmwareQueryNode() != 0U)
             {
-                startFirmwareSlotQuery(slot, handler.firmwareQueryNode());
+                do { ++next_request_id; } while(next_request_id == 0U);
+                client.request_id = next_request_id;
+                OTA::Result result;
+                if(_ota.querySlot(client.request_id, handler.firmwareQueryNode(), result))
+                    completeHttpRequest(result);
             }
             else if(handler.firmwareSendNode() != 0U)
             {
                 //这里表示我们要处理下发固件的逻辑
-                startFirmwareSlotSend(slot,handler.firmwareSendNode(),handler.firmwareSendNodePath());
+                do { ++next_request_id; } while(next_request_id == 0U);
+                client.request_id = next_request_id;
+                completeHttpRequest(_ota.sendFirmware(client.request_id,
+                    handler.firmwareSendNode(), handler.firmwareSendNodePath()));
             }
             else
             {
@@ -741,6 +749,7 @@ bool Gateruntime::handleHttpClient(int fd,uint32_t event_mask)
     {
         _epoll.del(fd, 0);
         fd_table.erase(fd);
+        _ota.cancel(client.request_id);
         httpclients[slot].reset();
     }
     return true;
@@ -845,324 +854,42 @@ void Gateruntime::sendHttpResponse(int slot, bool &close_client)
 }
 
 
-bool Gateruntime::handleCanOtaFrame(const can_frame& frame)
+
+void Gateruntime::completeHttpRequest(const OTA::Result& result)
 {
-    if((frame.can_id & (CAN_EFF_FLAG | CAN_RTR_FLAG | CAN_ERR_FLAG)) != 0U)
+    for(auto& client : httpclients)
     {
-        return false;
-    }
-
-    uint32_t id = frame.can_id & CAN_SFF_MASK;
-    uint32_t base;
-    const char* kind;
-    if(id >= CAN_OTA_DATA_BASE_ID && id < CAN_OTA_DATA_BASE_ID + CAN_ID_SEGMENT_SIZE)
-    {
-        base = CAN_OTA_DATA_BASE_ID;
-        kind = "data";
-    }
-    else if(id >= CAN_OTA_CTRL_BASE_ID && id < CAN_OTA_CTRL_BASE_ID + CAN_ID_SEGMENT_SIZE)
-    {
-        base = CAN_OTA_CTRL_BASE_ID;
-        kind = "control";
-    }
-    else if(id >= CAN_OTA_REPLY_BASE_ID && id < CAN_OTA_REPLY_BASE_ID + CAN_ID_SEGMENT_SIZE)
-    {
-        base = CAN_OTA_REPLY_BASE_ID;
-        kind = "reply";
-    }
-    else
-    {
-        return false;
-    }
-
-    uint32_t node = id - base;
-    // 节点 0 保留；控制载荷尚未定义，只校验经典 CAN 的长度范围。
-    if(node == 0U || frame.can_dlc > CAN_MAX_DLEN ||
-       (base == CAN_OTA_DATA_BASE_ID && frame.can_dlc != CAN_OTA_DATA_LENGTH) ||
-       (base == CAN_OTA_REPLY_BASE_ID && frame.can_dlc != CAN_OTA_REPLY_LENGTH &&
-        frame.can_dlc != 8U))
-    {
-        fprintf(stderr, "CAN OTA invalid: id=0x%03X dlc=%u\n", id,
-            static_cast<unsigned int>(frame.can_dlc));
-        return true;
-    }
-
-    if(base == CAN_OTA_REPLY_BASE_ID)
-    {
-        if(frame.data[0] == CAN_OTA_REPLY_KIND_SLOT && frame.can_dlc == 8U)
+        if(!client || result.request_id == 0U || client->request_id != result.request_id) continue;
+        int status = 200;
+        switch(result.error)
         {
-            finishFirmwareSlotQuery(static_cast<uint8_t>(node), frame);
-            return true;
+            case OTA::Error::None: break;
+            case OTA::Error::FileNotFound: status = 404; break;
+            case OTA::Error::ReadFailed: status = 500; break;
+            case OTA::Error::CanSendFailed: status = 503; break;
+            case OTA::Error::InvalidReply:
+            case OTA::Error::MetadataInvalid: status = 502; break;
+            case OTA::Error::NodePending: status = 409; break;
+            case OTA::Error::Timeout: status = 504; break;
+            default: status = 400; break;
         }
-        if(frame.can_dlc != CAN_OTA_REPLY_LENGTH || frame.data[0] == CAN_OTA_REPLY_KIND_SLOT)
+        std::string body;
+        if(result.operation == OTA::Operation::FirmwareSend && result.transfer_started)
         {
-            fprintf(stderr, "CAN OTA invalid reply length: node=%u kind=%u dlc=%u\n",
-                node, static_cast<unsigned int>(frame.data[0]),
-                static_cast<unsigned int>(frame.can_dlc));
-            return true;
+            body = "{\"submitted\":";
+            body += result.error == OTA::Error::None ? "true" : "false";
+            body += ",\"node\":" + std::to_string(result.node);
+            body += ",\"submitted_bytes\":" + std::to_string(result.submitted_bytes);
+            body += ",\"relay_verified\":false";
+            if(!result.message.empty()) body += ",\"error\":\"" + result.message + "\"";
+            body += "}\n";
         }
-        uint16_t contiguous = (static_cast<uint16_t>(frame.data[1]) << 8) |
-            static_cast<uint16_t>(frame.data[2]);
-        if(frame.data[0] == CAN_OTA_REPLY_KIND_PROGRESS)
-        {
-            printf("CAN OTA progress: node=%u contiguous=%u\n", node,
-                static_cast<unsigned int>(contiguous));
-        }
-        else if(frame.data[0] == CAN_OTA_REPLY_KIND_RESULT && frame.data[3] <= 1U)
-        {
-            printf("CAN OTA result: node=%u success=%u\n", node,
-                static_cast<unsigned int>(frame.data[3]));
-        }
+        else if(result.error != OTA::Error::None)
+            body = "{\"error\":\"" + result.message + "\"}\n";
         else
-        {
-            fprintf(stderr, "CAN OTA invalid reply: node=%u kind=%u success=%u\n",
-                node, static_cast<unsigned int>(frame.data[0]),
-                static_cast<unsigned int>(frame.data[3]));
-        }
-        return true;
-    }
-
-    // 数据/控制帧正常方向为 Hub -> Node，收到时仅记录，不执行升级动作。
-    printf("CAN OTA %s observed: node=%u dlc=%u data=", kind, node,
-        static_cast<unsigned int>(frame.can_dlc));
-    for(uint8_t index = 0; index < frame.can_dlc; ++index)
-    {
-        printf("%02X", static_cast<unsigned int>(frame.data[index]));
-    }
-    printf("\n");
-    return true;
-}
-
-
-void Gateruntime::startFirmwareSlotQuery(int slot, uint8_t node)
-{
-    HttpClientState& client = *httpclients[slot];
-    bool in_use;
-    //这里的next_query是curl的查询编号，不是node编号
-    do
-    {
-        ++next_query_id;
-        if(next_query_id == 0U)
-        {
-            ++next_query_id;
-        }
-        in_use = false;
-        for(const auto& pending : httpclients)
-        {
-            if(pending && pending->slot_query.waiting && pending->slot_query.id == next_query_id)
-            {
-                in_use = true;
-                break;
-            }
-        }
-    } while(in_use);
-
-    client.slot_query.node = node;
-    client.slot_query.id = next_query_id;
-    uint8_t data[4] = {1U, static_cast<uint8_t>(client.slot_query.id >> 8),
-        static_cast<uint8_t>(client.slot_query.id), 0U};
-    if(!_can.send(CAN_OTA_CTRL_BASE_ID + node, data, sizeof(data)))
-    {
-        client.response = Http::serialize(503, "{\"error\":\"CAN query send failed\"}\n");
+            body = result.slot == OTA::Slot::A ? "{\"slot\":\"A\"}\n" : "{\"slot\":\"B\"}\n";
+        client->response = Http::serialize(status, body);
+        client->request_id = 0U;
         return;
     }
-    client.slot_query.waiting = true;
-    client.slot_query.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-}
-
-void Gateruntime::finishFirmwareSlotQuery(uint8_t node, const can_frame& frame)
-{
-    uint16_t request_id = (static_cast<uint16_t>(frame.data[1]) << 8) | frame.data[2];
-    uint32_t target = (static_cast<uint32_t>(frame.data[4]) << 24) |
-        (static_cast<uint32_t>(frame.data[5]) << 16) |
-        (static_cast<uint32_t>(frame.data[6]) << 8) | frame.data[7];
-    for(int slot = 0; slot < MAX_CLIENTS; ++slot)
-    {
-        if(!httpclients[slot] || !httpclients[slot]->slot_query.waiting ||
-           httpclients[slot]->slot_query.node != node || httpclients[slot]->slot_query.id != request_id)
-        {
-            continue;
-        }
-        HttpClientState& client = *httpclients[slot];
-        client.slot_query.waiting = false;
-        int status = 502;
-        std::string body = "{\"error\":\"invalid node query reply\"}\n";
-        if(std::chrono::steady_clock::now() >= client.slot_query.deadline)
-        {
-            status = 504;
-            body = "{\"error\":\"node query timed out\"}\n";
-        }
-        else if(frame.data[3] == 0U &&
-                (target == OTA_SLOT_A_BASE_ADDRESS || target == OTA_SLOT_B_BASE_ADDRESS))
-        {
-            status = 200;
-            body = (target == OTA_SLOT_A_BASE_ADDRESS) ?
-                "{\"slot\":\"A\"}\n" : "{\"slot\":\"B\"}\n";
-        }
-        else if(frame.data[3] == 1U && target == 0U)
-        {
-            body = "{\"error\":\"node metadata invalid\"}\n";
-        }
-        else if(frame.data[3] == 2U && target == 0U)
-        {
-            status = 409;
-            body = "{\"error\":\"node has an unconfirmed slot\"}\n";
-        }
-        client.response = Http::serialize(status, body);
-        // 本批事件处理完再发送，避免在 CAN 回调中关闭另一个仍有事件的 fd。
-        return;
-    }
-}
-
-void Gateruntime::serviceFirmwareSlotQueries()
-{
-    const auto now = std::chrono::steady_clock::now();
-    for(int slot = 0; slot < MAX_CLIENTS; ++slot)
-    {
-        if(httpclients[slot] && httpclients[slot]->slot_query.waiting &&
-           now >= httpclients[slot]->slot_query.deadline)
-        {
-            HttpClientState& client = *httpclients[slot];
-            client.slot_query.waiting = false;
-            client.response = Http::serialize(504, "{\"error\":\"node query timed out\"}\n");
-        }
-        if(httpclients[slot] && !httpclients[slot]->slot_query.waiting &&
-           httpclients[slot]->slot_query.id != 0U && !httpclients[slot]->response.empty())
-        {
-            // 此函数只在当前 epoll 事件批次结束后执行。
-            httpclients[slot]->slot_query.id = 0U;
-            handleHttpClient(httpclients[slot]->connection.fd(), 0U);
-        }
-    }
-}
-
-void Gateruntime::startFirmwareSlotSend(int slot,uint8_t firmware_node,std::string firmware_path)
-{
-    HttpClientState& client = *httpclients[slot];
-    client.slot_send = FirmwareSlotSendState{};
-    if(firmware_node == 0U || firmware_node > CAN_TELEMETRY_NODE_MAX ||
-       firmware_path.empty() || firmware_path.find('\0') != std::string::npos)
-    {
-        client.response = Http::serialize(400, "{\"error\":\"invalid node or firmware path\"}\n");
-        return;
-    }
-
-    // Refuse non-regular files and bound the sequence count to one Node slot.
-    int file = open(firmware_path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-    if(file < 0)
-    {
-        client.response = Http::serialize(errno == ENOENT ? 404 : 400,
-            "{\"error\":\"cannot open firmware file\"}\n");
-        return;
-    }
-    struct stat info{};
-    if(fstat(file, &info) != 0 || !S_ISREG(info.st_mode) ||
-       info.st_size < 264 || info.st_size > 118 * 1024)
-    {
-        close(file);
-        client.response = Http::serialize(400,
-            "{\"error\":\"expected an OTA image file of 264 to 120832 bytes\"}\n");
-        return;
-    }
-
-    if(!ota_image_header_valid(file, static_cast<size_t>(info.st_size)))
-    {
-        close(file);
-        client.response = Http::serialize(400, "{\"error\":\"invalid OTA image header; use a packaged firmware image\"}\n");
-        return;
-    }
-
-    client.slot_send.node = firmware_node;
-    client.slot_send.path = firmware_path;
-    size_t sent_bytes = 0U;
-    uint16_t sequence = 0U;
-    int status = 200;
-    std::string error;
-    while(sent_bytes < static_cast<size_t>(info.st_size))
-    {
-        uint8_t bytes[6];
-        const size_t remaining = static_cast<size_t>(info.st_size) - sent_bytes;
-        const size_t wanted = remaining < sizeof(bytes) ? remaining : sizeof(bytes);
-        size_t length = 0U;
-        // A short read is not necessarily EOF: fill this frame before assigning its sequence.
-        while(length < wanted)
-        {
-            ssize_t count = read(file, bytes + length, wanted - length);
-            if(count < 0 && errno == EINTR) continue;
-            if(count <= 0) break;
-            length += static_cast<size_t>(count);
-        }
-        if(length != wanted)
-        {
-            status = 500;
-            error = "firmware file read failed";
-            break;
-        }
-        uint8_t data[8];
-        ota_can_frame(sequence, bytes, length, data);
-        if(!_can.send(CAN_OTA_DATA_BASE_ID + firmware_node, data, sizeof(data)))
-        {
-            status = 503;
-            error = "CAN send failed; transfer is incomplete";
-            break;
-        }
-        sent_bytes += length;
-        ++sequence;
-    }
-    close(file);
-
-    // A successful socket write does not prove Node reception or Flash verification.
-    std::string body = "{\"submitted\":";
-    body += status == 200 ? "true" : "false";
-    body += ",\"node\":" + std::to_string(firmware_node);
-    body += ",\"submitted_bytes\":" + std::to_string(sent_bytes);
-    body += ",\"relay_verified\":false";
-    if(!error.empty()) body += ",\"error\":\"" + error + "\"";
-    body += "}\n";
-    client.response = Http::serialize(status, body);
-}
-
-
-bool Gateruntime::ota_can_frame(uint16_t sequence, const uint8_t* bytes, size_t length, uint8_t data[8])
-{
-    if(bytes == nullptr || data == nullptr || length == 0U || length > 6U) return false;
-    data[0] = static_cast<uint8_t>(sequence >> 8);
-    data[1] = static_cast<uint8_t>(sequence);
-    std::fill(data + 2, data + 8, 0xFFU);
-    std::copy(bytes, bytes + length, data + 2);
-    return true;
-}
-
-bool Gateruntime::ota_image_header_valid(int file, size_t file_size)
-{
-    if(file_size < 256U) return false;
-    // Identify a packaged Node OTA image before putting any file bytes on CAN.
-    uint8_t header[256];
-    ssize_t header_bytes;
-    do { header_bytes = pread(file, header, sizeof(header), 0); }
-    while(header_bytes < 0 && errno == EINTR);
-    const auto le32 = [](const uint8_t* p) {
-        return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
-            (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
-    };
-    uint32_t header_crc = 0xFFFFFFFFU;
-    if(header_bytes == sizeof(header))
-    {
-        for(size_t i = 0; i < 252U; ++i)
-        {
-            header_crc ^= header[i];
-            for(unsigned bit = 0; bit < 8U; ++bit)
-                header_crc = (header_crc >> 1) ^ ((header_crc & 1U) ? 0xEDB88320U : 0U);
-        }
-    }
-    if(header_bytes != sizeof(header) || le32(header) != 0x3141544FU ||
-       header[4] != 1U || header[5] != 0U || header[6] != 0U || header[7] != 1U ||
-       le32(header + 8) != 1U ||
-       (le32(header + 16) != OTA_SLOT_A_BASE_ADDRESS && le32(header + 16) != OTA_SLOT_B_BASE_ADDRESS) ||
-       le32(header + 20) != file_size - sizeof(header) ||
-       (header_crc ^ 0xFFFFFFFFU) != le32(header + 252))
-    {
-        return false;
-    }
-    return true;
 }

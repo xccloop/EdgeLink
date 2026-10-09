@@ -24,6 +24,7 @@ add_executable(Edgehub
     src/Gateruntime.cpp
     src/Http.cpp
     src/HttpHandle.cpp
+    src/OTA.cpp
 )
 
 # 为 Edgehub 链接 SQLite 库

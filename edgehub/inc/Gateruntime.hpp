@@ -7,6 +7,7 @@
 #include "Storage.hpp"
 #include "Http.hpp"
 #include "Httphandle.hpp"
+#include "OTA.hpp"
 #include <cstdint>
 #include <cstdio>
 #include <sys/epoll.h>
@@ -46,20 +47,6 @@ struct ClientState
     Ringbuffer receive_ringbuffer;
 };
 
-struct FirmwareSlotQueryState
-{
-    bool waiting{false};
-    uint8_t node{0};
-    uint16_t id{0};
-    std::chrono::steady_clock::time_point deadline{};
-};
-
-struct FirmwareSlotSendState
-{
-    uint8_t node{0};
-    std::string path;
-};
-
 struct HttpClientState
 {
     explicit HttpClientState(int fd)
@@ -71,8 +58,7 @@ struct HttpClientState
     Http http;
     std::string response;
     size_t sent_bytes{0};
-    FirmwareSlotQueryState slot_query;
-    FirmwareSlotSendState slot_send;
+    uint64_t request_id{0};
     size_t received_bytes{0};  // 跨接收调用累计请求字节，限制请求大小。
 };
 
@@ -91,10 +77,11 @@ public:
 private:
     TcpServe _tcpserve;
     Can _can;
+    OTA _ota;
     Epoll _epoll;
     Storage _storage;
     TcpServe _httpserve;
-    uint16_t next_query_id{0};
+    uint64_t next_request_id{0};
 
     std::unordered_map<int, FdType> fd_table;
     std::array<std::unique_ptr<ClientState>,MAX_CLIENTS> clients{};
@@ -117,7 +104,6 @@ private:
     void closeUntrackedTcpclient(int fd);
 
     bool handleCan(unsigned int event_mask);
-    bool handleCanOtaFrame(const can_frame& frame);
 
     bool handleHttpServe();
     int findFreeHttpClientSlot() const;
@@ -127,26 +113,10 @@ private:
     int findHttpClientSlot(int fd) const;
     void drainHttpclient(int slot, bool &close_client);
     void sendHttpResponse(int slot, bool &close_client);
-    void startFirmwareSlotQuery(int slot, uint8_t node);
-    void finishFirmwareSlotQuery(uint8_t node, const can_frame& frame);
-    void serviceFirmwareSlotQueries();
-    void startFirmwareSlotSend(int slot,uint8_t firmware_node,std::string firmware_path);
-    bool ota_image_header_valid(int file, size_t file_size);
-    bool ota_can_frame(uint16_t sequence, const uint8_t* bytes, size_t length, uint8_t data[8]);
+    void completeHttpRequest(const OTA::Result& result);
 
     static constexpr uint32_t CAN_TELEMETRY_BASE_ID = 0x280U;
     static constexpr uint32_t CAN_ACK_BASE_ID = 0x300U;
-    static constexpr uint32_t CAN_OTA_DATA_BASE_ID = 0x380U;
-    static constexpr uint32_t CAN_OTA_CTRL_BASE_ID = 0x400U;
-    static constexpr uint32_t CAN_OTA_REPLY_BASE_ID = 0x480U;
-    static constexpr uint32_t CAN_ID_SEGMENT_SIZE = 128U;
-    static constexpr uint8_t CAN_OTA_DATA_LENGTH = 8U;
-    static constexpr uint8_t CAN_OTA_REPLY_LENGTH = 4U;
-    static constexpr uint8_t CAN_OTA_REPLY_KIND_PROGRESS = 1U;
-    static constexpr uint8_t CAN_OTA_REPLY_KIND_RESULT = 2U;
-    static constexpr uint8_t CAN_OTA_REPLY_KIND_SLOT = 3U;
-    static constexpr uint32_t OTA_SLOT_A_BASE_ADDRESS = 0x08004000U;
-    static constexpr uint32_t OTA_SLOT_B_BASE_ADDRESS = 0x08021800U;
     static constexpr uint32_t CAN_TELEMETRY_NODE_MAX = 127U;
     static constexpr uint8_t CAN_TELEMETRY_LENGTH = 7U;
     static constexpr uint8_t CAN_ACK_LENGTH = 5U;
