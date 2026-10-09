@@ -22,12 +22,12 @@
         0x280 + node    遥测
         0x300 + node    ACK
         0x380 + node    固件数据帧（Hub -> Node，2B 序号 + 6B 载荷）
-        0x400 + node    固件控制帧（Hub -> Node，升级通告 / 中止）
+        0x400 + node    槽位查询帧（Hub -> Node，查询可升级槽位）
         0x480 + node    固件回复帧（Node -> Hub，进度 / 结果）
         0x500 ~ 0x7FF   未分配
 */
 #define CAN_OTA_DATA_BASE_ID   0x380U
-#define CAN_OTA_CTRL_BASE_ID   0x400U
+#define CAN_OTA_QUERY_BASE_ID   0x400U
 #define CAN_OTA_REPLY_BASE_ID  0x480U
 
 /* 每段可用的 ID 数量（节点号 7 位）。 */
@@ -41,8 +41,8 @@
 #define CAN_OTA_REPLY_KIND_SLOT      3U   /* 查询另一个槽位的结果 */
 
 /* 槽位查询：命令、请求编号高/低字节、保留字节 0。 */
-#define CAN_OTA_CTRL_KIND_QUERY_SLOT  1U
-#define CAN_OTA_CTRL_QUERY_LENGTH     4U
+#define CAN_OTA_QUERY_KIND_SLOT  1U
+#define CAN_OTA_QUERY_LENGTH     4U
 /* 查询回复：类型、请求编号高/低字节、状态、4 字节目标地址（高位在前）。 */
 #define CAN_OTA_REPLY_SLOT_LENGTH     8U
 #define CAN_OTA_SLOT_QUERY_OK         0U

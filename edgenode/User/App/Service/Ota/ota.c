@@ -288,13 +288,13 @@ ota_result_t ota_on_frame(uint16_t standard_id,const uint8_t *data,uint8_t data_
         return result;
     }
 
-    // 控制查询独立于固件接收状态，不重置、不擦写，也不触发复位。
-    if(standard_id == (CAN_OTA_CTRL_BASE_ID + board_id))
+    // 槽位查询独立于固件接收状态，不重置、不擦写，也不触发复位。
+    if(standard_id == (CAN_OTA_QUERY_BASE_ID + board_id))
     {
         ota_metadata_t meta;
 
-        if((data_length != CAN_OTA_CTRL_QUERY_LENGTH) ||
-           (data[0] != CAN_OTA_CTRL_KIND_QUERY_SLOT) || (data[3] != 0U))
+        if((data_length != CAN_OTA_QUERY_LENGTH) ||
+           (data[0] != CAN_OTA_QUERY_KIND_SLOT) || (data[3] != 0U))
         {
             return result;
         }

@@ -40,9 +40,9 @@ void USBD_LP_CAN0_RX0_IRQHandler()
             if(((received_frame.standard_id >= CAN_OTA_DATA_BASE_ID) &&
                 (received_frame.standard_id <
                  (CAN_OTA_DATA_BASE_ID + CAN_ID_SEGMENT_SIZE))) ||
-               ((received_frame.standard_id >= CAN_OTA_CTRL_BASE_ID) &&
+               ((received_frame.standard_id >= CAN_OTA_QUERY_BASE_ID) &&
                 (received_frame.standard_id <
-                 (CAN_OTA_CTRL_BASE_ID + CAN_ID_SEGMENT_SIZE))))
+                 (CAN_OTA_QUERY_BASE_ID + CAN_ID_SEGMENT_SIZE))))
             {
                 (void)rtos_ota_frame_send_from_isr(&received_frame,
                                                    &higher_priority_task_woken);

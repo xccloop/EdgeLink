@@ -144,7 +144,9 @@ bool Gateruntime::run(volatile sig_atomic_t *g_running)
     struct epoll_event events[EPOLLEVENT_SIZE];
     while(*g_running != 0)
     {
-        int timeout_ms = _ota.hasPendingQueries() ? 100 : -1;
+        int timeout_ms = -1;
+        if(_ota.isSending()) timeout_ms = 1;
+        else if(_ota.hasPendingQueries()) timeout_ms = 100;
         int nready = _epoll.wait(events, EPOLLEVENT_SIZE, timeout_ms);
         if(nready == -1)
         {
@@ -163,6 +165,8 @@ bool Gateruntime::run(volatile sig_atomic_t *g_running)
             dispatchEvent(fd, events[event_index].events);
         }
         OTA::Result result;
+        if(_ota.serviceSend(result))
+            completeHttpRequest(result);
         while(_ota.pollTimeout(result))
             completeHttpRequest(result);
         // CAN 回调只准备响应，当前事件批次结束后统一推进 HTTP 发送。
@@ -716,19 +720,35 @@ bool Gateruntime::handleHttpClient(int fd,uint32_t event_mask)
             handler.handle(client.http.request());
             if(handler.firmwareQueryNode() != 0U)
             {
-                do { ++next_request_id; } while(next_request_id == 0U);
+                ++next_request_id;
+                if(next_request_id == 0U)
+                {
+                    ++next_request_id;
+                }
                 client.request_id = next_request_id;
                 OTA::Result result;
-                if(_ota.querySlot(client.request_id, handler.firmwareQueryNode(), result))
+                bool success = _ota.querySlot(client.request_id, handler.firmwareQueryNode(), result);
+                if(success == false)
+                {
                     completeHttpRequest(result);
+                }
             }
             else if(handler.firmwareSendNode() != 0U)
             {
                 //这里表示我们要处理下发固件的逻辑
-                do { ++next_request_id; } while(next_request_id == 0U);
+                ++next_request_id;
+                if(next_request_id == 0U)
+                {
+                    ++next_request_id;
+                }
                 client.request_id = next_request_id;
-                completeHttpRequest(_ota.sendFirmware(client.request_id,
-                    handler.firmwareSendNode(), handler.firmwareSendNodePath()));
+                OTA::Result result;
+                bool success = _ota.sendFirmware(client.request_id,
+                    handler.firmwareSendNode(), handler.firmwareSendNodePath(), result);
+                if(success == false)
+                {
+                    completeHttpRequest(result);
+                }
             }
             else
             {
@@ -868,8 +888,10 @@ void Gateruntime::completeHttpRequest(const OTA::Result& result)
             case OTA::Error::ReadFailed: status = 500; break;
             case OTA::Error::CanSendFailed: status = 503; break;
             case OTA::Error::InvalidReply:
-            case OTA::Error::MetadataInvalid: status = 502; break;
-            case OTA::Error::NodePending: status = 409; break;
+            case OTA::Error::MetadataInvalid:
+            case OTA::Error::NodeRejected: status = 502; break;
+            case OTA::Error::Busy:
+        case OTA::Error::NodePending: status = 409; break;
             case OTA::Error::Timeout: status = 504; break;
             default: status = 400; break;
         }
@@ -877,10 +899,11 @@ void Gateruntime::completeHttpRequest(const OTA::Result& result)
         if(result.operation == OTA::Operation::FirmwareSend && result.transfer_started)
         {
             body = "{\"submitted\":";
-            body += result.error == OTA::Error::None ? "true" : "false";
+            body += result.transfer_submitted ? "true" : "false";
             body += ",\"node\":" + std::to_string(result.node);
             body += ",\"submitted_bytes\":" + std::to_string(result.submitted_bytes);
-            body += ",\"relay_verified\":false";
+            body += ",\"relay_verified\":";
+            body += result.relay_verified ? "true" : "false";
             if(!result.message.empty()) body += ",\"error\":\"" + result.message + "\"";
             body += "}\n";
         }
