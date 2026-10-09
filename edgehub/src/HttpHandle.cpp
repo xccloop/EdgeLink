@@ -7,7 +7,8 @@
 const HttpHandle::Route HttpHandle::routes[] = 
 {
     {"/hub/status",&HttpHandle::hanlde_hubstatus},
-    {"/hub/firmware/query/node/", &HttpHandle::handleFirmwareSlotQuery, true}
+    {"/hub/firmware/query/node/", &HttpHandle::handleFirmwareSlotQuery, true},
+    {"/hub/firmware/send/node/",&HttpHandle::handleFirmwareSlotSend,true}
 };
 
 //初始构造清空
@@ -35,12 +36,13 @@ void HttpHandle::handle(HttpRequest request)
     body = "{\"error\":\"not found\"}";
 
     std::string method = request.method;
+    this->request_body = request.body;
     std::string path = request.path;
     request_path = path;
 
     size_t routes_count = sizeof(routes) / sizeof(routes[0]);
 
-    if(method != "GET")
+    if(method != "GET" && method != "POST")
     {
         status = 405;
         body = "{\"error\":\"method not allowed\"}";
@@ -66,6 +68,33 @@ void HttpHandle::handle(HttpRequest request)
             if((routes[index].prefix && path.compare(0, routes[index].path.size(), routes[index].path) == 0) ||
                (!routes[index].prefix && path == routes[index].path))
             {
+                const bool is_send = routes[index].handler == &HttpHandle::handleFirmwareSlotSend;
+                if((is_send && method != "POST") || (!is_send && method != "GET"))
+                {
+                    status = 405;
+                    body = "{\"error\":\"method not allowed\"}";
+                    return;
+                }
+                (this ->* routes[index].handler) ();
+                return;
+            }
+        }
+    }
+
+    if(method == "POST")
+    {
+        for(size_t index = 0;index < routes_count;++index)
+        {
+            if((routes[index].prefix && path.compare(0, routes[index].path.size(), routes[index].path) == 0) ||
+               (!routes[index].prefix && path == routes[index].path))
+            {
+                const bool is_send = routes[index].handler == &HttpHandle::handleFirmwareSlotSend;
+                if((is_send && method != "POST") || (!is_send && method != "GET"))
+                {
+                    status = 405;
+                    body = "{\"error\":\"method not allowed\"}";
+                    return;
+                }
                 (this ->* routes[index].handler) ();
                 return;
             }
@@ -105,6 +134,36 @@ void HttpHandle::handleFirmwareSlotQuery()
     }
     // 只提交查询意图，运行时负责异步 CAN 收发；这里不等待回复。
     query_node = static_cast<uint8_t>(node);
+    status = 200;
+    body.clear();
+}
+
+void HttpHandle::handleFirmwareSlotSend()
+{
+    const std::string prefix = "/hub/firmware/send/node/";
+    std::string node_text = request_path.substr(prefix.size());
+    unsigned int node = 0;
+    status = 400;
+    body = "{\"error\":\"node must be an integer from 1 to 127\"}";
+        if(node_text.empty() || node_text.size() > 3U)
+    {
+        return;
+    }
+    for(char digit : node_text)
+    {
+        if(digit < '0' || digit > '9')
+        {
+            return;
+        }
+        node = node * 10U + static_cast<unsigned int>(digit - '0');
+    }
+    if(node == 0U || node > 127U)
+    {
+        return;
+    }
+    // 只提交查询意图，运行时负责异步 CAN 收发；这里不等待回复。
+    firmware_node = static_cast<uint8_t>(node);
+    firmware_path = request_body;
     status = 200;
     body.clear();
 }

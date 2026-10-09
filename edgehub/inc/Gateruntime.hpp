@@ -46,6 +46,19 @@ struct ClientState
     Ringbuffer receive_ringbuffer;
 };
 
+struct FirmwareSlotQueryState
+{
+    bool waiting{false};
+    uint8_t node{0};
+    uint16_t id{0};
+    std::chrono::steady_clock::time_point deadline{};
+};
+
+struct FirmwareSlotSendState
+{
+    uint8_t node{0};
+    std::string path;
+};
 
 struct HttpClientState
 {
@@ -58,10 +71,8 @@ struct HttpClientState
     Http http;
     std::string response;
     size_t sent_bytes{0};
-    bool waiting_slot_reply{false};
-    uint8_t query_node{0};
-    uint16_t query_id{0};
-    std::chrono::steady_clock::time_point query_deadline;
+    FirmwareSlotQueryState slot_query;
+    FirmwareSlotSendState slot_send;
     size_t received_bytes{0};  // 跨接收调用累计请求字节，限制请求大小。
 };
 
@@ -119,6 +130,9 @@ private:
     void startFirmwareSlotQuery(int slot, uint8_t node);
     void finishFirmwareSlotQuery(uint8_t node, const can_frame& frame);
     void serviceFirmwareSlotQueries();
+    void startFirmwareSlotSend(int slot,uint8_t firmware_node,std::string firmware_path);
+    bool ota_image_header_valid(int file, size_t file_size);
+    bool ota_can_frame(uint16_t sequence, const uint8_t* bytes, size_t length, uint8_t data[8]);
 
     static constexpr uint32_t CAN_TELEMETRY_BASE_ID = 0x280U;
     static constexpr uint32_t CAN_ACK_BASE_ID = 0x300U;

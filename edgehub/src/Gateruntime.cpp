@@ -1,6 +1,9 @@
 #include "Gateruntime.hpp"
 #include "TcpFrame.hpp"
 #include "Can.hpp"
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <ratio>
 #include <sys/epoll.h>
 
 /*
@@ -145,7 +148,7 @@ bool Gateruntime::run(volatile sig_atomic_t *g_running)
         int timeout_ms = -1;
         for(const auto& client : httpclients)
         {
-            if(client && client->waiting_slot_reply)
+            if(client && client->slot_query.waiting)
             {
                 timeout_ms = 100;
                 break;
@@ -684,6 +687,7 @@ bool Gateruntime::registerHttpClient(int client_fd, int slot)
 
 bool Gateruntime::handleHttpClient(int fd,uint32_t event_mask)
 {
+    //先找到存储的空位
     int slot = findHttpClientSlot(fd);
     if(slot == -1)
     {
@@ -694,14 +698,17 @@ bool Gateruntime::handleHttpClient(int fd,uint32_t event_mask)
     }
 
     bool close_client = (event_mask & (EPOLLERR | EPOLLHUP)) != 0;
+    //用一个client代指取出
     HttpClientState& client = *httpclients[slot];
-    if(close_client == false && client.response.empty() && !client.waiting_slot_reply)
+    if(close_client == false && client.response.empty() && !client.slot_query.waiting)
     {
         // 对端停止发送也要先读取最后的数据，完整请求仍然可以回复。
         if((event_mask & (EPOLLIN | EPOLLRDHUP)) != 0)
         {
+            //这里是处理函数，主要是就是poll
             drainHttpclient(slot, close_client);
         }
+        //下面是poll解析完了该进行handle了
         if(close_client == false && client.http.parsed())
         {
             HttpHandle handler;
@@ -709,6 +716,11 @@ bool Gateruntime::handleHttpClient(int fd,uint32_t event_mask)
             if(handler.firmwareQueryNode() != 0U)
             {
                 startFirmwareSlotQuery(slot, handler.firmwareQueryNode());
+            }
+            else if(handler.firmwareSendNode() != 0U)
+            {
+                //这里表示我们要处理下发固件的逻辑
+                startFirmwareSlotSend(slot,handler.firmwareSendNode(),handler.firmwareSendNodePath());
             }
             else
             {
@@ -937,7 +949,7 @@ void Gateruntime::startFirmwareSlotQuery(int slot, uint8_t node)
         in_use = false;
         for(const auto& pending : httpclients)
         {
-            if(pending && pending->waiting_slot_reply && pending->query_id == next_query_id)
+            if(pending && pending->slot_query.waiting && pending->slot_query.id == next_query_id)
             {
                 in_use = true;
                 break;
@@ -945,17 +957,17 @@ void Gateruntime::startFirmwareSlotQuery(int slot, uint8_t node)
         }
     } while(in_use);
 
-    client.query_node = node;
-    client.query_id = next_query_id;
-    uint8_t data[4] = {1U, static_cast<uint8_t>(client.query_id >> 8),
-        static_cast<uint8_t>(client.query_id), 0U};
+    client.slot_query.node = node;
+    client.slot_query.id = next_query_id;
+    uint8_t data[4] = {1U, static_cast<uint8_t>(client.slot_query.id >> 8),
+        static_cast<uint8_t>(client.slot_query.id), 0U};
     if(!_can.send(CAN_OTA_CTRL_BASE_ID + node, data, sizeof(data)))
     {
         client.response = Http::serialize(503, "{\"error\":\"CAN query send failed\"}\n");
         return;
     }
-    client.waiting_slot_reply = true;
-    client.query_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    client.slot_query.waiting = true;
+    client.slot_query.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
 }
 
 void Gateruntime::finishFirmwareSlotQuery(uint8_t node, const can_frame& frame)
@@ -966,16 +978,16 @@ void Gateruntime::finishFirmwareSlotQuery(uint8_t node, const can_frame& frame)
         (static_cast<uint32_t>(frame.data[6]) << 8) | frame.data[7];
     for(int slot = 0; slot < MAX_CLIENTS; ++slot)
     {
-        if(!httpclients[slot] || !httpclients[slot]->waiting_slot_reply ||
-           httpclients[slot]->query_node != node || httpclients[slot]->query_id != request_id)
+        if(!httpclients[slot] || !httpclients[slot]->slot_query.waiting ||
+           httpclients[slot]->slot_query.node != node || httpclients[slot]->slot_query.id != request_id)
         {
             continue;
         }
         HttpClientState& client = *httpclients[slot];
-        client.waiting_slot_reply = false;
+        client.slot_query.waiting = false;
         int status = 502;
         std::string body = "{\"error\":\"invalid node query reply\"}\n";
-        if(std::chrono::steady_clock::now() >= client.query_deadline)
+        if(std::chrono::steady_clock::now() >= client.slot_query.deadline)
         {
             status = 504;
             body = "{\"error\":\"node query timed out\"}\n";
@@ -1007,19 +1019,150 @@ void Gateruntime::serviceFirmwareSlotQueries()
     const auto now = std::chrono::steady_clock::now();
     for(int slot = 0; slot < MAX_CLIENTS; ++slot)
     {
-        if(httpclients[slot] && httpclients[slot]->waiting_slot_reply &&
-           now >= httpclients[slot]->query_deadline)
+        if(httpclients[slot] && httpclients[slot]->slot_query.waiting &&
+           now >= httpclients[slot]->slot_query.deadline)
         {
             HttpClientState& client = *httpclients[slot];
-            client.waiting_slot_reply = false;
+            client.slot_query.waiting = false;
             client.response = Http::serialize(504, "{\"error\":\"node query timed out\"}\n");
         }
-        if(httpclients[slot] && !httpclients[slot]->waiting_slot_reply &&
-           httpclients[slot]->query_id != 0U && !httpclients[slot]->response.empty())
+        if(httpclients[slot] && !httpclients[slot]->slot_query.waiting &&
+           httpclients[slot]->slot_query.id != 0U && !httpclients[slot]->response.empty())
         {
             // 此函数只在当前 epoll 事件批次结束后执行。
-            httpclients[slot]->query_id = 0U;
+            httpclients[slot]->slot_query.id = 0U;
             handleHttpClient(httpclients[slot]->connection.fd(), 0U);
         }
     }
+}
+
+void Gateruntime::startFirmwareSlotSend(int slot,uint8_t firmware_node,std::string firmware_path)
+{
+    HttpClientState& client = *httpclients[slot];
+    client.slot_send = FirmwareSlotSendState{};
+    if(firmware_node == 0U || firmware_node > CAN_TELEMETRY_NODE_MAX ||
+       firmware_path.empty() || firmware_path.find('\0') != std::string::npos)
+    {
+        client.response = Http::serialize(400, "{\"error\":\"invalid node or firmware path\"}\n");
+        return;
+    }
+
+    // Refuse non-regular files and bound the sequence count to one Node slot.
+    int file = open(firmware_path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if(file < 0)
+    {
+        client.response = Http::serialize(errno == ENOENT ? 404 : 400,
+            "{\"error\":\"cannot open firmware file\"}\n");
+        return;
+    }
+    struct stat info{};
+    if(fstat(file, &info) != 0 || !S_ISREG(info.st_mode) ||
+       info.st_size < 264 || info.st_size > 118 * 1024)
+    {
+        close(file);
+        client.response = Http::serialize(400,
+            "{\"error\":\"expected an OTA image file of 264 to 120832 bytes\"}\n");
+        return;
+    }
+
+    if(!ota_image_header_valid(file, static_cast<size_t>(info.st_size)))
+    {
+        close(file);
+        client.response = Http::serialize(400, "{\"error\":\"invalid OTA image header; use a packaged firmware image\"}\n");
+        return;
+    }
+
+    client.slot_send.node = firmware_node;
+    client.slot_send.path = firmware_path;
+    size_t sent_bytes = 0U;
+    uint16_t sequence = 0U;
+    int status = 200;
+    std::string error;
+    while(sent_bytes < static_cast<size_t>(info.st_size))
+    {
+        uint8_t bytes[6];
+        const size_t remaining = static_cast<size_t>(info.st_size) - sent_bytes;
+        const size_t wanted = remaining < sizeof(bytes) ? remaining : sizeof(bytes);
+        size_t length = 0U;
+        // A short read is not necessarily EOF: fill this frame before assigning its sequence.
+        while(length < wanted)
+        {
+            ssize_t count = read(file, bytes + length, wanted - length);
+            if(count < 0 && errno == EINTR) continue;
+            if(count <= 0) break;
+            length += static_cast<size_t>(count);
+        }
+        if(length != wanted)
+        {
+            status = 500;
+            error = "firmware file read failed";
+            break;
+        }
+        uint8_t data[8];
+        ota_can_frame(sequence, bytes, length, data);
+        if(!_can.send(CAN_OTA_DATA_BASE_ID + firmware_node, data, sizeof(data)))
+        {
+            status = 503;
+            error = "CAN send failed; transfer is incomplete";
+            break;
+        }
+        sent_bytes += length;
+        ++sequence;
+    }
+    close(file);
+
+    // A successful socket write does not prove Node reception or Flash verification.
+    std::string body = "{\"submitted\":";
+    body += status == 200 ? "true" : "false";
+    body += ",\"node\":" + std::to_string(firmware_node);
+    body += ",\"submitted_bytes\":" + std::to_string(sent_bytes);
+    body += ",\"relay_verified\":false";
+    if(!error.empty()) body += ",\"error\":\"" + error + "\"";
+    body += "}\n";
+    client.response = Http::serialize(status, body);
+}
+
+
+bool Gateruntime::ota_can_frame(uint16_t sequence, const uint8_t* bytes, size_t length, uint8_t data[8])
+{
+    if(bytes == nullptr || data == nullptr || length == 0U || length > 6U) return false;
+    data[0] = static_cast<uint8_t>(sequence >> 8);
+    data[1] = static_cast<uint8_t>(sequence);
+    std::fill(data + 2, data + 8, 0xFFU);
+    std::copy(bytes, bytes + length, data + 2);
+    return true;
+}
+
+bool Gateruntime::ota_image_header_valid(int file, size_t file_size)
+{
+    if(file_size < 256U) return false;
+    // Identify a packaged Node OTA image before putting any file bytes on CAN.
+    uint8_t header[256];
+    ssize_t header_bytes;
+    do { header_bytes = pread(file, header, sizeof(header), 0); }
+    while(header_bytes < 0 && errno == EINTR);
+    const auto le32 = [](const uint8_t* p) {
+        return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+            (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
+    };
+    uint32_t header_crc = 0xFFFFFFFFU;
+    if(header_bytes == sizeof(header))
+    {
+        for(size_t i = 0; i < 252U; ++i)
+        {
+            header_crc ^= header[i];
+            for(unsigned bit = 0; bit < 8U; ++bit)
+                header_crc = (header_crc >> 1) ^ ((header_crc & 1U) ? 0xEDB88320U : 0U);
+        }
+    }
+    if(header_bytes != sizeof(header) || le32(header) != 0x3141544FU ||
+       header[4] != 1U || header[5] != 0U || header[6] != 0U || header[7] != 1U ||
+       le32(header + 8) != 1U ||
+       (le32(header + 16) != OTA_SLOT_A_BASE_ADDRESS && le32(header + 16) != OTA_SLOT_B_BASE_ADDRESS) ||
+       le32(header + 20) != file_size - sizeof(header) ||
+       (header_crc ^ 0xFFFFFFFFU) != le32(header + 252))
+    {
+        return false;
+    }
+    return true;
 }
