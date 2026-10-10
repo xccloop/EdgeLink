@@ -1,6 +1,6 @@
 # EdgeLink
 
-> 面向局域网环境的嵌入式边缘遥测系统：GD32 采集温度，先持久化到外部 Flash，再经 TCP 主链路或 CAN 回退链路上报至树莓派 EdgeHub；Hub 完成校验、SQLite 去重和 ACK 后，节点才确认删除对应的待发送记录。
+> 面向局域网环境的嵌入式边缘遥测与固件更新系统：GD32 节点采集温度，先持久化到外部 Flash，再经 TCP 或 CAN 上报至树莓派 EdgeHub；Hub 完成 SQLite 落库或去重并回复 ACK 后，节点才将对应记录标记为已确认。Hub 同时提供 HTTP 管理接口，通过 CAN 查询节点的可升级槽位、下发应用固件，并根据节点反馈推进发送和处理重传。
 
 | 维度 | 当前设计 |
 | --- | --- |
@@ -11,30 +11,32 @@
 | 交付语义 | 节点 **at-least-once 重传**，Hub 以唯一索引实现幂等持久化 |
 | 链路恢复 | 运行期断线自动重连，重连成功后补发积压 pending |
 | 节点显示 | 320×240 IPS 四页：HOME / LINKS / LOG / STORAGE |
-| 固件更新 | Node 侧已有 CAN 接收、GD25Q32 中转、Bootloader 和内部 Flash A/B 槽代码；端到端升级仍待实机验证 |
-| 当前边界 | 遥测 ACK 闭环、异常掉电恢复、CAN 回退、断线重连与补发已有阶段性实机验收记录，72 小时工作无死机；这不代表 OTA 已通过同样的验证 |
+| 管理接口 | HTTP `:8080`：服务状态、节点槽位查询、指定节点固件下发 |
+| 固件更新 | HTTP 发起 → CAN 8 帧确认窗口与超时重传 → GD25Q32 中转校验 → Bootloader 安装到内部 Flash A/B 槽 |
+| 当前进度 | 遥测主链路已有阶段性实机记录；OTA 两端主体代码已实现，Hub 窗口发送已通过编译和故障模拟测试，完整设备升级待实机验收 |
 
 ## 快速开始
 
-两块板子各自三步。
+先配置并启动 Node 与 Hub，再通过 HTTP 查询槽位或下发固件。
 
 ### EdgeNode（GD32F103RCT6）
 
-```bash
+```powershell
 # 1. 改配置：Wi-Fi SSID/密码、Hub 的 IP 与端口，以及本节点的 board_id
 #    edgenode/User/App/Config/config.c
 
 # 2. 编译三套 APP（默认布局、A 槽、B 槽；需要 ARM GNU Toolchain）
 ./edgenode/tools/compiled.ps1
 
-# 3. 裸板首次烧录默认布局（需要已连接的 ST-Link）
-./edgenode/tools/flash.ps1 default
-
-# 已安装 Bootloader 的设备可改用 a 或 b 槽
-# ./edgenode/tools/flash.ps1 a
+# 3. 准备使用 OTA 的设备：先烧 Bootloader，再烧初始 A 槽应用
+#    需要已连接的 ST-Link 和 OpenOCD
+./edgenode/bootloader/flash.ps1
+./edgenode/tools/flash.ps1 a
 ```
 
-`board_id` 决定 TCP Frame 的 source 和 CAN 仲裁 ID，**同一个 Hub 下的节点不能重复**。
+这些烧录命令会写入设备 Flash，适用于首次部署。只运行旧的独立 APP 布局时，可使用 `./edgenode/tools/flash.ps1 default`；它会覆盖 Bootloader 所在地址。脚本内的工具链路径需要按本机安装位置调整。
+
+`board_id` 范围为 1～127，决定 TCP Frame 的 source 和 CAN 仲裁 ID，**同一个 Hub 下的节点不能重复**。
 
 ### EdgeHub（树莓派）
 
@@ -42,9 +44,14 @@
 # 1. can0 配一次（build.sh 故意不做这件事，原因见下方「构建与运行」）
 sudo ip link set can0 up type can bitrate 500000
 
-# 2. 编译并在前台运行，监听 TCP 8888
+# 2. 编译并在前台运行，监听遥测 TCP 8888 和管理 HTTP 8080
 cd edgehub && ./build.sh
+
+# 3. 在另一个终端检查服务状态
+curl http://192.168.1.112:8080/hub/status
 ```
+
+地址替换为实际 Hub IP；当前状态接口返回 `{"running":true}`。固件下发步骤见 [HTTP 管理与固件下发](#http-管理与固件下发)。
 
 ## 目录
 
@@ -57,6 +64,7 @@ cd edgehub && ./build.sh
 - [EdgeNode：固件更新](#edgenode固件更新)
 - [Flash 日志：恢复逻辑与容量边界](#flash-日志恢复逻辑与容量边界)
 - [EdgeHub：事件循环、解析与幂等持久化](#edgehub事件循环解析与幂等持久化)
+- [HTTP 管理与固件下发](#http-管理与固件下发)
 - [协议契约](#协议契约)
 - [构建与运行](#构建与运行)
 - [资料索引](#资料索引)
@@ -112,31 +120,41 @@ flowchart LR
         Collect[CollectTask\n统一 Message]
         Log[LogTask\nGD25Q32 pending log]
         Tx[TransmitTask\nTCP / CAN]
+        NodeOta[OtaTask\nCAN 接收 / 校验]
+        Relay[GD25Q32\nOTA 中转区]
         Sensor --> Collect --> Log --> Tx
+        NodeOta --> Relay
+        NodeOta --> Tx
     end
 
     Tcp[TCP V5\n主链路]
-    Can[Classic CAN\n回退链路]
+    Can[Classic CAN\n遥测回退 / 固件链路]
     Tx --> Tcp
     Tx --> Can
 
     subgraph Hub[EdgeHub - Raspberry Pi]
-        Epoll[edge-triggered epoll\nTCP + SocketCAN]
+        Epoll[edge-triggered epoll\nTCP + HTTP + SocketCAN]
         Parser[RingBuffer + frame parser]
         Db[(SQLite\nUNIQUE nodeId, sequence)]
         Ack[ACK encoder]
+        OtaHub[OTA\n槽位查询 / 窗口发送]
         Epoll --> Parser --> Db --> Ack
+        Epoll <--> OtaHub
     end
 
     Tcp --> Epoll
     Can --> Epoll
+    Can --> NodeOta
+    Http[HTTP :8080\n管理命令] --> Epoll
+    OtaHub --> Can
     Ack --> Tx
 ```
 
-系统分为两条职责清晰的链：
+系统分为三条业务链：
 
 1. **数据链**：传感器采样 → Message → Flash pending → TCP 或 CAN → Hub → SQLite。
 2. **确认链**：SQLite 插入或去重命中 → ACK → 节点核对 `sequence` 与 CRC → Flash 状态改为 confirmed。
+3. **固件链**：HTTP 指定目标与镜像路径 → Hub 经 CAN 下发 → Node 上报连续接收序号 → 中转区完整镜像校验 → 复位后 Bootloader 安装与试启动。
 
 Flash 是数据链的本地恢复点，SQLite 是 Hub 侧的持久化事实源，ACK 是两者之间的确认桥梁。三者都不能被一次 socket 写成功替代。
 
@@ -185,7 +203,7 @@ sequenceDiagram
 
 **CollectTask 不直接发送。** 它只有在 LogTask 发放许可后才采样，并将统一 Message 交回 LogTask。这样写 Flash 失败、缓存不可继续写入或补发期间，不会继续静默产生无处保存的新数据。
 
-**TransmitTask 不直接确认 Flash。** 它发送 TCP V5，校验固定长度 ACK 的版本、目标节点、CRC、状态码和 `sequence`。无有效 ACK 时再尝试重连与 CAN 回退；两条链路都未确认时只报告失败，记录仍为 pending。
+**TransmitTask 不直接确认 Flash。** 它先尝试 TCP V5，校验 ACK 的版本、目标节点、CRC、状态码和 `sequence`。TCP 未成功确认时回退 CAN，随后按冷却时间尝试恢复 TCP；两条链路都未确认时只报告失败，记录仍为 pending。TCP 重连和 CAN 发送目前共用这个任务，TCP 不通时 CAN 上报卡顿的问题由 [#7](https://github.com/xccloop/EdgeLink/issues/7) 跟踪。
 
 其余任务各有自己的入口：`OtaTask` 接收 CAN 固件帧并把回复交给 TransmitTask 发送；`HmiTask` 绘制屏幕；LED 任务负责指示；StackMonitor 任务检查任务栈。它们不改变上面“先落盘、后发送、ACK 后确认”的遥测顺序。
 
@@ -208,7 +226,7 @@ sequenceDiagram
 | **HOME** | 温度、Wi-Fi 名字与本机 IP | `collect_to_hmi_queue`；`tcp_ssid_get()` / `tcp_local_ip_get()` |
 | **LINKS** | TCP / CAN 最近一次通信结果 | `tcp_connected_get()`；`can_state` |
 | **LOG** | 最近 5 次收发的滚动窗口（终端式，新的从下面进） | `transmit_to_hmi_log_queue`——TransmitTask 每发完一条交一行 |
-| **STORAGE** | Flash 里还没被 Hub 确认的 pending 条数 | `storage_pending_count_get()` |
+| **STORAGE** | Flash 里还没被 Hub 确认的 pending 条数 | `log_pending_count_get()` |
 
 底部 28 像素是导航条：**KEY1/KEY2** 移动候选页，**KEY3** 确认切换。按键走 EXTI 中断 + 位图事件，由 HMI 任务取走并做 50 ms 去抖。
 
@@ -226,7 +244,9 @@ Widget  →  Page   →  Render  →  Control
 
 ## EdgeNode：固件更新
 
-Node 的 OTA 链路与遥测链路分开：CAN 中断把固件帧交给 `OtaTask`，[`Service/Ota/ota.c`](edgenode/User/App/Service/Ota/ota.c) 判断序号、缓存数据并写入 GD25Q32 中转区。完整镜像校验通过后，节点复位；独立的 [`bootloader/`](edgenode/bootloader/) 再校验中转镜像、安装到内部 Flash 的目标槽，并根据启动元数据决定试启动或回退。新 APP 运行一段时间后才调用 `ota_confirm_boot()` 确认本次启动。CAN 回复由 TransmitTask 统一发送。
+Node 的 OTA 接收队列与遥测队列分开：CAN 中断把固件数据帧和槽位查询帧交给 `OtaTask`，[`Service/Ota/ota.c`](edgenode/User/App/Service/Ota/ota.c) 判断序号、按 768 B 块缓存数据并写入 GD25Q32 中转区。每连续接收 8 帧，或接收停顿时，Node 上报当前连续收到的帧序号。回复统一由 TransmitTask 发送。
+
+完整镜像校验通过后，Node 回复接收结果并准备复位；独立的 [`bootloader/`](edgenode/bootloader/) 再校验中转镜像、安装到非当前活动的内部 Flash 槽，并根据启动元数据决定试启动或回退。新 APP 运行约 10 秒后调用 `ota_confirm_boot()` 确认本次启动。Hub 下发的是带镜像头的应用固件，Bootloader 通过 SWD 首次部署。
 
 | 内部 Flash 区域 | 起始地址 | 容量 | 内容 |
 | --- | --- | ---: | --- |
@@ -237,7 +257,9 @@ Node 的 OTA 链路与遥测链路分开：CAN 中断把固件帧交给 `OtaTask
 
 [`tools/compiled.ps1`](edgenode/tools/compiled.ps1) 一次编出 `build/default`、`build/a`、`build/b`。A/B 槽必须烧录带镜像头的 `edegnode_image.bin`；[`tools/flash.ps1`](edgenode/tools/flash.ps1) 按 `default`、`a`、`b` 选择文件和固定地址，A/B 烧录前检查镜像格式、槽位和 CRC。`default` 是从 `0x08000000` 启动的旧布局，烧录它会覆盖 Bootloader。
 
-**验证边界：**当前源码和三套 APP、Bootloader 均已编译通过；烧录脚本只做过 `-WhatIf` 地址检查。CAN 传输、中转安装、试启动确认、回退和异常掉电恢复尚未作为一条完整 OTA 链路在实机上验收。镜像 CRC 用于发现损坏，不提供固件身份认证。
+外部 GD25Q32 的分区由 [`external_flash_layout.h`](edgenode/Common/ExFlash/external_flash_layout.h) 统一定义：`[0x000000, 0x3BF000)` 用于遥测日志，`[0x3BF000, 0x400000)` 用于 OTA 中转，避免固件接收覆盖待发送遥测记录。
+
+**验证情况：**APP 三种布局和 Bootloader 已有编译通过记录；Hub 的窗口发送、超时重传和结果处理已通过故障模拟测试。CAN 接收、中转安装、试启动确认、回退及异常掉电恢复仍待作为完整链路在设备上验收。镜像 CRC 用于发现损坏，当前未实现固件签名认证。
 
 ## Flash 日志：恢复逻辑与容量边界
 
@@ -265,22 +287,26 @@ byte 15      status                 0x00 = confirmed；其他值 = pending
 EdgeHub 的入口在 [`edgehub/main.cpp`](edgehub/main.cpp)，运行时资源由 [`Gateruntime`](edgehub/src/Gateruntime.cpp) 管理。`Gateruntime::init()` 在 SocketCAN、TCP 监听、`epoll` 或 SQLite 任一步失败时返回 `false`，`main.cpp` 会**就此退出**，不会带着没建好的 `epoll` 进入事件循环——否则会报出一句误导人的 `epoll error: Invalid argument`，把真正的失败原因（比如端口已被占用）盖住。
 
 ```text
-TCP listen :8888                  SocketCAN can0
-       │                                  │
-       └──────────────┬───────────────────┘
-                      ▼
-          edge-triggered epoll event loop
-                      ▼
-        每个 TCP 客户端独立 RingBuffer
-                      ▼
-     TCP V5 parser / CAN payload decoder
-                      ▼
-              unified Message
-                      ▼
-      SQLite INSERT ... ON CONFLICT DO NOTHING
-                      ▼
-          Inserted 或 Duplicate 才回复 ACK
+TCP :8888          HTTP :8080          SocketCAN can0
+    │                   │                    │
+    └───────────────────┼────────────────────┘
+                        ▼
+             edge-triggered epoll
+        ┌───────────────┼────────────────┐
+        ▼               ▼                ▼
+      遥测帧         HTTP 请求         CAN OTA 回复
+        │               │                │
+TCP RingBuffer /     路由解析        查询匹配 / 窗口确认
+CAN payload decoder     └────────┬───────┘
+        │                        ▼
+  unified Message           OTA 业务结果
+        │                        │
+ SQLite 插入 / 去重         HTTP 响应
+        │
+成功或已存在才回复 ACK
 ```
+
+上图的持久化路径用于遥测。HTTP 客户端由独立的请求解析状态处理，OTA 回复先交给 [`OTA`](edgehub/src/OTA.cpp)，再由 `Gateruntime` 关联等待中的 HTTP 请求；固件窗口发送和超时检查在事件批次结束后推进。
 
 ### 为什么使用 `epoll + RingBuffer`
 
@@ -310,6 +336,50 @@ ON CONFLICT(nodeId, sequence) DO NOTHING;
 
 这就是幂等的关键：ACK 表示“Hub 已经拥有这个业务身份的记录”，不是“当前这次 socket 收包看起来没有报错”。`receivedAtUs` 为 Hub 完成整帧校验时的接收时间，不是节点 `sample_uptime_ms`。
 
+## HTTP 管理与固件下发
+
+HTTP 服务监听 `8080`。节点号使用十进制 1～127，槽位查询与固件下发是两个独立操作，由调用者查询后选择对应镜像。
+
+| 方法 | 路径 | 行为 |
+| --- | --- | --- |
+| `GET` | `/hub/status` | 返回 `{"running":true}`，用于检查服务响应。 |
+| `GET` | `/hub/firmware/query/node/<id>` | 经 CAN 查询非当前运行的槽位，成功返回 `{"slot":"A"}` 或 `{"slot":"B"}`，查询超时为 5 s。 |
+| `POST` | `/hub/firmware/send/node/<id>` | 请求体为 **Hub 本地镜像文件路径**；启动 CAN 下发，等待 Node 最终结果或失败后返回。 |
+
+以下以节点 3、树莓派 `192.168.1.112` 为例。
+
+### 1. 查询目标槽位
+
+```bash
+curl http://192.168.1.112:8080/hub/firmware/query/node/3
+```
+
+若返回 `{"slot":"B"}`，选择 `edgenode/build/b/edegnode_image.bin`；返回 A 则选择 A 槽镜像。节点存在待确认升级或元数据无效时，接口返回错误。
+
+### 2. 把对应镜像复制到 Hub
+
+在编译完成后的 Windows 仓库根目录运行，下面的命令对应查询结果为 B：
+
+```powershell
+scp ./edgenode/build/b/edegnode_image.bin qxc@192.168.1.112:/home/qxc/Desktop/edegnode_b_image.bin
+```
+
+### 3. 发起下发
+
+```bash
+curl -i -X POST \
+  http://192.168.1.112:8080/hub/firmware/send/node/3 \
+  --data-raw '/home/qxc/Desktop/edegnode_b_image.bin'
+```
+
+`--data-raw` 发送路径字符串，Hub 按该路径打开文件；镜像内容通过上一步复制到树莓派。`-i` 显示 HTTP 状态码。Windows PowerShell 可使用 `curl.exe`，并将命令写为一行。
+
+Hub 当前只允许一个固件发送任务。每帧携带 2 B 序号与 6 B 镜像数据，最多允许 8 帧未确认；收到 Node 的连续接收序号后推进窗口，500 ms 未获得进度时从未确认位置重传，连续最多重试 3 次。全部帧获进度确认后，最终结果等待时间为 5 s；有效的最终成功回复也可直接完成传输。
+
+成功响应包含 `submitted`、`node`、`submitted_bytes` 和 `relay_verified`。`submitted=true` 表示整个文件已提交到 CAN 发送接口；`relay_verified=true` 表示 Hub 收到 Node 的中转镜像校验成功回复。新 APP 的安装、启动和确认发生在节点复位之后，当前 HTTP 响应不报告这些阶段的结果。
+
+文件不存在返回 404，传输忙或节点有待确认槽位返回 409，CAN 发送失败返回 503，确认超时返回 504。错误响应会提供 `error`；发送已经启动时还保留字节计数和校验结果，便于判断失败发生在哪个阶段。
+
 ## 协议契约
 
 | 链路 | 遥测 | ACK | 当前作用 |
@@ -319,6 +389,21 @@ ON CONFLICT(nodeId, sequence) DO NOTHING;
 
 TCP 与 CAN 都承载同一个 Message，却不强行共用同一份线上帧：TCP 需要魔数、版本和 CRC 来应对字节流重同步；CAN 控制器已有链路层 CRC，且 8 字节 DLC 限制要求紧凑的独立布局。
 
+### CAN 固件协议
+
+帧均为标准数据帧，以下多字节字段高字节在前，固件数据序号从 0 开始。
+
+| 方向 | CAN ID | DLC | 载荷 |
+| --- | --- | ---: | --- |
+| Hub → Node | `0x380 + nodeId` | 8 | `sequence(2) + image_bytes(6)`，最后一帧不足部分填 `0xFF`。 |
+| Hub → Node | `0x400 + nodeId` | 4 | `1 + request_id(2) + 0`，只查询可升级槽位。 |
+| Node → Hub | `0x480 + nodeId` | 4 | `kind=1 + contiguous(2) + 0`，报告已连续收到第 N 帧。 |
+| Node → Hub | `0x480 + nodeId` | 4 | `kind=2 + contiguous(2) + success`，`success=1` 表示中转区镜像校验成功。 |
+| Node → Hub | `0x480 + nodeId` | 8 | `kind=3 + request_id(2) + status + target_slot(4)`，回复槽位地址。 |
+
+槽位回复状态：0 为成功，1 为元数据无效，2 为存在待确认槽位；失败时目标地址为 0。成功地址为 A 槽 `0x08004000` 或 B 槽 `0x08021800`。例如 Node 3 的查询帧为 `0x403`，槽位、进度和结果回复都使用 `0x483`。
+
+协议定义和实现见 [`can_frame.h`](edgenode/User/App/Protocol/Can/can_frame.h)、[`can_output.c`](edgenode/User/App/Output/Can/can_output.c) 与 [`OTA.cpp`](edgehub/src/OTA.cpp)。
 
 ## 构建与运行
 
@@ -326,6 +411,7 @@ TCP 与 CAN 都承载同一个 Message，却不强行共用同一份线上帧：
 
 - 构建规则：[`edgenode/Makefile`](edgenode/Makefile)，使用 ARM GNU Toolchain 生成 ELF 和 BIN。
 - Windows 编译入口：[`edgenode/tools/compiled.ps1`](edgenode/tools/compiled.ps1)，生成 `build/default`、`build/a`、`build/b` 三套产物。
+- Bootloader 构建：[`edgenode/bootloader/Makefile`](edgenode/bootloader/Makefile)；[`edgenode/bootloader/flash.ps1`](edgenode/bootloader/flash.ps1) 会重新编译并通过 ST-Link 烧录到 `0x08000000`。
 - Windows 烧录入口：[`edgenode/tools/flash.ps1`](edgenode/tools/flash.ps1)，传入 `default`、`a` 或 `b`，将对应的已编译镜像写入该布局的 Flash 起始地址并校验。`default` 会覆盖 `0x08000000` 上的 Bootloader；A/B 槽需要设备已有 Bootloader，烧录前会校验镜像完整性。
 - **节点配置**：Wi-Fi 凭据、Hub 地址和 `board_id` 都在 [`edgenode/User/App/Config/config.c`](edgenode/User/App/Config/config.c)，由 `config_tcp_get()` 提供给 TCP 层。`board_id` 同时决定 TCP Frame 的 source 和 CAN 仲裁 ID，**同一个 Hub 下的节点不能重复**。
 
@@ -333,7 +419,7 @@ TCP 与 CAN 都承载同一个 Message，却不强行共用同一份线上帧：
 
 - 依赖：Linux、CMake、C++17、SQLite3 开发包、已配置的 SocketCAN `can0`。
 - 构建并前台运行：`cd edgehub && ./build.sh`。
-- 当前源码监听 TCP **8888**，数据库路径为 `/home/qxc/Desktop/EdgeLink/edgehub/data/edgehub.db`。该 `.db` 同样不入库。部署到其他目录前需调整这个路径。
+- 当前源码监听遥测 TCP **8888**、管理 HTTP **8080**，数据库路径为 `/home/qxc/Desktop/EdgeLink/edgehub/data/edgehub.db`。部署到其他目录前需调整这个路径，并保证数据库目录存在且可写。
 - **`build.sh` 不配置 `can0`**，因为两件事都不合适：接口已在 UP 状态时不能在线改波特率，`ip` 会报 `RTNETLINK answers: Device or resource busy`，而 `set -e` 会让脚本当场退出、Edgehub 跟着起不来；改成先 `down` 再 `up` 虽然能绕开，却会在每次编译运行时把总线断开一下，还要每次输 sudo。所以这件事留在外面，开机手动配一次：
 
   ```bash
@@ -346,11 +432,24 @@ TCP 与 CAN 都承载同一个 Message，却不强行共用同一份线上帧：
 - [EdgeHub 架构图（draw.io）](docs/draw/edgehub.drawio)
 - [开发日志索引](docs/develop/README.md)
 - [TCP V5 与 ACK 编码实现](edgehub/inc/TcpFrame.hpp)
+- [Hub HTTP 路由](edgehub/src/HttpHandle.cpp)
+- [Hub CAN 固件发送与回复处理](edgehub/src/OTA.cpp)
+- [Node 内部 Flash 分区](edgenode/Common/OTA/flash_layout.h)
+- [已知问题与后续工作](https://github.com/xccloop/EdgeLink/issues)
 - [2026-09-15 调试记录](docs/develop/2026-09-15/main.md)
 
 ## 项目边界
 
-`edgedash/` 是独立的 EasyUI 仪表板原型，不属于本 README 的交付说明。本文只陈述当前仓库源码及已保留实机记录能支持的结论；尚未完成的验证明确保留为下一步，不用架构设计或截图替代。
+当前阶段已实现 Node 遥测、Flash 日志恢复、Hub 持久化与 ACK，以及 CAN 应用固件下发的主体功能。项目保留的遥测实机记录涵盖多节点运行、断线重连与 pending 补发，并记载过 72 小时无死机运行。OTA 的编译与模拟测试结果单独记录，完整升级和故障恢复仍需设备验收。
+
+后续工作集中在现有 issue：
+
+- [#1](https://github.com/xccloop/EdgeLink/issues/1)、[#7](https://github.com/xccloop/EdgeLink/issues/7)：pending 补发衔接、TCP 未连通时 CAN 上报卡顿。
+- [#3](https://github.com/xccloop/EdgeLink/issues/3)、[#4](https://github.com/xccloop/EdgeLink/issues/4)：CAN 下发与 Bootloader 升级的实机故障验收。
+- [#5](https://github.com/xccloop/EdgeLink/issues/5)、[#6](https://github.com/xccloop/EdgeLink/issues/6)：看门狗与任务健康监督、Hub 持久化故障验证。
+- [#2](https://github.com/xccloop/EdgeLink/issues/2)：Hub 与 Dash 的节点状态和波形接口。`edgedash/` 当前为独立 EasyUI 仪表板原型。
+
+当前进度/结果帧没有传输编号，无法彻底区分同节点旧传输的迟到回复；Node 丢失窗口回复及一次性空闲回复后，也不会因收到重复数据而重新确认。Hub 对无法确认的传输返回超时。HTTP 管理接口尚未实现身份认证，应在受控局域网内使用。
 
 ## 硬件原理图与 PCB
 
