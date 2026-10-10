@@ -1,0 +1,126 @@
+{
+  "meta": {
+    "name": "edgenode-hub-ota",
+    "updated_at": "2026-10-06T18:50:00.000000",
+    "version": "2.6.0",
+    "location_note": "唯一真相在本文件（工作区 docs/teacher/ 下）。C:\\Users\\memory\\.claude\\skills\\teacher\\teachers\\edgenode-hub-ota\\ 下若存在同名文件，视为旧副本，请以本文件为准并删除旧副本。",
+    "sibling_archive": "C:\\Users\\memory\\.claude\\skills\\teacher\\teachers\\edgenode-bootloader\\learning-state.json（同一学习者的 Node 侧档案，先读它再教学）"
+  },
+  "user": {
+    "level": "mid（系统设计推理强；把设计翻译成 C++ 代码弱）",
+    "learning_goal": "完成 EdgeHub 侧 OTA：固件仓库 + 升级状态机 + HTTP 管理接口 —— 即 docs/superpowers/plans/2026-10-06-hub-ota.md 第 7 节「Hub 侧新增」的 4 个文件",
+    "time_expectation": "节奏快，偏好「先讲原理再一起写」+「代码翻译」练习。开发环境已定：**在树莓派 192.168.1.112 上写、编译、运行**（g++ 12.2 / cmake 3.25.1 / sqlite3 3.40 / can-utils 齐全）",
+    "teaching_notes": [
+      "【最高优先级，覆盖一切】不要给「留 ___ 空格的骨架」—— 他的原话：『你这样给我感觉我只是复制粘贴，你把一个函数里面要干的全部流程给我我来翻译』。正确做法：给【整段的中文流程规格】（要 include 什么、定义什么、每个字段的类型与含义、命名及命名理由），他自己写全部代码。",
+      "要的是【被教会】，不是代写。但他明确说「你帮我写吧」时代写是可以的，别硬推。",
+      "一次只讲一个概念，讲完必须检查理解（他配合度高，会认真答）。",
+      "事实性问题【先给答案】，不要用长推导铺垫 —— 他明确提过这条偏好。",
+      "多用类比（他吃这一套）：柜子/包裹、快递分箱、一扇门一把钥匙、收银台排队。",
+      "强项是【抓真实场景】：bootloader 阶段他主动发现了「总线上有四块板卡」「采集不能停」「存储也不能停」「CAN ID 会撞车」。他写 hub-ota 计划时自己挖出四个真问题（0x400 被静默丢 / CAN 8 字节装不下 / Hub 超时必须短于 Node 5000ms / epoll 没有时间维度）。遇到设计题先让他想，他常能想到我没想到的。",
+      "弱项是【把设计翻译成代码】：从不犯设计错误。C 侧具体错误类型见兄弟档案（变量寿命/作用域、= vs ==、函数参数顺序、拼写、下标漏 ++）。",
+      "【Hub 侧特有、必须提前预警】事件驱动模型把「变量寿命」这个弱点放大一档：状态机里任何忘记挂到对象成员的临时值，都会在下次 tick 时消失，症状是「进度永远卡在第 0 个窗口」——与他连犯三次的「收下第 1 帧就永远卡死」是同一个 bug 换门进来。教学时要专门指出这个新形状。",
+      "他自查纠错很快、被点破后立刻接受。拼写错误是稳定模式，药方是**让他从仓库里复制标识符**，不是再盯一遍。",
+      "Hub 侧新语言风险（C++17 + STL，他之前只写 C）：std::unordered_map 的 operator[] 会默认构造、std::string 的隐式转换、初始化列表、const 正确性。遇到时单独点破，别把整块 C++ 语法一次倒给他。",
+      "Hub 侧新错误类型（相对 Node）：字节序（大端手动拼字节，已有参考 Gateruntime.cpp:459-466 的 sendCanAck）、位运算与掩码（can_id & CAN_SFF_MASK）、非阻塞 socket 的部分写（send 返回小于请求长度时必须当错误处理，参考 parseTcpFrames:424）。",
+      "【协作环境偏好 2026-10-06】他不希望学习档案写到 C:\\Users\\memory\\.claude\\ 下（跨工作区需要每次批准权限），要求放在项目工作区内：EdgeLink/docs/teacher/。注意 docs/teacher/ 会进版本库（docs/superpowers/ 被 .gitignore 忽略，docs/teacher/ 不在忽略列表）。"
+    ]
+  },
+  "route": {
+    "subject": "EdgeHub 侧固件下发与管理接口（CAN 下行 + 升级状态机 + HTTP 管理端口）",
+    "source_docs": {
+      "plan": "docs/superpowers/plans/2026-10-06-hub-ota.md（417 行，设计阶段，未开始编码）",
+      "node_spec": "docs/superpowers/specs/2026-10-02-ota-relay-design.md（Node 侧，已实现）",
+      "node_plan": "docs/superpowers/plans/2026-10-03-ota-relay.md"
+    },
+    "teaching_route": [
+      "U0【已讲，待验收】Hub 架构的底气：TcpServe 通用构造 / fd_table 哈希表 / Epoll::wait 已带 timeout 参数 / dispatchEvent 唯一分派点 —— 结论：加功能不用改架构，唯一绕不开的是『时间』",
+      "U1 字节契约（对齐实现阶段 1）：CAN 一帧 8 字节硬约束 → kind 分型；版本号宽度 uint32 vs uint16（待定项 6）",
+      "U2 时间维度（阶段 2）：升级状态机 + 超时对齐 + epoll ET 下怎么周期性推进（timeout vs timerfd）",
+      "U3 契约从严（阶段 4）：固件仓库 + 文件名解析必须报错不猜",
+      "U4 状态机（阶段 5-6）：与 Node 接收端镜像对称；回退 N、窗口 8、tick 驱动",
+      "U5 HTTP 挂进 epoll（阶段 7）：极简解析范围、为什么不能与 8888 挤同一端口",
+      "U6 Node 侧配合 + 中断区分流风险（阶段 2-3）",
+      "U7 真机联调与验证（阶段 6-8）"
+    ],
+    "predicted_translation_hardpoints": [
+      "UpgradeTask 的状态必须全部是对象成员 —— 函数一返回就退栈，忘了挂成员 = 状态静默丢失",
+      "tick 驱动的超时：不能用 sleep/阻塞，要用『记录时刻 + 每次 tick 比较』",
+      "非阻塞 CAN 发送：send() 返回值必须检查",
+      "HTTP 解析也要处理半包（复刻 Ringbuffer + FRAME_PARSE_PENDING 的思路），不能假设一次 recv 拿到完整请求"
+    ]
+  },
+  "environment_facts": {
+    "workspace_local": "C:\\Users\\memory\\Desktop\\EdgeLink（Windows，只读代码用）",
+    "target": "qxc@192.168.1.112:/home/qxc/Desktop/EdgeLink（ssh 免密已配：~/.ssh/pi_192_168_1_112，Host 别名 192.168.1.112）",
+    "toolchain": "g++ (Debian 12.2.0-14+deb12u1) / cmake 3.25.1 / GNU Make 4.3 / sqlite3 3.40.1 / candump + cansend + ip 齐全",
+    "can0_state_2026_10_06": "state DOWN, qdisc noop —— 验证前必须 sudo ip link set can0 up type can bitrate 500000（build.sh 已刻意不再配置 can0，理由见其注释）",
+    "hub_binary": "edgehub/build/Edgehub，ELF 64-bit aarch64, not stripped（可 nm / gdb）",
+    "no_process_running": "2026-10-06 检查：无 edgehub / edgenode 进程在跑",
+    "firmware_dir_missing": "edgehub/firmware/ 不存在 —— Hub 侧 OTA 代码一行未写，是干净起点",
+    "build_entry": "edgehub/build.sh（cmake -B build && cmake --build build -j$(nproc) && exec ./build/Edgehub）"
+  },
+  "code_map_hub": {
+    "note": "Hub 全部源码 2653 行 C++17，单进程单线程，一个 epoll 管所有 fd。读懂这 5 个位置就能读懂全部。",
+    "main.cpp": "47 行。signal(SIGINT/SIGTERM/SIGPIPE) + Gateruntime init + run",
+    "Gateruntime.hpp": "87 行。FdType 枚举{Tcpserve,Tcpclient,Can} / fd_table / clients[20] / 常量区(行 82-86)",
+    "Gateruntime.cpp": "573 行，唯一调度中枢。init(46) / run(117) / dispatchEvent(149) / handleTcpserve(175) / handleTcpclient(302) / parseTcpFrames(399) / sendCanAck(457 字节序参考) / handleCan(492)",
+    "TcpFrame.hpp": "62 行。遥测帧契约：magic EH + V5 + 9 字节头 + 遥测 3 字节 + CRC32 = 16 字节；ACK 也是 16 字节",
+    "Epoll.hpp": "35 行。wait(events, length, timeout_ms = -1) —— 参数已存在，计划 6.3 只需改调用处的数字",
+    "Storage": "SQLite 只有一张 messages 表（遥测）。计划待定项 5：升级结果是否写库建议写，否则 Hub 重启就忘了谁升级过"
+  },
+  "contract_map_can": {
+    "note": "两端唯一的耦合是一份定义在 can_frame.h 的字节契约，没有共享内存、没有共享代码。",
+    "0x280+node": "遥测（Node→Hub），DLC 7",
+    "0x300+node": "ACK（Hub→Node），DLC 5，参考 Gateruntime.cpp:457-466",
+    "0x380+node": "固件数据帧（Hub→Node）：data[0..1] 序号大端 + data[2..7] 载荷 6 字节",
+    "0x400+node": "固件控制帧（Hub→Node）：byte0 opcode（1=开始传输通告 / 2=中止），byte1..7 必须为 0。**当前 cani.c 只把 0x380~0x3FF 分流给 OTA 队列，0x400~0x47F 落进 can_receive_queue → transmit_task，被当垃圾丢掉（can_frame.c:38）**",
+    "0x480+node": "固件回复帧（Node→Hub）：现载荷 4 字节（can_frame.h:37 CAN_OTA_REPLY_LENGTH 4U），计划改为 8 字节并按 kind 分型：kind=1 进度 kind|contiguous(2)|reserved(5)；kind=2 结果 kind|success(1)|contiguous(2)|reserved(4)；kind=3 通告回复 kind|slot(1)|version(4)|reserved(2)",
+    "每段占 0x80": "节点号占低 7 位（0~127），段间隔必须 0x80，否则撞车（初版 0x500/0x510/0x520 就撞，扩到 17 个节点才炸）",
+    "仲裁优先级": "ID 越小优先级越高。遥测 0x280 > ACK 0x300 > 固件 0x380（最低，刻意让路）"
+  },
+  "open_decisions": [
+    "待定 1：管理端口号 —— 建议 8889（不挤 8888，一个端口混两种协议是自找麻烦）",
+    "待定 2：Hub 在哪编译 —— **已定：在 Pi 上写、编译、运行**",
+    "待定 3：Hub 侧单窗口超时 —— 500~1000ms 起步，必须短于 Node 的 OTA_TRANSFER_TIMEOUT_MS=5000，真机调",
+    "待定 4：多节点并发升级 —— 本期不做，但数据结构要留得下多个任务",
+    "待定 5：升级结果是否写 SQLite —— 建议写",
+    "待定 6：版本号宽度 uint32_t vs 全局缩 uint16_t —— **倾向现在全局缩**（还没写相关代码，一次改干净，避免两个宽度；缩完 offsetof 断言会当场抓住偏移错位）"
+  ],
+  "risks": [
+    "🔴 Node 侧 OTA 一次都没真机跑过 —— Hub 侧做再多也验证不了 Node 侧（他自己总结过『最怕的不是没做，是做了没验证』）",
+    "🔴 cani.c 加 0x400~0x47F 分流会碰已经跑通的 CAN 接收，改错会连遥测一起影响（cani.c 是中断）",
+    "🟡 Hub 超时与 Node 超时必须对齐，否则 Hub 在等一个已被清掉的上下文",
+    "🟡 CAN 总线负载：升级期间 41KB 走 500kbps 会挤占遥测，需确认遥测不丢号",
+    "🟡 epoll_wait 加 timeout 会让整个循环变 10Hz 轮询，CPU 占用上升（方案 A 先能动；方案 B timerfd 更正确但引入新概念）",
+    "🟢 文件名解析已定『从严报错』"
+  ],
+  "git_divergence_2026_10_06": {
+    "local_windows_head": "aa93955 docs(README)文档更新",
+    "pi_head": "ecbcc78 (fix)hub:build.sh 不再配置 can0",
+    "finding": "两端 git 已分叉，但 edgehub/ 全部文件内容逐字节相同（LF 归一化后 md5 一致），因此 Hub 二次开发不受影响。Pi 侧多出 3 个提交：54b51e0(build.sh)、ecbcc78(build.sh)、2ec25e8(edgenode 自动重连 7 文件 +231 行)。本地 Windows 缺失 edgenode 的 2ec25e8，U6 需要 Node 侧配合时先在 Pi 上 git pull 或从 Pi 拉回。",
+    "caution": "本地工作区文件是 CRLF（Windows checkout），Pi 是 LF —— 直接比 md5 会全部不同，必须先做行尾归一化再比。"
+  },
+  "confusions_resolved": [
+    "Hub 侧加 OTA 不用改架构：TcpServe 构造参数是 (port, backlog) 不是硬编码 8888（Tcp.hpp:30）；fd_table 是 unordered_map<int,FdType> 哈希表 + 枚举（Gateruntime.hpp:23,61）；Epoll::wait 早就带 timeout_ms 参数（Epoll.hpp:31）—— 唯一的架构级改动点是 dispatchEvent 的 switch（Gateruntime.cpp:157）",
+    "epoll 是事件驱动：它只认识『某事发生了』，不认识『某事本该发生但没发生』。升级状态机要的『500ms 没回复』是时间不是事件 —— 这是模型边界，不是缺陷",
+    "0x400 通告不带 slot/version 的原因：Hub 此刻还不知道节点在哪个槽，正是这一问一答要问出来的。通告的职责只有一个 —— 告诉节点『准备收，把中转区清干净』",
+    "0x480 必须按 kind 分型的原因：CAN 一帧只有 8 字节，原载荷 4 字节 + slot 1 + version 4 = 9 > 8 塞不下。帧型决定布局是 CAN 协议标准做法",
+    "kind=3 通告回复带 version 只用于展示和跳过（已经是最新版本就跳过下发），不参与任何决策 —— 防降级已明确不做",
+    "通告同时定死了『擦除时机』：设计文档状态①『通告已收、中转区已擦、数据未到』一直落不了地，因为没人收通告",
+    "【2026-10-06 核实，计划文档没写清】Hub 收 0x480 回复帧：Can::init()（Can.cpp:119-144）只做 socket+bind，**从不调用 addFilter，内核过滤器为空 → 总线上所有帧都到达用户态**。所以接收侧的障碍不在内核，而在 handleCan() 的 ID 范围判断（Gateruntime.cpp:513-514）：can_id > 0x280+127 就 continue —— 0x480 走到这里被丢掉。写回复处理时必须先改这个判断，或把它拆成分派（遥测走原路径 / 0x480 走 OTA 回复路径）。注意 handleCan 里的 continue 在 while(true) 内层循环内，是『跳过本帧继续读下一帧』，不是退出循环。",
+    "【2026-10-06 核实】Gateruntime.cpp:510 的注释『不使用固定ID过滤：每个节点的ID不同，先接收后按遥测ID范围和DLC确认格式』是准确的 —— 设计上就是『内核全收，用户态筛』。优点是加新 ID 族不用碰内核过滤器配置。",
+    "【2026-10-06 教学发现】fd_table / fd 的具体映射形态是教学薄弱点：需要讲清 epoll 实例本身不持有『映射』，它只登记 fd + 事件掩码 + data；Gateruntime 用 unordered_map<int,FdType> 补上『这个 fd 是什么身份』这一层。类比=门铃面板只记『几号窗口按了铃』，前台额外拿一张名单才认得出身份。"
+  ],
+  "progress_log": [
+    "2026-10-06 建档。已完成侦察：两端代码一致性核实、Hub 架构通读（2653 行）、OTA 计划通读（417 行）、Node 侧契约通读（can_frame.h）、Pi 环境核实（工具链齐 / can0 DOWN / 无进程 / 无 firmware 目录）。",
+    "2026-10-06 教学判断修正：原判『强基础能自己写』错误，按兄弟档案改为『设计强 / 代码翻译弱』，教学法改为给整段中文流程规格。",
+    "2026-10-06 预警：Hub 事件驱动模型会把『变量寿命』弱点放大 —— 状态机里忘挂成员的临时值会在下次 tick 消失，症状与『收下第 1 帧就永远卡死』同源。",
+    "2026-10-06 U0 已完整讲授（类比=快递分拨中心前台管窗口；四个代码事实；结论=加功能不改架构，唯一绕不开的是时间）。留下一个开放问题未答：epoll_wait 加 timeout 之外，有没有第三条路（把『时间到』变成 fd 之一）？已给 timerfd 的事实提示。",
+    "2026-10-06 档案位置迁移：按他的要求从 C:\\Users\\memory\\.claude\\skills\\teacher\\teachers\\ 迁到工作区 EdgeLink/docs/teacher/edgenode-hub-ota/learning-state.json。原因：跨工作区写需每次批准权限。旧位置若残留同名副本需删除。",
+    "2026-10-06 教学风格三道硬约束（他连续提出）：①『不要一次性讲这么多，看我写的』②『不要用 namespace，要符合项目仓库的习惯』③『你直接读取』（他会把代码放在 Pi 上，要我用 ssh 去读，不要让他贴）。另外明确表示不需要做演示动画/演示服务器。",
+    "2026-10-06 【重要技术发现，值得反复讲】Content-Length 严格匹配：我写 Http 测试时把 `{\"node\": 3}` 的字节数数成 12，实际是 11。结果 7 个用例失败，症状很有教学价值 —— method/path 解析全对，但 poll() 返回 false，因为解析器在等第 12 个永远不会来的字节。**这恰好证明解析器是对的**：如果实现写成『buffer 里有多少就用多少』，这个测试反而会过，但它就变成会静默吞掉半个请求的解析器。与计划第 4 节『契约字段解析一律从严』同一原则。教训：字节长度要用脚本算，不要用眼睛数。",
+    "2026-10-06 【完成 + 已验证】Http 层落地：edgehub/inc/Http.hpp + edgehub/src/Http.cpp。他把我的骨架文件删了重做过（他先写了空 class Http，后来我按他要求代写完整版）。设计决策：HttpRequest（纯数据）+ Http（有状态解析器），**没有 HttpResponse 类** —— 因为响应是 `serialize(status, body)` 两个参数就够，不需要跨函数传递的类型（同 ota_reset 退化的判断）。state_ 用 enum class ParseState{WaitingHeader,WaitingBody,Complete} 而非 bool，因为卡住有两种原因，bool 会把它们混成一个『没完成』，调不出原因。8 个场景 22 个断言全部通过（一次性喂全 / 逐字节 / 头身交界切开 / GET 无 CL / 只有 \\n 没有 \\r / 响应逐字节拼装 / 头名大小写 / 粘包），g++ -Wall -Wextra 零警告。", 
+    "2026-10-06 【协作约束】测试文件不要放进 edgehub/src/ —— 他自己把 HttpTest.cpp 删了。正确做法：测试放 /tmp，编译命令 `g++ -std=c++17 -Wall -Wextra -Iinc -o /tmp/httptest edgehub/src/Http.cpp /tmp/HttpTest.cpp`。CMakeLists.txt 里暂时只加 src/Http.cpp。"
+  ],
+  "next": "Http.hpp / Http.cpp 已完成并验证（22 断言全过）。等他选下一步：A=逐段读 Http.cpp 讲解（他代码翻译弱，值得吃透）；B=接入 Gateruntime 开 8889（先不加任何命令，回固定 JSON）；C=加命令层 /api/nodes 查在线节点数（需先定『在线』判定标准——建议 receivedAtUs 在最近 N 秒内）。注意 U0 那个开放问题（第三条路）他没回答就选了 timerfd，U0 可视为通过。"
+}
