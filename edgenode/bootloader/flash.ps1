@@ -1,4 +1,4 @@
-<#
+﻿<#
     Build the Bootloader and program it through the existing EdgeNode ST-Link
     OpenOCD configuration.
 

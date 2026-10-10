@@ -632,6 +632,12 @@ uint8_t log_find_next_pending(
     {
         return LOG_FAIL;
     }
+    /* 没有待确认记录，直接结束，避免扫描整个日志区。 */
+    if(log_pending_count == 0U)
+    {
+        return LOG_NO_PENDING;
+    }
+
     /*
         2. 从已处理记录的下一个槽位开始找。
     */

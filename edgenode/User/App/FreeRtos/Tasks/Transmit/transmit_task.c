@@ -12,7 +12,7 @@
 #include <stdio.h>
 
 /*
-    TransmitTask 在 TCP 重连成功后置 1；LogTask 看到后把积压的 pending 补发一遍。
+    TransmitTask 在 TCP 重连成功或 CAN 从失败恢复后置 1；LogTask 看到后补发 pending。
     跨任务单字节标志：即使读写竞争，最坏也只是重复补发一次，
     而 log_confirm 和 Hub 的查重都是幂等的，重复不会出错。
 */
@@ -237,6 +237,10 @@ static void transmit_task(void *argument)
                     if(transmit_can_ack_wait(can_receive_queue,
                                              transmit_work.message.sequence) != 0U)
                     {
+                        if(can_state == HMI_LINK_OFFLINE)
+                        {
+                            link_restored = 1U;
+                        }
                         can_state = HMI_LINK_ONLINE;
                         transmit_success = 1U;
                     }
