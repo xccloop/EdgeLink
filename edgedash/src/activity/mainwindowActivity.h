@@ -1,8 +1,8 @@
 /***********************************************
 /gen auto by zuitools
 ***********************************************/
-#ifndef __TESTACTIVITY_H__
-#define __TESTACTIVITY_H__
+#ifndef __MAINWINDOWACTIVITY_H__
+#define __MAINWINDOWACTIVITY_H__
 
 
 #include "app/Activity.h"
@@ -26,10 +26,14 @@
 #include "window/ZKSlideWindow.h"
 
 /*TAG:Macro宏ID*/
-#define ID_TEST_Button1    20001
+#define ID_MAINWINDOW_wifi_ipaddress    50002
+#define ID_MAINWINDOW_wifi_ssid    50001
+#define ID_MAINWINDOW_Setting    20003
+#define ID_MAINWINDOW_Node    20002
+#define ID_MAINWINDOW_Home    20001
 /*TAG:Macro宏ID END*/
 
-class testActivity : public Activity, 
+class mainwindowActivity : public Activity, 
                      public ZKSeekBar::ISeekBarChangeListener, 
                      public ZKListView::IItemClickListener,
                      public ZKListView::AbsListAdapter,
@@ -39,8 +43,8 @@ class testActivity : public Activity,
                      public ZKVideoView::IVideoPlayerMessageListener
 {
 public:
-    testActivity();
-    virtual ~testActivity();
+    mainwindowActivity();
+    virtual ~mainwindowActivity();
 
     /**
      * 注册定时器

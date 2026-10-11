@@ -1,21 +1,25 @@
 /***********************************************
 /gen auto by zuitools
 ***********************************************/
-#include "testActivity.h"
+#include "mainwindowActivity.h"
 
 /*TAG:GlobalVariable全局变量*/
-static ZKButton* mButton1Ptr;
-static testActivity* mActivityPtr;
+static ZKTextView* mwifi_ipaddressPtr;
+static ZKTextView* mwifi_ssidPtr;
+static ZKButton* mSettingPtr;
+static ZKButton* mNodePtr;
+static ZKButton* mHomePtr;
+static mainwindowActivity* mActivityPtr;
 
 /*register activity*/
-REGISTER_ACTIVITY(testActivity);
+REGISTER_ACTIVITY(mainwindowActivity);
 
 typedef struct {
 	int id; // 定时器ID ， 不能重复
 	int time; // 定时器  时间间隔  单位 毫秒
 }S_ACTIVITY_TIMEER;
 
-#include "logic/testLogic.cc"
+#include "logic/mainwindowLogic.cc"
 
 /***********/
 typedef struct {
@@ -42,7 +46,9 @@ typedef struct {
 
 /*TAG:ButtonCallbackTab按键映射表*/
 static S_ButtonCallback sButtonCallbackTab[] = {
-    ID_TEST_Button1, onButtonClick_Button1,
+    ID_MAINWINDOW_Setting, onButtonClick_Setting,
+    ID_MAINWINDOW_Node, onButtonClick_Node,
+    ID_MAINWINDOW_Home, onButtonClick_Home,
 };
 /***************/
 
@@ -102,37 +108,45 @@ static S_VideoViewCallback SVideoViewCallbackTab[] = {
 };
 
 
-testActivity::testActivity() {
+mainwindowActivity::mainwindowActivity() {
 	//todo add init code here
 	mVideoLoopIndex = -1;
 	mVideoLoopErrorCount = 0;
 }
 
-testActivity::~testActivity() {
+mainwindowActivity::~mainwindowActivity() {
   //todo add init file here
   // 退出应用时需要反注册
     EASYUICONTEXT->unregisterGlobalTouchListener(this);
     unregisterProtocolDataUpdateListener(onProtocolDataUpdate);
     onUI_quit();
     mActivityPtr = NULL;
-    mButton1Ptr = NULL;
+    mwifi_ipaddressPtr = NULL;
+    mwifi_ssidPtr = NULL;
+    mSettingPtr = NULL;
+    mNodePtr = NULL;
+    mHomePtr = NULL;
 }
 
-const char* testActivity::getAppName() const{
-	return "test.ftu";
+const char* mainwindowActivity::getAppName() const{
+	return "mainwindow.ftu";
 }
 
 //TAG:onCreate
-void testActivity::onCreate() {
+void mainwindowActivity::onCreate() {
 	Activity::onCreate();
-    mButton1Ptr = (ZKButton*)findControlByID(ID_TEST_Button1);
+    mwifi_ipaddressPtr = (ZKTextView*)findControlByID(ID_MAINWINDOW_wifi_ipaddress);
+    mwifi_ssidPtr = (ZKTextView*)findControlByID(ID_MAINWINDOW_wifi_ssid);
+    mSettingPtr = (ZKButton*)findControlByID(ID_MAINWINDOW_Setting);
+    mNodePtr = (ZKButton*)findControlByID(ID_MAINWINDOW_Node);
+    mHomePtr = (ZKButton*)findControlByID(ID_MAINWINDOW_Home);
 	mActivityPtr = this;
 	onUI_init();
   registerProtocolDataUpdateListener(onProtocolDataUpdate);
   rigesterActivityTimer();
 }
 
-void testActivity::onClick(ZKBase *pBase) {
+void mainwindowActivity::onClick(ZKBase *pBase) {
 	//TODO: add widget onClik code 
     int buttonTablen = sizeof(sButtonCallbackTab) / sizeof(S_ButtonCallback);
     for (int i = 0; i < buttonTablen; ++i) {
@@ -156,30 +170,30 @@ void testActivity::onClick(ZKBase *pBase) {
 	Activity::onClick(pBase);
 }
 
-void testActivity::onResume() {
+void mainwindowActivity::onResume() {
 	Activity::onResume();
 	EASYUICONTEXT->registerGlobalTouchListener(this);
 	startVideoLoopPlayback();
 	onUI_show();
 }
 
-void testActivity::onPause() {
+void mainwindowActivity::onPause() {
 	Activity::onPause();
 	EASYUICONTEXT->unregisterGlobalTouchListener(this);
 	stopVideoLoopPlayback();
 	onUI_hide();
 }
 
-void testActivity::onIntent(const Intent *intentPtr) {
+void mainwindowActivity::onIntent(const Intent *intentPtr) {
 	Activity::onIntent(intentPtr);
 	onUI_intent(intentPtr);
 }
 
-bool testActivity::onTimer(int id) {
+bool mainwindowActivity::onTimer(int id) {
 	return onUI_Timer(id);
 }
 
-void testActivity::onProgressChanged(ZKSeekBar *pSeekBar, int progress){
+void mainwindowActivity::onProgressChanged(ZKSeekBar *pSeekBar, int progress){
 
     int seekBarTablen = sizeof(SZKSeekBarCallbackTab) / sizeof(S_ZKSeekBarCallback);
     for (int i = 0; i < seekBarTablen; ++i) {
@@ -190,7 +204,7 @@ void testActivity::onProgressChanged(ZKSeekBar *pSeekBar, int progress){
     }
 }
 
-int testActivity::getListItemCount(const ZKListView *pListView) const{
+int mainwindowActivity::getListItemCount(const ZKListView *pListView) const{
     int tablen = sizeof(SListViewFunctionsCallbackTab) / sizeof(S_ListViewFunctionsCallback);
     for (int i = 0; i < tablen; ++i) {
         if (SListViewFunctionsCallbackTab[i].id == pListView->getID()) {
@@ -201,7 +215,7 @@ int testActivity::getListItemCount(const ZKListView *pListView) const{
     return 0;
 }
 
-void testActivity::obtainListItemData(ZKListView *pListView,ZKListView::ZKListItem *pListItem, int index){
+void mainwindowActivity::obtainListItemData(ZKListView *pListView,ZKListView::ZKListItem *pListItem, int index){
     int tablen = sizeof(SListViewFunctionsCallbackTab) / sizeof(S_ListViewFunctionsCallback);
     for (int i = 0; i < tablen; ++i) {
         if (SListViewFunctionsCallbackTab[i].id == pListView->getID()) {
@@ -211,7 +225,7 @@ void testActivity::obtainListItemData(ZKListView *pListView,ZKListView::ZKListIt
     }
 }
 
-void testActivity::onItemClick(ZKListView *pListView, int index, int id){
+void mainwindowActivity::onItemClick(ZKListView *pListView, int index, int id){
     int tablen = sizeof(SListViewFunctionsCallbackTab) / sizeof(S_ListViewFunctionsCallback);
     for (int i = 0; i < tablen; ++i) {
         if (SListViewFunctionsCallbackTab[i].id == pListView->getID()) {
@@ -221,7 +235,7 @@ void testActivity::onItemClick(ZKListView *pListView, int index, int id){
     }
 }
 
-void testActivity::onSlideItemClick(ZKSlideWindow *pSlideWindow, int index) {
+void mainwindowActivity::onSlideItemClick(ZKSlideWindow *pSlideWindow, int index) {
     int tablen = sizeof(SSlideWindowItemClickCallbackTab) / sizeof(S_SlideWindowItemClickCallback);
     for (int i = 0; i < tablen; ++i) {
         if (SSlideWindowItemClickCallbackTab[i].id == pSlideWindow->getID()) {
@@ -231,11 +245,11 @@ void testActivity::onSlideItemClick(ZKSlideWindow *pSlideWindow, int index) {
     }
 }
 
-bool testActivity::onTouchEvent(const MotionEvent &ev) {
-    return ontestActivityTouchEvent(ev);
+bool mainwindowActivity::onTouchEvent(const MotionEvent &ev) {
+    return onmainwindowActivityTouchEvent(ev);
 }
 
-void testActivity::onTextChanged(ZKTextView *pTextView, const std::string &text) {
+void mainwindowActivity::onTextChanged(ZKTextView *pTextView, const std::string &text) {
     int tablen = sizeof(SEditTextInputCallbackTab) / sizeof(S_EditTextInputCallback);
     for (int i = 0; i < tablen; ++i) {
         if (SEditTextInputCallbackTab[i].id == pTextView->getID()) {
@@ -245,7 +259,7 @@ void testActivity::onTextChanged(ZKTextView *pTextView, const std::string &text)
     }
 }
 
-void testActivity::rigesterActivityTimer() {
+void mainwindowActivity::rigesterActivityTimer() {
     int tablen = sizeof(REGISTER_ACTIVITY_TIMER_TAB) / sizeof(S_ACTIVITY_TIMEER);
     for (int i = 0; i < tablen; ++i) {
         S_ACTIVITY_TIMEER temp = REGISTER_ACTIVITY_TIMER_TAB[i];
@@ -254,7 +268,7 @@ void testActivity::rigesterActivityTimer() {
 }
 
 
-void testActivity::onVideoPlayerMessage(ZKVideoView *pVideoView, int msg) {
+void mainwindowActivity::onVideoPlayerMessage(ZKVideoView *pVideoView, int msg) {
     int tablen = sizeof(SVideoViewCallbackTab) / sizeof(S_VideoViewCallback);
     for (int i = 0; i < tablen; ++i) {
         if (SVideoViewCallbackTab[i].id == pVideoView->getID()) {
@@ -269,7 +283,7 @@ void testActivity::onVideoPlayerMessage(ZKVideoView *pVideoView, int msg) {
     }
 }
 
-void testActivity::videoLoopPlayback(ZKVideoView *pVideoView, int msg, size_t callbackTabIndex) {
+void mainwindowActivity::videoLoopPlayback(ZKVideoView *pVideoView, int msg, size_t callbackTabIndex) {
 
 	switch (msg) {
 	case ZKVideoView::E_MSGTYPE_VIDEO_PLAY_STARTED:
@@ -309,7 +323,7 @@ void testActivity::videoLoopPlayback(ZKVideoView *pVideoView, int msg, size_t ca
 	}
 }
 
-void testActivity::startVideoLoopPlayback() {
+void mainwindowActivity::startVideoLoopPlayback() {
     int tablen = sizeof(SVideoViewCallbackTab) / sizeof(S_VideoViewCallback);
     for (int i = 0; i < tablen; ++i) {
     	if (SVideoViewCallbackTab[i].loop) {
@@ -324,7 +338,7 @@ void testActivity::startVideoLoopPlayback() {
     }
 }
 
-void testActivity::stopVideoLoopPlayback() {
+void mainwindowActivity::stopVideoLoopPlayback() {
     int tablen = sizeof(SVideoViewCallbackTab) / sizeof(S_VideoViewCallback);
     for (int i = 0; i < tablen; ++i) {
     	if (SVideoViewCallbackTab[i].loop) {
@@ -340,7 +354,7 @@ void testActivity::stopVideoLoopPlayback() {
     }
 }
 
-bool testActivity::parseVideoFileList(const char *pFileListPath, std::vector<string>& mediaFileList) {
+bool mainwindowActivity::parseVideoFileList(const char *pFileListPath, std::vector<string>& mediaFileList) {
 	mediaFileList.clear();
 	if (NULL == pFileListPath || 0 == strlen(pFileListPath)) {
         LOGD("video file list is null!");
@@ -372,7 +386,7 @@ bool testActivity::parseVideoFileList(const char *pFileListPath, std::vector<str
 	return true;
 }
 
-int testActivity::removeCharFromString(string& nString, char c) {
+int mainwindowActivity::removeCharFromString(string& nString, char c) {
     string::size_type   pos;
     while(1) {
         pos = nString.find(c);
@@ -385,14 +399,14 @@ int testActivity::removeCharFromString(string& nString, char c) {
     return (int)nString.size();
 }
 
-void testActivity::registerUserTimer(int id, int time) {
+void mainwindowActivity::registerUserTimer(int id, int time) {
 	registerTimer(id, time);
 }
 
-void testActivity::unregisterUserTimer(int id) {
+void mainwindowActivity::unregisterUserTimer(int id) {
 	unregisterTimer(id);
 }
 
-void testActivity::resetUserTimer(int id, int time) {
+void mainwindowActivity::resetUserTimer(int id, int time) {
 	resetTimer(id, time);
 }

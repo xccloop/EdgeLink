@@ -130,6 +130,6 @@ static bool onmainActivityTouchEvent(const MotionEvent &ev) {
 }
 static bool onButtonClick_Button1(ZKButton *pButton) {
     LOGD(" ButtonClick Button1 !!!\n");
-    EASYUICONTEXT->openActivity("testActivity");
+    EASYUICONTEXT->openActivity("mainwindowActivity");
     return false;
 }

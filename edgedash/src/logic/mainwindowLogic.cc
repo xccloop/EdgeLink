@@ -1,5 +1,7 @@
 #pragma once
 #include "uart/ProtocolSender.h"
+#include "net/NetManager.h"
+#include <cstring>
 /*
 *此文件由GUI工具生成
 *文件功能：用于处理用户的逻辑相应代码
@@ -37,15 +39,38 @@
  * 注意：id不能重复
  */
 static S_ACTIVITY_TIMEER REGISTER_ACTIVITY_TIMER_TAB[] = {
-	//{0,  6000}, //定时器id=0, 时间间隔6秒
-	//{1,  1000},
+	{0, 1000},
 };
+
+static void updateWifiText() {
+    WifiManager *wifi = NETMANAGER->getWifiManager();
+    if (wifi == NULL || !wifi->isConnected()) {
+        mwifi_ssidPtr->setText("未连接");
+        mwifi_ipaddressPtr->setText("--");
+        return;
+    }
+
+    const WifiInfo *info = wifi->getConnectionInfo();
+    if (info != NULL) {
+        mwifi_ssidPtr->setText(info->getSsid().c_str());
+    } else {
+        mwifi_ssidPtr->setText("未连接");
+    }
+
+    const char *ip = wifi->getIp();
+    if (ip != NULL && ip[0] != '\0' && std::strcmp(ip, "0.0.0.0") != 0) {
+        mwifi_ipaddressPtr->setText(ip);
+    } else {
+        mwifi_ipaddressPtr->setText("--");
+    }
+}
 
 /**
  * 当界面构造时触发
  */
 static void onUI_init(){
     //Tips :添加 UI初始化的显示代码到这里,如:mText1Ptr->setText("123");
+    updateWifiText();
 }
 
 /**
@@ -61,7 +86,7 @@ static void onUI_intent(const Intent *intentPtr) {
  * 当界面显示时触发
  */
 static void onUI_show() {
-
+    updateWifiText();
 }
 
 /*
@@ -97,7 +122,9 @@ static void onProtocolDataUpdate(const SProtocolData &data) {
  */
 static bool onUI_Timer(int id){
 	switch (id) {
-
+		case 0:
+            updateWifiText();
+			break;
 		default:
 			break;
 	}
@@ -113,7 +140,7 @@ static bool onUI_Timer(int id){
  *         false
  *            触摸事件将继续传递到控件上
  */
-static bool ontestActivityTouchEvent(const MotionEvent &ev) {
+static bool onmainwindowActivityTouchEvent(const MotionEvent &ev) {
     switch (ev.mActionStatus) {
 		case MotionEvent::E_ACTION_DOWN://触摸按下
 			//LOGD("时刻 = %ld 坐标  x = %d, y = %d", ev.mEventTime, ev.mX, ev.mY);
@@ -129,6 +156,23 @@ static bool ontestActivityTouchEvent(const MotionEvent &ev) {
 }
 static bool onButtonClick_Button1(ZKButton *pButton) {
     LOGD(" ButtonClick Button1 !!!\n");
-    EASYUICONTEXT->openActivity("mainActivity");
+    return false;
+}
+
+static bool onButtonClick_Button2(ZKButton *pButton) {
+    LOGD(" ButtonClick Button2 !!!\n");
+    return false;
+}
+static bool onButtonClick_Home(ZKButton *pButton) {
+    LOGD(" ButtonClick Home !!!\n");
+    return false;
+}
+
+static bool onButtonClick_Node(ZKButton *pButton) {
+    LOGD(" ButtonClick Node !!!\n");
+    return false;
+}
+static bool onButtonClick_Setting(ZKButton *pButton) {
+    LOGD(" ButtonClick Setting !!!\n");
     return false;
 }
