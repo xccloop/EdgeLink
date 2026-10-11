@@ -1,16 +1,16 @@
 cmake_minimum_required(VERSION 3.10)
-project(Edgehub CXX)
+
+# 需要 C 语言：SQLite 的 amalgamation 是 C 源码，交给 C 编译器编。
+project(Edgehub C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# 查找 SQLite3 开发包（如果系统未安装，会报错）
-find_package(SQLite3 REQUIRED)
-
-# 通过根目录头文件夹，对应 -I 参数
+# 头文件搜索路径
 include_directories(${CMAKE_SOURCE_DIR}/inc)
+# SQLite amalgamation 的头文件（见 tools/README.md）
+include_directories(${CMAKE_SOURCE_DIR}/tools/sqlite)
 
-# 列出需要编译的 .cpp 文件，不需要列出 .hpp。
 add_executable(Edgehub
     main.cpp
     src/CRC.cpp
@@ -25,7 +25,10 @@ add_executable(Edgehub
     src/Http.cpp
     src/HttpHandle.cpp
     src/OTA.cpp
+    # SQLite 直接编进可执行文件，不用 find_package(SQLite3)：
+    # 龙芯交叉工具链的 sysroot 里没有 sqlite3，而这样本地和交叉用的是同一份代码。
+    tools/sqlite/sqlite3.c
 )
 
-# 为 Edgehub 链接 SQLite 库
-target_link_libraries(Edgehub PRIVATE SQLite::SQLite3)
+# SQLite 用到 dlopen（扩展加载）和数学函数
+target_link_libraries(Edgehub PRIVATE pthread dl m)

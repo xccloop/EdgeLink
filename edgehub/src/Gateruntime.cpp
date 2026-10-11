@@ -4,6 +4,11 @@
 #include <ratio>
 #include <sys/epoll.h>
 
+// EdgeHub 的 SQLite 数据库路径。
+// 用相对路径：部署到开发板后在 /home/root 下运行，本地跑就是当前工作目录，
+// 两边同一份代码、同一个路径，不用为不同机器改代码。
+static const char *const kDbPath = "data/edgehub.db";
+
 /*
     GateRuntime 负责拥有并初始化 EdgeHub 的运行时资源：TcpServe、Can、Epoll、
     Storage、客户端状态数组和 fd 类型表；它在事件循环中根据就绪 fd 分发 TCP
@@ -121,9 +126,10 @@ bool Gateruntime::init()
     fd_table.emplace(tcp_fd, FdType::Tcpserve);
     fd_table.emplace(http_fd,FdType::Httpserve);
 
-    if(_storage.open("/home/qxc/Desktop/EdgeLink/edgehub/data/edgehub.db") == false)
+    if(_storage.open(kDbPath) == false)
     {
-        printf("Failed to open SQLite database: /home/qxc/Desktop/Mini_Edgehub/data/edgehub.db\n");
+        // 用 %s 打印实际用的路径，不会再出现"打印的路径和真正打开的路径不一致"的情况
+        printf("Failed to open SQLite database: %s\n", kDbPath);
         return false;
     }
     if(_storage.createTable() == false)

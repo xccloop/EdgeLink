@@ -22,17 +22,29 @@
 
 #include "Gateruntime.hpp"
 
+#include <csignal>   // signal / SIGINT / sig_atomic_t
+#include <cstdio>    // printf / stdout / setvbuf / _IONBF
+
 static volatile sig_atomic_t g_running = 1;
 static void sig_handler(int) { g_running = 0; }
 
 int main()
 {
+    /* stdout 接到文件或管道时，默认是"全缓冲"（攒够 4KB 才写出去）。
+       程序一旦进入事件循环就永不退出，日志会一直卡在缓冲区里看不见。
+       板子上没有 stdbuf 命令，所以只能在这里自己关掉缓冲。
+       _IONBF = 不缓冲，每条 printf 立刻写出去。
+       （想减少系统调用可以换成 _IOLBF 行缓冲，但那样每句都得带 \n。） */
+    setvbuf(stdout, NULL, _IONBF, 0);
+
     signal(SIGINT, sig_handler);
     signal(SIGTERM, sig_handler);
     signal(SIGPIPE, SIG_IGN);
-    
+
     Gateruntime runtime;
-    
+
+    printf("EdgeHub starting...\n");
+
     if(runtime.init() == false)
     {
         return 1;
