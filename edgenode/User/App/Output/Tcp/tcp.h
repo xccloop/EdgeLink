@@ -31,6 +31,10 @@ uint8_t tcp_connected_get(void);
 */
 uint8_t tcp_try_reconnect(void);
 
+/* 仅由 TransmitTask 调用。service 不等待 AT 回应，返回 1 表示新连接可用于补发。 */
+uint8_t tcp_recovery_service(void);
+void tcp_recovery_note_ack(uint8_t success);
+
 /* 已建连时按ESP-AT普通模式发送一段原始字节；只有收到SEND OK才报告成功。 */
 uint8_t tcp_data_send(const uint8_t *data, uint8_t length);
 

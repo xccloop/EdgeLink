@@ -38,6 +38,218 @@ static char tcp_ssid_saved[TCP_SSID_SIZE];//存储ssid
 /* tcp_init() 校验通过的配置留一份，重连时只需重发 CIPSTART，不必重跑 CWJAP。 */
 static const tcp_config_struct *tcp_saved_config;
 
+typedef enum
+{
+    TCP_RECOVERY_IDLE,
+    TCP_RECOVERY_CLOSE,
+    TCP_RECOVERY_CONNECT,
+    TCP_RECOVERY_RESET,
+    TCP_RECOVERY_STATION,
+    TCP_RECOVERY_JOIN,
+    TCP_RECOVERY_MUX,
+    TCP_RECOVERY_MODE
+} tcp_recovery_state_t;
+
+static tcp_recovery_state_t recovery_state;
+static uint32_t recovery_started_ms;
+static uint32_t recovery_wait_ms;
+static uint8_t recovery_attempts;
+static uint8_t recovery_ack_misses;
+static uint8_t recovery_connect_seen;
+static uint8_t recovery_ok_seen;
+
+static uint8_t tcp_recovery_command(tcp_recovery_state_t state)
+{
+    const char *command = NULL;
+    int length = 0;
+
+    switch(state)
+    {
+        case TCP_RECOVERY_CLOSE: command = ESP_AT_CIPCLOSE; break;
+        case TCP_RECOVERY_RESET: command = ESP_AT_RST; break;
+        case TCP_RECOVERY_STATION: command = "AT+CWMODE=1\r\n"; break;
+        case TCP_RECOVERY_MUX: command = "AT+CIPMUX=0\r\n"; break;
+        case TCP_RECOVERY_MODE: command = "AT+CIPMODE=0\r\n"; break;
+        case TCP_RECOVERY_JOIN:
+            length = snprintf(tcp_command_buffer, sizeof(tcp_command_buffer),
+                              "AT+CWJAP=\"%s\",\"%s\"\r\n",
+                              tcp_saved_config->wifi_ssid, tcp_saved_config->wifi_password);
+            command = tcp_command_buffer;
+            break;
+        case TCP_RECOVERY_CONNECT:
+            length = snprintf(tcp_command_buffer, sizeof(tcp_command_buffer),
+                              "AT+CIPSTART=\"TCP\",\"%s\",%u\r\n",
+                              tcp_saved_config->server_ip,
+                              (unsigned int)tcp_saved_config->server_port);
+            command = tcp_command_buffer;
+            break;
+        default: return TCP_FAIL;
+    }
+    if((length < 0) || ((uint32_t)length >= sizeof(tcp_command_buffer)))
+    {
+        return TCP_FAIL;
+    }
+    recovery_state = state;
+    recovery_started_ms = board_systick_ms;
+    recovery_wait_ms = (state == TCP_RECOVERY_JOIN) ? TCP_WIFI_JOIN_TIMEOUT_MS :
+                       (state == TCP_RECOVERY_RESET) ? 15000U :
+                       (state == TCP_RECOVERY_CONNECT) ? TCP_RECONNECT_TIMEOUT_MS : TCP_AT_TIMEOUT_MS;
+    recovery_connect_seen = 0U;
+    recovery_ok_seen = 0U;
+    esp12s_response_reset();
+    esp12s_cmd_send(command);
+    printf("[tcp recovery] stage=%u attempt=%u\r\n", (unsigned int)state,
+           (unsigned int)recovery_attempts);
+    return TCP_SUCCESS;
+}
+
+static void tcp_recovery_failed(void)
+{
+    printf("[tcp recovery] failed stage=%u; retry later\r\n", (unsigned int)recovery_state);
+    recovery_state = TCP_RECOVERY_IDLE;
+    tcp_connected = TCP_FAIL;
+    recovery_started_ms = board_systick_ms;
+    recovery_wait_ms = (recovery_attempts >= 3U) ? 30000U : 5000U;
+}
+
+void tcp_recovery_note_ack(uint8_t success)
+{
+    /* 跳过恢复期间的 CAN 回退，只有实际尝试 TCP 的结果才由调用方上报。 */
+    if(success != 0U)
+    {
+        if((recovery_attempts != 0U) || (recovery_ack_misses != 0U))
+        {
+            printf("[tcp recovery] business ACK verified\r\n");
+        }
+        recovery_attempts = 0U;
+        recovery_ack_misses = 0U;
+    }
+    else
+    {
+        if(recovery_ack_misses < 5U)
+        {
+            recovery_ack_misses++;
+        }
+        if(recovery_ack_misses >= 5U)
+        {
+            tcp_connected = TCP_FAIL;
+        }
+    }
+}
+
+uint8_t tcp_recovery_service(void)
+{
+    esp12s_response_t response;
+    uint8_t finished = 0U;
+    uint8_t count;
+    tcp_recovery_state_t next;
+
+    if(tcp_saved_config == NULL)
+    {
+        return TCP_FAIL;
+    }
+    /* 限制每轮消费数量，保持 CAN/OTA 队列能够继续处理。 */
+    for(count = 0U; count < 16U; count++)
+    {
+        if(esp12s_response_get(&response) == 0U)
+        {
+            break;
+        }
+        if(response == ESP12S_RESPONSE_WIFI_CONNECTED)
+        {
+            wifi_connected = TCP_SUCCESS;
+        }
+        if(recovery_state == TCP_RECOVERY_IDLE)
+        {
+            if(response == ESP12S_RESPONSE_READY)
+            {
+                wifi_connected = TCP_FAIL;
+            }
+            if((response == ESP12S_RESPONSE_CLOSED) || (response == ESP12S_RESPONSE_READY))
+            {
+                tcp_connected = TCP_FAIL;
+            }
+            continue;
+        }
+        if(recovery_state == TCP_RECOVERY_RESET)
+        {
+            if(response == ESP12S_RESPONSE_READY)
+            {
+                finished = 1U;
+            }
+            continue;
+        }
+        /* 无连接时 CIPCLOSE 可回 ERROR；超时则不当作关闭成功。 */
+        if((recovery_state == TCP_RECOVERY_CLOSE) &&
+           (response == ESP12S_RESPONSE_ERROR))
+        {
+            finished = 1U;
+            continue;
+        }
+        if((response == ESP12S_RESPONSE_ERROR) || (response == ESP12S_RESPONSE_FAIL) ||
+           (response == ESP12S_RESPONSE_BUSY) ||
+           ((response == ESP12S_RESPONSE_CLOSED) && (recovery_state != TCP_RECOVERY_CLOSE)))
+        {
+            tcp_recovery_failed();
+            return TCP_FAIL;
+        }
+        if(response == ESP12S_RESPONSE_CONNECT) recovery_connect_seen = 1U;
+        if(response == ESP12S_RESPONSE_OK) recovery_ok_seen = 1U;
+        if((recovery_ok_seen != 0U) &&
+           ((recovery_state != TCP_RECOVERY_CONNECT) || (recovery_connect_seen != 0U)))
+        {
+            finished = 1U;
+        }
+    }
+    if(recovery_state == TCP_RECOVERY_IDLE)
+    {
+        if((tcp_connected == TCP_FAIL) &&
+           ((uint32_t)(board_systick_ms - recovery_started_ms) >= recovery_wait_ms))
+        {
+            if(recovery_attempts < 3U)
+            {
+                recovery_attempts++;
+                next = TCP_RECOVERY_CLOSE;
+            }
+            else
+            {
+                wifi_connected = TCP_FAIL;
+                next = TCP_RECOVERY_RESET;
+            }
+            recovery_ack_misses = 0U;
+            if(tcp_recovery_command(next) == TCP_FAIL) tcp_recovery_failed();
+        }
+        return TCP_FAIL;
+    }
+    if(finished == 0U)
+    {
+        if((uint32_t)(board_systick_ms - recovery_started_ms) >= recovery_wait_ms)
+        {
+            tcp_recovery_failed();
+        }
+        return TCP_FAIL;
+    }
+    switch(recovery_state)
+    {
+        case TCP_RECOVERY_CLOSE: next = TCP_RECOVERY_CONNECT; break;
+        case TCP_RECOVERY_RESET: next = TCP_RECOVERY_STATION; break;
+        case TCP_RECOVERY_STATION: next = TCP_RECOVERY_JOIN; break;
+        case TCP_RECOVERY_JOIN: next = TCP_RECOVERY_MUX; break;
+        case TCP_RECOVERY_MUX: next = TCP_RECOVERY_MODE; break;
+        case TCP_RECOVERY_MODE: next = TCP_RECOVERY_CONNECT; break;
+        case TCP_RECOVERY_CONNECT:
+            recovery_state = TCP_RECOVERY_IDLE;
+            recovery_started_ms = board_systick_ms;
+            recovery_wait_ms = 5000U;
+            tcp_connected = TCP_SUCCESS;
+            printf("[tcp recovery] connected; awaiting business ACK\r\n");
+            return TCP_SUCCESS;
+        default: return TCP_FAIL;
+    }
+    if(tcp_recovery_command(next) == TCP_FAIL) tcp_recovery_failed();
+    return TCP_FAIL;
+}
+
 static uint8_t tcp_deadline_expired(uint32_t deadline_ms)
 {
     return ((uint32_t)(board_systick_ms - deadline_ms) < 0x80000000U) ? TCP_SUCCESS : TCP_FAIL;
@@ -267,6 +479,11 @@ uint8_t tcp_init(const tcp_config_struct *config)
 
     /* 只有配置通过校验才记住，供 tcp_try_reconnect() 复用。 */
     tcp_saved_config = config;
+    recovery_state = TCP_RECOVERY_IDLE;
+    recovery_attempts = 0U;
+    recovery_ack_misses = 0U;
+    recovery_started_ms = board_systick_ms;
+    recovery_wait_ms = 5000U;
 
     /* BOARD先配置USART1的NVIC和SysTick；这里才初始化ESP12S的USART1硬件。 */
     esp12s_init();
@@ -393,7 +610,8 @@ uint8_t tcp_data_send(const uint8_t *data, uint8_t length)
 {
     int command_length;
 
-    if((data == NULL) || (length == 0U) || (tcp_connected == TCP_FAIL))
+    if((data == NULL) || (length == 0U) || (tcp_connected == TCP_FAIL) ||
+       (recovery_state != TCP_RECOVERY_IDLE))
     {
         return TCP_SEND_FAIL;
     }

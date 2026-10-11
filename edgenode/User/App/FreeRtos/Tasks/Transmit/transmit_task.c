@@ -18,12 +18,6 @@
 */
 volatile uint8_t link_restored;
 
-/* 上次尝试 TCP 重连的时刻，用来给重连加冷却。 */
-static TickType_t last_reconnect_tick;
-
-/* 两条记录之间至少间隔这么久才再试一次重连，避免网关长期不在时每条都卡在 CIPSTART。 */
-#define TCP_RECONNECT_COOLDOWN_MS 5000U
-
 #define TRANSMIT_ACK_WAIT_MS 1000U
 
 static void transmit_tcp_ack_queue_clear(QueueHandle_t tcp_ack_queue)
@@ -156,7 +150,6 @@ static void transmit_task(void *argument)
     ota_reply_request_t ota_reply;
     char log_line[HMI_LOG_LINE_SIZE];
     const char *link;
-    TickType_t now_tick;
 
     (void)argument;
 
@@ -180,6 +173,11 @@ static void transmit_task(void *argument)
 
     while(1)
     {
+        if(tcp_recovery_service() == TCP_SUCCESS)
+        {
+            link_restored = 1U;
+        }
+
         /*
             OTA 回复优先：Hub 发完一个窗口就停下来等它，它晚一步，整个传输就晚一步。
             非阻塞取，取到就发、立刻回环，不占用等待遥测的时间。
@@ -217,14 +215,15 @@ static void transmit_task(void *argument)
             link = NULL;
 
             transmit_tcp_ack_queue_clear(tcp_ack_queue);
-            if(tcp_frame_transmit(&transmit_work.message) == TCP_TRANSMIT_SUCCESS)
+            if(tcp_connected_get() == TCP_SUCCESS)
             {
-                link = "TCP";
-                if(transmit_tcp_ack_wait(tcp_ack_queue,
-                                         transmit_work.message.sequence) != 0U)
+                if(tcp_frame_transmit(&transmit_work.message) == TCP_TRANSMIT_SUCCESS)
                 {
-                    transmit_success = 1U;
+                    link = "TCP";
+                    transmit_success = transmit_tcp_ack_wait(tcp_ack_queue,
+                                                             transmit_work.message.sequence);
                 }
+                tcp_recovery_note_ack(transmit_success);
             }
 
             if(transmit_success == 0U)
@@ -250,28 +249,6 @@ static void transmit_task(void *argument)
             if(transmit_success == 0U)
             {
                 can_state = HMI_LINK_OFFLINE;
-            }
-
-            /*
-                TCP 这条路失败：多半是链路已经断了。
-                按冷却低频尝试重连；一旦成功就置 link_restored，
-                通知 LogTask 把积压的 pending 补发一遍。
-                tick 冷却避免网关一直不在时，每条记录都卡在 CIPSTART 上。
-            */
-            if(tcp_connected_get() == TCP_FAIL)
-            {
-                now_tick = xTaskGetTickCount();
-
-                if((now_tick - last_reconnect_tick) >=
-                   pdMS_TO_TICKS(TCP_RECONNECT_COOLDOWN_MS))
-                {
-                    last_reconnect_tick = now_tick;
-
-                    if(tcp_try_reconnect() == TCP_SUCCESS)
-                    {
-                        link_restored = 1U;
-                    }
-                }
             }
 
             /*
