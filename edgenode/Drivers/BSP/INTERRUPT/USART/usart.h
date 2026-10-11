@@ -26,6 +26,10 @@ typedef enum
 /* APP从回应队列取出一个事件；返回0表示当前没有新的完整回应。 */
 uint8_t esp12s_response_get(esp12s_response_t *response);
 
+/* Only network address/status lines are retained; command echoes are excluded. */
+#define ESP12S_DIAGNOSTIC_LINE_SIZE 96U
+uint8_t esp12s_diagnostic_get(char *buffer, uint8_t size);
+
 //获取ip
 uint8_t esp12s_local_ip_get(char *buffer, uint8_t size);
 

@@ -26,6 +26,7 @@ uint8_t esp12s_response_get(esp12s_response_t *r) {
     *r = events[head++]; return 1;
 }
 uint8_t esp12s_local_ip_get(char *buffer, uint8_t size) { (void)buffer; (void)size; return 0; }
+uint8_t esp12s_diagnostic_get(char *buffer, uint8_t size) { (void)buffer; (void)size; return 0; }
 void vTaskDelay(unsigned ticks) { delays++; board_systick_ms += ticks; }
 static void event(esp12s_response_t r) { assert(tail < 32); events[tail++] = r; }
 static void setup(uint32_t now) {
@@ -78,6 +79,18 @@ int main(void) {
     assert(recovery_state == TCP_RECOVERY_JOIN);
     assert(strncmp(last_command, "AT+CWJAP=", 9) == 0);
     event(ESP12S_RESPONSE_WIFI_CONNECTED); event(ESP12S_RESPONSE_WIFI_GOT_IP);
+    event(ESP12S_RESPONSE_OK); tcp_recovery_service();
+    assert(strcmp(last_command, "AT+CIPSTA?\r\n") == 0);
+    event(ESP12S_RESPONSE_ERROR); tcp_recovery_service(); /* optional on old AT firmware */
+    assert(strcmp(last_command, "AT+CIFSR\r\n") == 0);
+    event(ESP12S_RESPONSE_OK); tcp_recovery_service();
+    assert(strcmp(last_command, "AT+CIPSTATUS\r\n") == 0);
+    event(ESP12S_RESPONSE_OK); tcp_recovery_service();
+    assert(strcmp(last_command, "AT+CWJAP?\r\n") == 0);
+    event(ESP12S_RESPONSE_OK); tcp_recovery_service();
+    assert(strcmp(last_command, "AT+SLEEP?\r\n") == 0);
+    event(ESP12S_RESPONSE_ERROR); tcp_recovery_service();
+    assert(strcmp(last_command, "AT+GMR\r\n") == 0);
     event(ESP12S_RESPONSE_OK); tcp_recovery_service();
     assert(recovery_state == TCP_RECOVERY_MUX);
     event(ESP12S_RESPONSE_OK); tcp_recovery_service();

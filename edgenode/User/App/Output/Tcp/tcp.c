@@ -47,7 +47,13 @@ typedef enum
     TCP_RECOVERY_STATION,
     TCP_RECOVERY_JOIN,
     TCP_RECOVERY_MUX,
-    TCP_RECOVERY_MODE
+    TCP_RECOVERY_MODE,
+    TCP_RECOVERY_ADDRESS,
+    TCP_RECOVERY_LOCAL_INFO,
+    TCP_RECOVERY_STATUS,
+    TCP_RECOVERY_AP,
+    TCP_RECOVERY_POWER,
+    TCP_RECOVERY_VERSION
 } tcp_recovery_state_t;
 
 static tcp_recovery_state_t recovery_state;
@@ -57,6 +63,36 @@ static uint8_t recovery_attempts;
 static uint8_t recovery_ack_misses;
 static uint8_t recovery_connect_seen;
 static uint8_t recovery_ok_seen;
+
+static void tcp_diagnostic_print(void)
+{
+    char line[ESP12S_DIAGNOSTIC_LINE_SIZE];
+    uint8_t count;
+    for(count = 0U; count < 8U; count++)
+    {
+        if(esp12s_diagnostic_get(line, sizeof(line)) == 0U) break;
+        printf("[tcp net] %s\r\n", line);
+    }
+}
+
+static const char *tcp_response_name(esp12s_response_t response)
+{
+    switch(response)
+    {
+        case ESP12S_RESPONSE_OK: return "OK";
+        case ESP12S_RESPONSE_ERROR: return "ERROR";
+        case ESP12S_RESPONSE_FAIL: return "FAIL";
+        case ESP12S_RESPONSE_PROMPT: return "PROMPT";
+        case ESP12S_RESPONSE_SEND_OK: return "SEND OK";
+        case ESP12S_RESPONSE_CONNECT: return "CONNECT";
+        case ESP12S_RESPONSE_CLOSED: return "CLOSED";
+        case ESP12S_RESPONSE_WIFI_CONNECTED: return "WIFI CONNECTED";
+        case ESP12S_RESPONSE_WIFI_GOT_IP: return "WIFI GOT IP";
+        case ESP12S_RESPONSE_BUSY: return "BUSY";
+        case ESP12S_RESPONSE_READY: return "READY";
+        default: return "UNKNOWN";
+    }
+}
 
 static uint8_t tcp_recovery_command(tcp_recovery_state_t state)
 {
@@ -70,6 +106,12 @@ static uint8_t tcp_recovery_command(tcp_recovery_state_t state)
         case TCP_RECOVERY_STATION: command = "AT+CWMODE=1\r\n"; break;
         case TCP_RECOVERY_MUX: command = "AT+CIPMUX=0\r\n"; break;
         case TCP_RECOVERY_MODE: command = "AT+CIPMODE=0\r\n"; break;
+        case TCP_RECOVERY_ADDRESS: command = "AT+CIPSTA?\r\n"; break;
+        case TCP_RECOVERY_LOCAL_INFO: command = ESP_AT_CIFSR; break;
+        case TCP_RECOVERY_STATUS: command = "AT+CIPSTATUS\r\n"; break;
+        case TCP_RECOVERY_AP: command = "AT+CWJAP?\r\n"; break;
+        case TCP_RECOVERY_POWER: command = "AT+SLEEP?\r\n"; break;
+        case TCP_RECOVERY_VERSION: command = "AT+GMR\r\n"; break;
         case TCP_RECOVERY_JOIN:
             length = snprintf(tcp_command_buffer, sizeof(tcp_command_buffer),
                               "AT+CWJAP=\"%s\",\"%s\"\r\n",
@@ -87,6 +129,7 @@ static uint8_t tcp_recovery_command(tcp_recovery_state_t state)
     }
     if((length < 0) || ((uint32_t)length >= sizeof(tcp_command_buffer)))
     {
+        printf("[tcp recovery] command buffer error stage=%u\r\n", (unsigned int)state);
         return TCP_FAIL;
     }
     recovery_state = state;
@@ -97,6 +140,11 @@ static uint8_t tcp_recovery_command(tcp_recovery_state_t state)
     recovery_connect_seen = 0U;
     recovery_ok_seen = 0U;
     esp12s_response_reset();
+    /* Only CIPSTART is logged: CWJAP contains the WiFi password. */
+    if(state == TCP_RECOVERY_CONNECT)
+    {
+        printf("[tcp recovery] command=%s", command);
+    }
     esp12s_cmd_send(command);
     printf("[tcp recovery] stage=%u attempt=%u\r\n", (unsigned int)state,
            (unsigned int)recovery_attempts);
@@ -105,7 +153,10 @@ static uint8_t tcp_recovery_command(tcp_recovery_state_t state)
 
 static void tcp_recovery_failed(void)
 {
-    printf("[tcp recovery] failed stage=%u; retry later\r\n", (unsigned int)recovery_state);
+    printf("[tcp recovery] failed stage=%u elapsed=%lu ms connect_seen=%u ok_seen=%u; retry later\r\n",
+           (unsigned int)recovery_state,
+           (unsigned long)(uint32_t)(board_systick_ms - recovery_started_ms),
+           (unsigned int)recovery_connect_seen, (unsigned int)recovery_ok_seen);
     recovery_state = TCP_RECOVERY_IDLE;
     tcp_connected = TCP_FAIL;
     recovery_started_ms = board_systick_ms;
@@ -148,6 +199,7 @@ uint8_t tcp_recovery_service(void)
     {
         return TCP_FAIL;
     }
+    tcp_diagnostic_print();
     /* 限制每轮消费数量，保持 CAN/OTA 队列能够继续处理。 */
     for(count = 0U; count < 16U; count++)
     {
@@ -155,6 +207,9 @@ uint8_t tcp_recovery_service(void)
         {
             break;
         }
+        printf("[tcp recovery] stage=%u response=%s (%u)\r\n",
+               (unsigned int)recovery_state, tcp_response_name(response),
+               (unsigned int)response);
         if(response == ESP12S_RESPONSE_WIFI_CONNECTED)
         {
             wifi_connected = TCP_SUCCESS;
@@ -181,6 +236,18 @@ uint8_t tcp_recovery_service(void)
         }
         /* 无连接时 CIPCLOSE 可回 ERROR；超时则不当作关闭成功。 */
         if((recovery_state == TCP_RECOVERY_CLOSE) &&
+           (response == ESP12S_RESPONSE_ERROR))
+        {
+            finished = 1U;
+            continue;
+        }
+        /* Read-only diagnostic commands may be unsupported by older ESP-AT. */
+        if(((recovery_state == TCP_RECOVERY_ADDRESS) ||
+            (recovery_state == TCP_RECOVERY_LOCAL_INFO) ||
+            (recovery_state == TCP_RECOVERY_STATUS) ||
+            (recovery_state == TCP_RECOVERY_AP) ||
+            (recovery_state == TCP_RECOVERY_POWER) ||
+            (recovery_state == TCP_RECOVERY_VERSION)) &&
            (response == ESP12S_RESPONSE_ERROR))
         {
             finished = 1U;
@@ -225,6 +292,8 @@ uint8_t tcp_recovery_service(void)
     {
         if((uint32_t)(board_systick_ms - recovery_started_ms) >= recovery_wait_ms)
         {
+            printf("[tcp recovery] TIMEOUT stage=%u limit=%lu ms\r\n",
+                   (unsigned int)recovery_state, (unsigned long)recovery_wait_ms);
             tcp_recovery_failed();
         }
         return TCP_FAIL;
@@ -234,7 +303,13 @@ uint8_t tcp_recovery_service(void)
         case TCP_RECOVERY_CLOSE: next = TCP_RECOVERY_CONNECT; break;
         case TCP_RECOVERY_RESET: next = TCP_RECOVERY_STATION; break;
         case TCP_RECOVERY_STATION: next = TCP_RECOVERY_JOIN; break;
-        case TCP_RECOVERY_JOIN: next = TCP_RECOVERY_MUX; break;
+        case TCP_RECOVERY_JOIN: next = TCP_RECOVERY_ADDRESS; break;
+        case TCP_RECOVERY_ADDRESS: next = TCP_RECOVERY_LOCAL_INFO; break;
+        case TCP_RECOVERY_LOCAL_INFO: next = TCP_RECOVERY_STATUS; break;
+        case TCP_RECOVERY_STATUS: next = TCP_RECOVERY_AP; break;
+        case TCP_RECOVERY_AP: next = TCP_RECOVERY_POWER; break;
+        case TCP_RECOVERY_POWER: next = TCP_RECOVERY_VERSION; break;
+        case TCP_RECOVERY_VERSION: next = TCP_RECOVERY_MUX; break;
         case TCP_RECOVERY_MUX: next = TCP_RECOVERY_MODE; break;
         case TCP_RECOVERY_MODE: next = TCP_RECOVERY_CONNECT; break;
         case TCP_RECOVERY_CONNECT:
@@ -268,6 +343,7 @@ static uint8_t tcp_wait_response(uint8_t wait_connect, uint32_t timeout_ms)
 
     while(tcp_deadline_expired(deadline_ms) == TCP_FAIL)
     {
+        tcp_diagnostic_print();
         if(esp12s_response_get(&response) == 0U)
         {
             /*
@@ -362,6 +438,7 @@ static uint8_t tcp_command_send_and_wait_ok(const char *command, uint32_t timeou
 static uint8_t tcp_connect_start_and_wait(const char *command)
 {
     esp12s_response_reset();
+    printf("[tcp init] command=%s", command);
     esp12s_cmd_send(command);
     return tcp_wait_response(TCP_SUCCESS, TCP_AT_TIMEOUT_MS);
 }
@@ -415,9 +492,12 @@ static uint8_t tcp_wait_prompt(uint32_t timeout_ms)
            (response == ESP12S_RESPONSE_BUSY) ||
            (response == ESP12S_RESPONSE_CLOSED))
         {
+            printf("[tcp send] CIPSEND prompt failed response=%s (%u)\r\n",
+                   tcp_response_name(response), (unsigned int)response);
             return TCP_FAIL;
         }
     }
+    printf("[tcp send] CIPSEND prompt TIMEOUT limit=%lu ms\r\n", (unsigned long)timeout_ms);
     return TCP_FAIL;//超时返回fail
 }
 
@@ -450,10 +530,13 @@ static uint8_t tcp_wait_send_ok(uint32_t timeout_ms)
            (response == ESP12S_RESPONSE_BUSY) ||
            (response == ESP12S_RESPONSE_CLOSED))
         {
+            printf("[tcp send] SEND OK failed response=%s (%u)\r\n",
+                   tcp_response_name(response), (unsigned int)response);
             return TCP_FAIL;
         }
     }
 
+    printf("[tcp send] SEND OK TIMEOUT limit=%lu ms\r\n", (unsigned long)timeout_ms);
     return TCP_FAIL;
 }
 
@@ -529,6 +612,11 @@ uint8_t tcp_init(const tcp_config_struct *config)
         printf("TCP init failed: cannot query ESP network address\r\n");
         return TCP_FAIL;
     }
+    (void)tcp_command_send_and_wait_ok("AT+CIPSTA?\r\n", TCP_AT_TIMEOUT_MS);
+    (void)tcp_command_send_and_wait_ok("AT+CIPSTATUS\r\n", TCP_AT_TIMEOUT_MS);
+    (void)tcp_command_send_and_wait_ok("AT+CWJAP?\r\n", TCP_AT_TIMEOUT_MS);
+    (void)tcp_command_send_and_wait_ok("AT+SLEEP?\r\n", TCP_AT_TIMEOUT_MS);
+    (void)tcp_command_send_and_wait_ok("AT+GMR\r\n", TCP_AT_TIMEOUT_MS);
 
     if(tcp_command_send_and_wait_ok("AT+CIPMUX=0\r\n", TCP_AT_TIMEOUT_MS) == TCP_FAIL)
     {

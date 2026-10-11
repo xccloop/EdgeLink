@@ -25,7 +25,12 @@ void USART0_IRQHandler(void)
     USART1中断只负责放入事件，APP主循环只负责按顺序取出事件。
 */
 #define ESP12S_RESPONSE_QUEUE_SIZE  8U
-#define ESP12S_RESPONSE_LINE_SIZE   32U
+#define ESP12S_RESPONSE_LINE_SIZE   ESP12S_DIAGNOSTIC_LINE_SIZE
+#define ESP12S_DIAGNOSTIC_QUEUE_SIZE 8U
+
+static char esp12s_diagnostic_queue[ESP12S_DIAGNOSTIC_QUEUE_SIZE][ESP12S_DIAGNOSTIC_LINE_SIZE];
+static volatile uint8_t esp12s_diagnostic_write_index;
+static volatile uint8_t esp12s_diagnostic_read_index;
 
 static volatile esp12s_response_t esp12s_response_queue[ESP12S_RESPONSE_QUEUE_SIZE];
 static volatile uint8_t esp12s_response_write_index;
@@ -125,6 +130,28 @@ static uint8_t esp12s_response_line_start_with(const char *text)
 */
 static void esp12s_response_line_handle(void)
 {
+    /* ISR only copies selected lines. Printing belongs to TransmitTask. */
+    if((esp12s_response_line_start_with("+CIPSTA:") != 0U) ||
+       (esp12s_response_line_start_with("+CIFSR:STA") != 0U) ||
+       (esp12s_response_line_start_with("STATUS:") != 0U) ||
+       (esp12s_response_line_start_with("+CIPSTATUS:") != 0U) ||
+       (esp12s_response_line_start_with("+CWJAP:") != 0U) ||
+       (esp12s_response_line_start_with("+SLEEP:") != 0U) ||
+       (esp12s_response_line_start_with("AT version:") != 0U) ||
+       (esp12s_response_line_start_with("SDK version:") != 0U))
+    {
+        uint8_t next = (uint8_t)((esp12s_diagnostic_write_index + 1U) % ESP12S_DIAGNOSTIC_QUEUE_SIZE);
+        uint8_t i;
+        if(next != esp12s_diagnostic_read_index)
+        {
+            for(i = 0U; i < esp12s_response_line_length; i++)
+            {
+                esp12s_diagnostic_queue[esp12s_diagnostic_write_index][i] = esp12s_response_line[i];
+            }
+            esp12s_diagnostic_queue[esp12s_diagnostic_write_index][i] = '\0';
+            esp12s_diagnostic_write_index = next;
+        }
+    }
     if(esp12s_response_line_equal("OK") != 0U)
     {
         esp12s_response_push(ESP12S_RESPONSE_OK);
@@ -181,6 +208,25 @@ static void esp12s_response_line_handle(void)
 
         esp12s_local_ip[dst] = '\0';
     }
+}
+
+uint8_t esp12s_diagnostic_get(char *buffer, uint8_t size)
+{
+    uint8_t i = 0U;
+    if((buffer == NULL) || (size == 0U) ||
+       (esp12s_diagnostic_read_index == esp12s_diagnostic_write_index))
+    {
+        return 0U;
+    }
+    while((i < (size - 1U)) &&
+          (esp12s_diagnostic_queue[esp12s_diagnostic_read_index][i] != '\0'))
+    {
+        buffer[i] = esp12s_diagnostic_queue[esp12s_diagnostic_read_index][i];
+        i++;
+    }
+    buffer[i] = '\0';
+    esp12s_diagnostic_read_index = (uint8_t)((esp12s_diagnostic_read_index + 1U) % ESP12S_DIAGNOSTIC_QUEUE_SIZE);
+    return 1U;
 }
 
 uint8_t esp12s_response_get(esp12s_response_t *response)
