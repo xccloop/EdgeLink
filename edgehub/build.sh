@@ -3,6 +3,7 @@
 #
 # 用法：
 #   ./build.sh                        交叉编译（默认，目标是龙芯 2K0300）
+#   ./build.sh <板子IP>               交叉编译 + scp 到 root@板子IP:/home/root/
 #   ./build.sh --native               原生编译（本机 x86_64，用来验证能否编过）
 #   ./build.sh --deploy <板子IP>      交叉编译 + scp 到开发板
 #   ./build.sh --deploy <IP> --run    交叉编译 + scp + 前台运行（输出实时回到本终端）
@@ -37,6 +38,7 @@ usage() {
     cat <<'EOF'
 用法：
   ./build.sh                        交叉编译（默认，目标是龙芯 2K0300）
+  ./build.sh <板子IP>               交叉编译 + scp 到 root@板子IP:/home/root/
   ./build.sh --native               原生编译（本机 x86_64，用来验证能否编过）
   ./build.sh --deploy <板子IP>      交叉编译 + scp 到开发板
   ./build.sh --deploy <IP> --run    交叉编译 + scp + 前台运行（输出实时回到本终端）
@@ -56,7 +58,15 @@ while [ $# -gt 0 ]; do
         --bg)      RUN_MODE="bg" ;;
         --logs)    shift; DEPLOY_IP="${1:-}"; FOLLOW_LOGS=true ;;
         -h|--help) usage; exit 0 ;;
-        *) echo "未知参数：$1" >&2; usage >&2; exit 1 ;;
+        *)
+            if [[ -z "$DEPLOY_IP" && "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                DEPLOY_IP="$1"
+            else
+                echo "未知参数或重复目标 IP：$1" >&2
+                usage >&2
+                exit 1
+            fi
+            ;;
     esac
     shift
 done
@@ -73,7 +83,7 @@ if [ "$FOLLOW_LOGS" = true ]; then
 fi
 
 if [ -n "$DEPLOY_IP" ] && [ "$MODE" = "native" ]; then
-    echo "错误：--deploy 只能跟交叉编译一起用（x86_64 的二进制在龙芯板子上跑不起来）。" >&2
+    echo "错误：部署只能跟交叉编译一起用（x86_64 的二进制在龙芯板子上跑不起来）。" >&2
     exit 1
 fi
 

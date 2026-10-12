@@ -12,7 +12,8 @@ public:
 
     void clear();
 
-    uint8_t firmwareQueryNode() const { return query_node; }
+    uint8_t firmwareQueryNode() const { return can_query_node; }
+    uint8_t firmwareQueryTcpNode() const { return tcp_query_node; }
     uint8_t firmwareSendNode() const {return firmware_node;}
     std::string firmwareSendNodePath() const {return firmware_path;}
     int statusCode() const { return status; }
@@ -24,7 +25,8 @@ private:
 
     std::string body;
     std::string request_path;
-    uint8_t query_node{0};
+    uint8_t can_query_node{0};
+    uint8_t tcp_query_node{0};
 
     std::string request_body;
     uint8_t firmware_node = 0;
@@ -46,6 +48,8 @@ private:
     static const Route routes[];
 
     void hanlde_hubstatus();
-    void handleFirmwareSlotQuery();
-    void handleFirmwareSlotSend();
+    void handleFirmwareSlotQueryCan();
+    void handleFirmwareSlotQueryTcp();
+    void handleFirmwareSlotCanSend();
+    void handleFirmwareSlotTcpSend();
 };

@@ -7,8 +7,10 @@
 const HttpHandle::Route HttpHandle::routes[] = 
 {
     {"/hub/status",&HttpHandle::hanlde_hubstatus},
-    {"/hub/firmware/query/node/", &HttpHandle::handleFirmwareSlotQuery, true},
-    {"/hub/firmware/send/node/",&HttpHandle::handleFirmwareSlotSend,true}
+    {"/hub/firmware/can/query/node/", &HttpHandle::handleFirmwareSlotQueryCan, true},
+    {"/hub/firmware/tcp/query/node/",&HttpHandle::handleFirmwareSlotQueryTcp,true},
+    {"/hub/firmware/can/send/node/",&HttpHandle::handleFirmwareSlotCanSend,true},
+    {"/hub/firmware/tcp/send/node/",&HttpHandle::handleFirmwareSlotTcpSend,true}
 };
 
 //初始构造清空
@@ -23,7 +25,8 @@ void HttpHandle::clear()
     this->status = 0;
     body.clear();
     request_path.clear();
-    query_node = 0;
+    can_query_node = 0;
+    tcp_query_node = 0;
 }
 
 //这个函数就是负责解析业务的函数
@@ -68,7 +71,7 @@ void HttpHandle::handle(HttpRequest request)
             if((routes[index].prefix && path.compare(0, routes[index].path.size(), routes[index].path) == 0) ||
                (!routes[index].prefix && path == routes[index].path))
             {
-                const bool is_send = routes[index].handler == &HttpHandle::handleFirmwareSlotSend;
+                const bool is_send = routes[index].handler == &HttpHandle::handleFirmwareSlotCanSend;
                 if((is_send && method != "POST") || (!is_send && method != "GET"))
                 {
                     status = 405;
@@ -88,7 +91,7 @@ void HttpHandle::handle(HttpRequest request)
             if((routes[index].prefix && path.compare(0, routes[index].path.size(), routes[index].path) == 0) ||
                (!routes[index].prefix && path == routes[index].path))
             {
-                const bool is_send = routes[index].handler == &HttpHandle::handleFirmwareSlotSend;
+                const bool is_send = routes[index].handler == &HttpHandle::handleFirmwareSlotCanSend;
                 if((is_send && method != "POST") || (!is_send && method != "GET"))
                 {
                     status = 405;
@@ -109,9 +112,9 @@ void HttpHandle::hanlde_hubstatus()
     this->body =  "{\"running\":true}";
 }
 
-void HttpHandle::handleFirmwareSlotQuery()
+void HttpHandle::handleFirmwareSlotQueryCan()
 {
-    const std::string prefix = "/hub/firmware/query/node/";
+    const std::string prefix = "/hub/firmware/can/query/node/";
     std::string node_text = request_path.substr(prefix.size());
     unsigned int node = 0;
     status = 400;
@@ -133,14 +136,14 @@ void HttpHandle::handleFirmwareSlotQuery()
         return;
     }
     // 只提交查询意图，运行时负责异步 CAN 收发；这里不等待回复。
-    query_node = static_cast<uint8_t>(node);
+    can_query_node = static_cast<uint8_t>(node);
     status = 200;
     body.clear();
 }
 
-void HttpHandle::handleFirmwareSlotSend()
+void HttpHandle::handleFirmwareSlotCanSend()
 {
-    const std::string prefix = "/hub/firmware/send/node/";
+    const std::string prefix = "/hub/firmware/can/send/node/";
     std::string node_text = request_path.substr(prefix.size());
     unsigned int node = 0;
     status = 400;
@@ -166,4 +169,39 @@ void HttpHandle::handleFirmwareSlotSend()
     firmware_path = request_body;
     status = 200;
     body.clear();
+}
+
+
+void HttpHandle::handleFirmwareSlotQueryTcp()
+{
+    const std::string prefix = "/hub/firmware/tcp/query/node/";
+    std::string node_text = request_path.substr(prefix.size());
+    unsigned int node = 0;
+    status = 400;
+    body = "{\"error\":\"node must be an integer from 1 to 127\"}";
+    if(node_text.empty() || node_text.size() > 3U)
+    {
+        return;
+    }
+    for(char digit : node_text)
+    {
+        if(digit < '0' || digit > '9')
+        {
+            return;
+        }
+        node = node * 10U + static_cast<unsigned int>(digit - '0');
+    }
+    if(node == 0U || node > 127U)
+    {
+        return;
+    }
+    // 只提交 TCP 查询意图，运行时负责收发；这里不等待回复。
+    tcp_query_node = static_cast<uint8_t>(node);
+    status = 200;
+    body.clear();
+}
+
+void HttpHandle::handleFirmwareSlotTcpSend()
+{
+
 }

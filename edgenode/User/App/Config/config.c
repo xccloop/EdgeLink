@@ -8,7 +8,7 @@ static const tcp_config_struct tcp_config =
 {
     .wifi_ssid = "ChinaNet-pehm",
     .wifi_password = "yrdhziq9",
-    .server_ip = "192.168.1.6",
+    .server_ip = "192.168.1.4",
     .server_port = 8888
 };
 

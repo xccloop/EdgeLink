@@ -45,6 +45,11 @@ struct ClientState
 
     TcpConnection connection;
     Ringbuffer receive_ringbuffer;
+
+    uint8_t node_id = 0; //用于记录当前节点的id编号
+    uint64_t query_request_id{0}; // 与等待槽位结果的 HTTP 请求关联。
+    std::chrono::steady_clock::time_point query_started;
+    bool close_pending{false}; // 跨连接操作请求关闭，事件批次结束后执行。
 };
 
 struct HttpClientState
@@ -114,6 +119,8 @@ private:
     void drainHttpclient(int slot, bool &close_client);
     void sendHttpResponse(int slot, bool &close_client);
     void completeHttpRequest(const OTA::Result& result);
+    bool sendTcpSlotQuery(uint8_t node_id, uint64_t request_id);
+    void completeTcpSlotQuery(int slot, int status, const char *body);
 
     static constexpr uint32_t CAN_TELEMETRY_BASE_ID = 0x280U;
     static constexpr uint32_t CAN_ACK_BASE_ID = 0x300U;

@@ -58,6 +58,7 @@ static const char* status_reason(int status)
         case 409: return "Conflict";
         case 413: return "Payload Too Large";
         case 500: return "Internal Server Error";
+        case 501: return "Not Implemented";
         case 502: return "Bad Gateway";
         case 503: return "Service Unavailable";
         case 504: return "Gateway Timeout";

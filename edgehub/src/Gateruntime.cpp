@@ -1,6 +1,8 @@
 #include "Gateruntime.hpp"
 #include "TcpFrame.hpp"
 #include "Can.hpp"
+#include <cstddef>
+#include <cstdint>
 #include <ratio>
 #include <sys/epoll.h>
 
@@ -153,6 +155,16 @@ bool Gateruntime::run(volatile sig_atomic_t *g_running)
         int timeout_ms = -1;
         if(_ota.isSending()) timeout_ms = 1;
         else if(_ota.hasPendingQueries()) timeout_ms = 100;
+        for(const auto& node : clients)
+        {
+            if(node && node->close_pending)
+            {
+                timeout_ms = 0;
+                break;
+            }
+            if(node && node->query_request_id != 0U && timeout_ms < 0)
+                timeout_ms = 100;
+        }
         int nready = _epoll.wait(events, EPOLLEVENT_SIZE, timeout_ms);
         if(nready == -1)
         {
@@ -175,7 +187,25 @@ bool Gateruntime::run(volatile sig_atomic_t *g_running)
             completeHttpRequest(result);
         while(_ota.pollTimeout(result))
             completeHttpRequest(result);
-        // CAN 回调只准备响应，当前事件批次结束后统一推进 HTTP 发送。
+        for(int slot = 0; slot < MAX_CLIENTS; ++slot)
+        {
+            if(clients[slot] && clients[slot]->close_pending)
+            {
+                int fd = clients[slot]->connection.fd();
+                closeTcpclient(fd, slot);
+                continue;
+            }
+            if(clients[slot] && clients[slot]->query_request_id != 0U &&
+               std::chrono::steady_clock::now() - clients[slot]->query_started >=
+                   std::chrono::seconds(5))
+            {
+                completeTcpSlotQuery(slot, 504, "{\"error\":\"TCP query timed out\"}\n");
+                // 线上没有请求序号，关闭连接以隔离迟到的旧回复。
+                int fd = clients[slot]->connection.fd();
+                closeTcpclient(fd, slot);
+            }
+        }
+        // 回调只准备响应，当前事件批次结束后统一推进 HTTP 发送。
         for(int slot = 0; slot < MAX_CLIENTS; ++slot)
         {
             if(httpclients[slot] && !httpclients[slot]->response.empty())
@@ -447,8 +477,64 @@ void Gateruntime::drainTcpclient(int slot, bool &close_client)
 */
 void Gateruntime::parseTcpFrames(int slot, bool &close_client)
 {
+    if(clients[slot]->close_pending)
+    {
+        return;
+    }
     while(true)
     {
+        int length = clients[slot]->receive_ringbuffer.data_space();
+        if(length == 0)
+        {
+            break;
+        }
+
+        int type = clients[slot]->receive_ringbuffer.see(0);
+        if(type == 0x01)
+        {
+            // 查询回复可以拆包；收齐两个字节再取走。
+            if(length < QUERY_FRAME_LENGTH)
+            {
+                break;
+            }
+
+            uint8_t query_reply[QUERY_FRAME_LENGTH];
+            clients[slot]->receive_ringbuffer.read(query_reply, QUERY_FRAME_LENGTH);
+
+            if(query_reply[1] == 1)
+            {
+                printf("Node %u: OTA slot A\n", clients[slot]->node_id);
+            }
+            else if(query_reply[1] == 2)
+            {
+                printf("Node %u: OTA slot B\n", clients[slot]->node_id);
+            }
+            else if(query_reply[1] == 0)
+            {
+                printf("Node %u: OTA unavailable\n", clients[slot]->node_id);
+            }
+            else
+            {
+                printf("Invalid OTA slot: %u\n", query_reply[1]);
+            }
+            if(clients[slot]->query_request_id != 0U)
+            {
+                if(query_reply[1] == 1)
+                    completeTcpSlotQuery(slot, 200, "{\"slot\":\"A\"}\n");
+                else if(query_reply[1] == 2)
+                    completeTcpSlotQuery(slot, 200, "{\"slot\":\"B\"}\n");
+                else if(query_reply[1] == 0)
+                    completeTcpSlotQuery(slot, 409, "{\"error\":\"Node is not ready for OTA\"}\n");
+                else
+                {
+                    completeTcpSlotQuery(slot, 502, "{\"error\":\"Invalid TCP slot reply\"}\n");
+                    close_client = true;
+                    break;
+                }
+            }
+            continue;
+        }
+
         TcpFrame frame{};
         Message message{};
         int parse_result = tcp_frame_parser(&clients[slot]->receive_ringbuffer, &frame);
@@ -462,6 +548,7 @@ void Gateruntime::parseTcpFrames(int slot, bool &close_client)
                 (long)message.temperature,
                 (int)message.temperatureScale);
 
+                clients[slot]->node_id = message.nodeId;
             if(_storage.isOpen() == true)
             {
                 StorageInsertResult insert_result = _storage.insertMessage(message);
@@ -520,6 +607,7 @@ bool Gateruntime::sendCanAck(const Message &message)
 */
 void Gateruntime::closeTcpclient(int fd, int slot)
 {
+    completeTcpSlotQuery(slot, 503, "{\"error\":\"Node TCP connection closed\"}\n");
     //按 epoll 登记、类型登记、ClientState 所有权的顺序统一清理。
     _epoll.del(fd, 0);
     fd_table.erase(fd);
@@ -724,7 +812,22 @@ bool Gateruntime::handleHttpClient(int fd,uint32_t event_mask)
         {
             HttpHandle handler;
             handler.handle(client.http.request());
-            if(handler.firmwareQueryNode() != 0U)
+            if(handler.firmwareQueryTcpNode() != 0U)
+            {
+                uint8_t node_id{0};
+                node_id = handler.firmwareQueryTcpNode();
+                ++next_request_id;
+                if(next_request_id == 0U) ++next_request_id;
+                client.request_id = next_request_id;
+                bool sent = sendTcpSlotQuery(node_id, client.request_id);
+                if(sent == false)
+                {
+                    client.request_id = 0U;
+                    client.response = Http::serialize(503,
+                        "{\"error\":\"TCP query send failed, node is offline or busy\"}");
+                }
+            }
+            else if(handler.firmwareQueryNode() != 0U)
             {
                 ++next_request_id;
                 if(next_request_id == 0U)
@@ -776,6 +879,19 @@ bool Gateruntime::handleHttpClient(int fd,uint32_t event_mask)
         _epoll.del(fd, 0);
         fd_table.erase(fd);
         _ota.cancel(client.request_id);
+        if(client.request_id != 0U)
+        {
+            for(int node_slot = 0; node_slot < MAX_CLIENTS; ++node_slot)
+            {
+                if(clients[node_slot] &&
+                   clients[node_slot]->query_request_id == client.request_id)
+                {
+                    // 取消后不复用该连接，避免旧回复匹配到新查询。
+                    clients[node_slot]->query_request_id = 0U;
+                    clients[node_slot]->close_pending = true;
+                }
+            }
+        }
         httpclients[slot].reset();
     }
     return true;
@@ -920,5 +1036,68 @@ void Gateruntime::completeHttpRequest(const OTA::Result& result)
         client->response = Http::serialize(status, body);
         client->request_id = 0U;
         return;
+    }
+}
+
+bool Gateruntime::sendTcpSlotQuery(uint8_t node_id, uint64_t request_id)
+{
+    uint8_t query_frame[QUERY_FRAME_LENGTH];
+    int slot = 0;
+    int sent = 0;
+
+    if(tcp_query_frame(node_id, query_frame) == false)
+    {
+        return false;
+    }
+
+    for(; slot < MAX_CLIENTS; slot++)
+    {
+        // 空位置没有连接，跳过。
+        if(clients[slot] == NULL)
+        {
+            continue;
+        }
+
+        if(clients[slot]->node_id == node_id)
+        {
+            if(clients[slot]->query_request_id != 0U || clients[slot]->close_pending)
+            {
+                return false;
+            }
+            clients[slot]->query_request_id = request_id;
+            clients[slot]->query_started = std::chrono::steady_clock::now();
+            sent = clients[slot]->connection.data_send(
+                (const char *)query_frame,
+                QUERY_FRAME_LENGTH);
+
+            if(sent != QUERY_FRAME_LENGTH)
+            {
+                clients[slot]->close_pending = true;
+                return false;
+            }
+
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void Gateruntime::completeTcpSlotQuery(int slot, int status, const char *body)
+{
+    uint64_t request_id = clients[slot]->query_request_id;
+    if(request_id == 0U)
+    {
+        return;
+    }
+    clients[slot]->query_request_id = 0U;
+    for(auto& client : httpclients)
+    {
+        if(client && client->request_id == request_id)
+        {
+            client->response = Http::serialize(status, body);
+            client->request_id = 0U;
+            return;
+        }
     }
 }

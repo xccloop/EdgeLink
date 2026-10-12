@@ -199,3 +199,15 @@ bool tcp_ack_encode(uint8_t frame[FRAME_LENGTH], uint8_t node_id,
     return true;
 }
 
+bool tcp_query_frame(uint8_t node_id, uint8_t frame[QUERY_FRAME_LENGTH])
+{
+    if(frame == nullptr || node_id == 0U || node_id > 127U)
+    {
+        return false;
+    }
+
+    frame[0] = 0x01;     // 查询类型
+    frame[1] = node_id;  // 目标节点
+
+    return true;
+}

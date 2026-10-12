@@ -18,6 +18,8 @@ constexpr int FRAME_PARSE_ERROR = -1;
 constexpr int FRAME_PARSE_PENDING = 0;
 constexpr int FRAME_PARSE_SUCCESS = 1;
 
+constexpr int QUERY_FRAME_LENGTH = 2;
+
 /*
     Magic      固定 0x45 0x48，即 EH，用于在错误数据中寻找帧头
     Version    V5 固定 0x05；旧布局不能混用
@@ -60,3 +62,4 @@ bool tcp_ack_encode(uint8_t frame[FRAME_LENGTH], uint8_t node_id,
 
 static_assert(sizeof(TcpFrameHeader) == FRAME_HEADER_LENGTH, "TcpFrameHeader must be 9 bytes");
 int64_t frame_received_at_us();
+bool tcp_query_frame(uint8_t node_id, uint8_t frame[QUERY_FRAME_LENGTH]);
