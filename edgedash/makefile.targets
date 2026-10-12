@@ -1,0 +1,15 @@
+# Keep the new client in shell builds until the IDE regenerates its source list.
+# Once the IDE includes Tcp.cpp, its generated rule takes over.
+TCPCLIENT_OBJECT := src/clientconnect/Tcp/Tcp.o
+ifeq ($(filter $(TCPCLIENT_OBJECT) ./$(TCPCLIENT_OBJECT),$(OBJS)),)
+OBJS += $(TCPCLIENT_OBJECT)
+CPP_DEPS += src/clientconnect/Tcp/Tcp.d
+-include src/clientconnect/Tcp/Tcp.d
+
+libzkgui.so: $(TCPCLIENT_OBJECT)
+
+$(TCPCLIENT_OBJECT): ../src/clientconnect/Tcp/Tcp.cpp
+	@if not exist "src\clientconnect\Tcp" mkdir "src\clientconnect\Tcp"
+	@echo.exe 'Compile $(subst ../,,$<)'
+	@arm-unknown-linux-musleabihf-gcc -std=c++11 -O3 -Wall -c -fmessage-length=0 -pipe -Wformat -Werror=format-security -fstack-protector -fno-caller-saves -fexceptions -fPIC -I"D:\zkswe\FlyThingsIDE\bin\.dep\public\t113stdcxx\easyui\2.6.0\include" -I"D:\zkswe\FlyThingsIDE\bin\.dep\public\t113stdcxx\log\0.0.0\include" -I"D:\zkswe\FlyThingsIDE\bin\.dep\public\t113stdcxx\zkhardware\0.0.0\include" -I"D:\zkswe\FlyThingsIDE\bin\.dep\public\t113stdcxx\zknet\0.0.0\include" -I"..\src" -D__PLATFORM_T113STDCXX__=1 -DUSE_ANDROID_LOG=1 -D_FORTIFY_SOURCE=1 -D_RELEASE=1 -MMD -MP -MF"$(@:%.o=%.d)" -MT"$(@)" -o "$@" "$<"
+endif
