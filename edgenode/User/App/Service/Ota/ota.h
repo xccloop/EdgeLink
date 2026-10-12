@@ -107,4 +107,7 @@ void ota_reset(void);
 */
 uint8_t ota_confirm_boot(void);
 
+/* 读取元数据 active_slot 的镜像头版本；返回 1 表示成功，0 表示不可用。 */
+uint8_t ota_active_version_get(uint32_t *version);
+
 #endif

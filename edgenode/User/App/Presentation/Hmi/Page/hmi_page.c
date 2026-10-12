@@ -261,6 +261,20 @@ uint8_t hmi_page_build(hmi_page_t *page, const hmi_view_data_t *data,hmi_page_id
         return 0U;
     }
 
+    if(data->firmware_version_valid != 0U)
+    {
+        snprintf(buffer, sizeof(buffer), "FW V%lu",
+                 (unsigned long)data->firmware_version);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "FW UNKNOWN");
+    }
+    if(!page_add_text(page, 12U, 30U, buffer, 1U, COLOR_MUTED))
+    {
+        return 0U;
+    }
+
     uint8_t page_result;
     //以下是选择绘制哪个页面
     if(current_page == HMI_PAGE_HOME)

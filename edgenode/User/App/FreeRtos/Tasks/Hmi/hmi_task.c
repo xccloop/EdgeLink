@@ -6,6 +6,7 @@
 #include "Output/Log/log.h"
 #include "Output/Tcp/tcp.h"
 #include "Config/config.h"
+#include "Service/Ota/ota.h"
 #include "KEY/key.h"
 #include <stdio.h>
 #include <string.h>
@@ -17,6 +18,7 @@ TaskHandle_t hmi_task_handle;
 static void hmi_task(void *argument)
 {
     TickType_t last_wake_time;//这里是记录tick值而不是ms
+    TickType_t version_check_tick;
     (void)argument;
     QueueHandle_t sample_queue;//接受队列
     QueueHandle_t log_queue;//TransmitTask 发来的显示日志
@@ -41,10 +43,30 @@ static void hmi_task(void *argument)
 
     memset(&hmi_snapshot, 0, sizeof(hmi_snapshot));
     hmi_snapshot.node_id = board_id;
+    hmi_snapshot.firmware_version_valid =
+        ota_active_version_get(&hmi_snapshot.firmware_version);
+    version_check_tick = xTaskGetTickCount();
     hmi_control_init(board_id);
+    (void)hmi_set_view_data(&hmi_snapshot);
     while(1)
     {
         need_commit = 0U;
+
+        /* active_slot 在新固件启动确认后才更新，定期读取以同步版本显示。 */
+        if((xTaskGetTickCount() - version_check_tick) >= pdMS_TO_TICKS(1000U))
+        {
+            uint32_t version = 0U;
+            uint8_t version_valid = ota_active_version_get(&version);
+
+            version_check_tick = xTaskGetTickCount();
+            if((version_valid != hmi_snapshot.firmware_version_valid) ||
+               (version != hmi_snapshot.firmware_version))
+            {
+                hmi_snapshot.firmware_version = version;
+                hmi_snapshot.firmware_version_valid = version_valid;
+                need_commit = 1U;
+            }
+        }
 
         key_event = key_event_take();
         if((key_event & 0x01U) != 0U)

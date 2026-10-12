@@ -462,6 +462,42 @@ ota_result_t ota_on_idle(void)
     return result;
 }
 
+/* 版本来源固定为元数据 active_slot，不读取待安装的中转镜像。 */
+uint8_t ota_active_version_get(uint32_t *version)
+{
+    ota_metadata_t meta;
+    const ota_image_header_t *header;
+
+    if(version == NULL)
+    {
+        return 0U;
+    }
+    if(ota_metadata_load(&meta) != OTA_METADATA_LOAD_REAL)
+    {
+        return 0U;
+    }
+    if((meta.active_slot != OTA_SLOT_A_BASE_ADDRESS) &&
+       (meta.active_slot != OTA_SLOT_B_BASE_ADDRESS))
+    {
+        return 0U;
+    }
+
+    header = (const ota_image_header_t *)meta.active_slot;
+    if((header->magic != OTA_IMAGE_MAGIC) ||
+       (header->header_version != OTA_IMAGE_FORMAT_VERSION) ||
+       (header->header_size != OTA_IMAGE_HEADER_SIZE) ||
+       (header->hardware_model != OTA_CURRENT_HARDWARE_MODEL) ||
+       (header->target_slot != meta.active_slot) ||
+       (crc32_check((const uint8_t *)header, OTA_IMAGE_HEADER_CRC_LENGTH,
+                    header->header_crc32) == 0U))
+    {
+        return 0U;
+    }
+
+    *version = header->firmware_version;
+    return 1U;
+}
+
 /*
     销账：告诉 bootloader"我这次真的跑起来了"。
 
