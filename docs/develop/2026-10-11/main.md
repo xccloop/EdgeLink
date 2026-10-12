@@ -1,6 +1,6 @@
-2026-10-11
+# 2026-10-11
 
-1.今天先把TCP冻结的事情给修复了
+## 1.今天先把TCP冻结的事情给修复了
 
 我们来回顾一下这个bug，我们发现，基本上每20分钟就会断链一次。这里的“断链”是指Hub不再收到新的上报数据，但Hub上仍然能看到原来的TCP连接，
 Node串口也会持续打印`ESP response: ERROR`。所以当时不是整个程序都卡死了，而是TCP业务停止了，重连逻辑还在运行。
@@ -17,7 +17,7 @@ Node串口也会持续打印`ESP response: ERROR`。所以当时不是整个程�
 这样做有两个目的，一是让TCP出问题后能自己恢复，二是避免恢复过程中一直等待ESP回应，把同一个任务里的CAN通信也拖住。
 不过要注意，首次初始化和普通TCP发送仍然有原来的等待，这次并没有解决所有阻塞问题。另外，AT发送交互本身失败时会直接把TCP标记为不可用，不需要等满5次业务ACK失败。
 
-现在我们来想一下该怎么写代码
+### 现在我们来想一下该怎么写代码
 
 我们不能在重连函数里面一直等ESP，而是发送一条命令后先返回，下一次调用时再看回应来了没有。这样需要有一个变量，记住当前处于重连的什么阶段，这就是状态机。
 
@@ -57,9 +57,9 @@ uint32_t用来存毫秒时间，uint8_t用来存次数或0/1标志。这些变�
 这里static的作用是把变量限制在tcp.c内部使用，不是加了static它们才不会在函数返回后消失。
 它们没写初值时自动为0，所以recovery_state最初对应IDLE。
 
-现在我们来开始描述service需要怎么做
+### 现在我们来开始描述service需要怎么做
 
-1.先检查配置，再取ESP的回应
+#### 1.先检查配置，再取ESP的回应
 
 ```c
 uint8_t tcp_recovery_service(void)
@@ -81,6 +81,7 @@ uint8_t tcp_recovery_service(void)
             break;
         }
 ```
+
 上面是函数开头的片段，for循环后面的代码我们接着往下看。
 
 tcp_saved_config保存首次初始化时校验过的Wi-Fi和Hub配置，没有配置就不能拼接连接命令，所以直接返回。
@@ -96,7 +97,7 @@ esp12s_response_get返回0说明现在队列空了，break退出for循环。每�
 - continue：跳过当前这一轮，进入下一轮循环。
 - return：退出整个函数，回到调用它的位置。
 
-2.根据当前阶段理解ESP回的话
+#### 2.根据当前阶段理解ESP回的话
 
 ```c
         if(response == ESP12S_RESPONSE_WIFI_CONNECTED)
@@ -146,6 +147,7 @@ esp12s_response_get返回0说明现在队列空了，break退出for循环。每�
         }
     }
 ```
+
 首先，如果收到WIFI CONNECTED，就把wifi_connected记为成功。这只是Wi-Fi状态，不代表已经连接Hub。
 
 如果当前为IDLE，就处理ESP主动发来的通知。CLOSED表示TCP连接关闭，把tcp_connected标为失败；READY表示ESP启动完成，原来的Wi-Fi和TCP状态不能继续相信，先把两者标为失败。
@@ -163,7 +165,7 @@ CLOSE阶段收到CLOSED本身也不会当成错误，但当前实现仍然等OK�
 两个回应可能分两次到达，所以用两个seen变量记住。比如这次收到CONNECT，就先记为1；下次收到OK，两项都齐了，finished才变为1。
 finished变成1只是表示当前步骤可以结束，下一条命令要到for循环后面才会发送。
 
-3.当前没有恢复命令时，判断是否开始恢复
+#### 3.当前没有恢复命令时，判断是否开始恢复
 
 ```c
     if(recovery_state == TCP_RECOVERY_IDLE)
@@ -187,6 +189,7 @@ finished变成1只是表示当前步骤可以结束，下一条命令要到for�
         return TCP_FAIL;
     }
 ```
+
 这里的两个条件必须同时满足：TCP被标记为不可用，并且已经达到重试时间。
 board_systick_ms是系统运行的毫秒计数，用当前时间减去开始时间，就得到经过了多久。
 例如从10000毫秒开始，要求等5000毫秒，当前是13000就先返回，到了15000才允许开始。这个比较不让程序在这里停5秒，而是下次调用再看。
@@ -201,7 +204,7 @@ recovery_ack_misses在新一轮恢复开始时清零，让后续上报重新统�
 最后return结束本次service调用。因此本次刚开始关闭或者重启时，不会紧接着执行下面的switch，这就是分步的一部分。
 即使条件不满足，没有发命令，也会返回。这里返回TCP_FAIL只表示这次没有完成新连接建立，不能把它一律理解为本次重连失败。
 
-4.当前步骤没完成，就检查超时后返回
+#### 4.当前步骤没完成，就检查超时后返回
 
 ```c
     if(finished == 0U)
@@ -213,10 +216,11 @@ recovery_ack_misses在新一轮恢复开始时清零，让后续上报重新统�
         return TCP_FAIL;
     }
 ```
+
 没有回应或者回应还没凑齐，finished就还是0。没超时直接返回，下次再检查；超时则调用失败处理后返回。
 这里没有while一直等ESP，这样同一个发送任务才有机会继续处理其他事情。
 
-5.当前步骤完成，决定下一步
+#### 5.当前步骤完成，决定下一步
 
 ```c
     switch(recovery_state)
@@ -240,6 +244,7 @@ recovery_ack_misses在新一轮恢复开始时清零，让后续上报重新统�
     return TCP_FAIL;
 }
 ```
+
 普通恢复是CLOSE到CONNECT，升级恢复则是RESET到STATION、JOIN、MUX、MODE，最后CONNECT。
 选择next以后发出下一条命令，然后返回；不能把这个switch理解成所有case依次执行，每个case都有break，只选择当前状态对应的那一条。
 
@@ -247,7 +252,7 @@ CONNECT完成后，把状态改为IDLE，并允许TCP发送，返回TCP_SUCCESS�
 这里没有清零attempts，因为建立连接还不能证明Hub已经处理了业务数据。
 连接完成时也会设置5秒的计时起点，之后如果再次失败，还要满足重试时间条件才能发起下一轮恢复。
 
-6.tcp_recovery_command是怎么发送下一步的
+#### 6.tcp_recovery_command是怎么发送下一步的
 
 ```c
 static uint8_t tcp_recovery_command(tcp_recovery_state_t state)
@@ -295,6 +300,7 @@ static uint8_t tcp_recovery_command(tcp_recovery_state_t state)
     return TCP_SUCCESS;
 }
 ```
+
 这个函数前面的switch根据state选命令。JOIN要填Wi-Fi账号密码，CONNECT要填Hub的IP和端口，因此使用snprintf把参数写进tcp_command_buffer。
 length是snprintf的返回值，小于0或者达到缓冲区大小，就说明这条命令没准备好，不能继续发送。
 command指向最终要发送的字符串，它本身不是发送动作。
@@ -306,7 +312,7 @@ command指向最终要发送的字符串，它本身不是发送动作。
 因此这里TCP_SUCCESS的意思是命令已经准备并发送，不是ESP已经执行成功，也不是Hub已经收到数据。
 ESP后面返回什么，仍由service下次调用时判断。
 
-7.失败之后怎么处理
+#### 7.失败之后怎么处理
 
 ```c
 static void tcp_recovery_failed(void)
@@ -318,11 +324,12 @@ static void tcp_recovery_failed(void)
     recovery_wait_ms = (recovery_attempts >= 3U) ? 30000U : 5000U;
 }
 ```
+
 失败时回到IDLE，把TCP标记为不可用，从当前时间重新开始冷却。
 attempts不到3就等5秒，已经达到3就等30秒，避免一直失败时频繁重启ESP。
 这里保留attempts，所以下一次才能继续升级恢复。这个函数也不等待，设置好变量就返回。
 
-8.怎样确认通信真的恢复了
+#### 8.怎样确认通信真的恢复了
 
 ```c
 void tcp_recovery_note_ack(uint8_t success)
@@ -350,6 +357,7 @@ void tcp_recovery_note_ack(uint8_t success)
     }
 }
 ```
+
 这个函数由发送任务在实际尝试TCP上报后调用。成功必须是收到了节点、seq和状态都匹配的业务ACK，不是ESP返回SEND OK。
 成功就清零attempts和ack_misses，说明业务已经得到确认。
 失败就累计本轮上报失败次数，最多记到5。达到5次把tcp_connected改为失败，让service后面进入恢复。
@@ -358,7 +366,7 @@ void tcp_recovery_note_ack(uint8_t success)
 恢复期间TCP不可用，就跳过普通TCP发送，数据尝试走CAN。CAN成功不能给这个函数传成功，因为CAN只能证明CAN正常，不能证明TCP恢复。
 如果暂时没有任何TCP上报尝试，也不会凭空累计ACK失败；但已进入的恢复流程仍然会由service推进。
 
-9.为什么放在同一个函数里，仍然叫分步执行
+#### 9.为什么放在同一个函数里，仍然叫分步执行
 
 发送任务每轮循环先调用service，再处理OTA和上报。它不依赖这轮有没有拿到新的上报数据，也没有新增一个专门重连的任务。
 service返回TCP_SUCCESS时设置link_restored，让LogTask尝试补发pending。这里的补发触发不是业务完成确认，记录仍然需要有效ACK才能确认。
@@ -379,9 +387,12 @@ service返回TCP_SUCCESS时设置link_restored，让LogTask尝试补发pending�
 代码写在同一个函数里，不代表一次调用会从头做到尾。关键是用recovery_state保存进度，等待回应时return，把执行机会交还给发送任务。
 同时要区分三个成功：命令发出、TCP连接建立、业务ACK确认，这三个不是一回事。
 
-2.现在我们处理edgehub的槽位泄露问题
+## 2.现在我们处理edgehub的槽位泄露问题
+
 先想一下为什么会有cilent的槽位泄露
 现有代码中，我们给每一个客户端分配了一个client槽位
+
+```cpp
 struct ClientState
 {
     explicit ClientState(int fd)
@@ -392,29 +403,40 @@ struct ClientState
     TcpConnection connection;
     Ringbuffer receive_ringbuffer;
 };
+```
+
 我们的初衷是为了给每一个客户端一个环形缓冲区和连接描述并通过closeTcpclient来将客户端槽位进行释放
 问题就出在了这里，现在唯一会调用closeTcpclient在
+
+```cpp
    if(close_client)
     {
         closeTcpclient(fd, slot);
     }
+```
+
 而close_client置true的情况包括
+
 - 收到EPOLLRDHUP或EPOLLHUP，说明连接出现关闭。
 - recv()返回0，说明对端正常关闭了发送方向。
 - 接收出现不可恢复的错误。
 - 环形缓冲区处理失败、解析出现错误，或者业务ACK没有完整发出。
+
 这些情况下，最终都会调用closeTcpclient()，完成epoll登记删除、fd类型登记删除和客户端状态销毁。
 在昨天的测试中，他暴露了一种没有考虑到的特殊情况
 比如Node突然断电或者Wi-Fi异常，此时它可能没有机会向Hub发送关闭通知。Hub暂时不知道对方已经无法通信，原来的连接就会继续保留在clients数组中。
 当Node恢复后重新连接Hub，Hub会为新连接分配一个新的槽位。但新旧连接是两个不同的socket，现有代码没有记录它们对应的节点号，也就不知道这个新连接实际上是在替换原来的连接。
 这样就可能出现一个节点占用多个槽位的情况。旧连接迟迟没有清理，新连接又不断加入，最终占满MAX_CLIENTS。此时即使Node能够重新发起连接，Hub也会因为找不到空槽位而拒绝它。
 
-现在我们来想一下如何修复
+### 现在我们来想一下如何修复
+
 出现这个问题的原因主要是因为每个client的描述太弱，我们需要增加一个描述保存最后收到有效遥测的时间。
 那我们就可以用当前时间-最后遥测时间算出来的就是这个客户端有多久没有发送信息了
 如果这个时间过长我们就可以关闭这个槽位，毕竟后续如果客户端又开始发送我们再复用现有流程进行连接，不会出现槽位泄露的问题
 
 我们在epoll的每次循环的最后去扫描整个client，要是又超时的，我们就close，这样就算完成了,改完后就是这样
+
+```cpp
 bool Gateruntime::run(volatile sig_atomic_t *g_running)
 {
     struct epoll_event events[EPOLLEVENT_SIZE];
@@ -479,12 +501,14 @@ void Gateruntime::closeTimeoutClient()
         }
     }
 }
+```
 
 注意我们这里还修改了epoll的最大等待时间从-1变为1000(timeout_ms)
 原本-1是无限等待直到有时间，但是现在循环还要处理关闭客户端，所以当没有链接的时候我们也需要往下走让他去关闭旧连接
 
+## 3所有都做好以后我们尝试启动，结果却发现TCP完全上报不了，但是可以连接到wifi并获取IP
 
-3所有都做好以后我们尝试启动，结果却发现TCP完全上报不了，但是可以连接到wifi并获取IP
+```text
 [16:07:58.326] [transmit] seq=80084 temp=2888 scale=-2 result=FAIL
 [16:07:58.420] [tcp recovery] stage=3 attempt=3
 [16:07:58.684] [tcp recovery] stage=4 attempt=3
@@ -521,6 +545,7 @@ void Gateruntime::closeTimeoutClient()
 [16:08:07.421] [log] seq=80093 temp=2885 scale=-2 addr=0x138DD0
 [16:08:07.425] [transmit] seq=80093 temp=2885 scale=-2 result=FAIL
 [16:08:07.977] stack free words: log=387 collect=397 transmit=367 led1=231 led2=230 hmi=252 monitor=396
+```
 
 我总感觉是树莓派的无线网卡有问题，我们来尝试将
 这部分偏复杂，详情可见同目录的另外一篇md

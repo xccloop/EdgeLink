@@ -343,15 +343,15 @@ HTTP 服务监听 `8080`。节点号使用十进制 1～127，槽位查询与固
 | 方法 | 路径 | 行为 |
 | --- | --- | --- |
 | `GET` | `/hub/status` | 返回 `{"running":true}`，用于检查服务响应。 |
-| `GET` | `/hub/firmware/query/node/<id>` | 经 CAN 查询非当前运行的槽位，成功返回 `{"slot":"A"}` 或 `{"slot":"B"}`，查询超时为 5 s。 |
-| `POST` | `/hub/firmware/send/node/<id>` | 请求体为 **Hub 本地镜像文件路径**；启动 CAN 下发，等待 Node 最终结果或失败后返回。 |
+| `GET` | `/hub/firmware/can/query/node/<id>` | 经 CAN 查询非当前运行的槽位，成功返回 `{"slot":"A"}` 或 `{"slot":"B"}`，查询超时为 5 s。 |
+| `POST` | `/hub/firmware/can/send/node/<id>` | 请求体为 **Hub 本地镜像文件路径**；启动 CAN 下发，等待 Node 最终结果或失败后返回。 |
 
 以下以节点 3、树莓派 `192.168.1.112` 为例。
 
 ### 1. 查询目标槽位
 
 ```bash
-curl http://192.168.1.112:8080/hub/firmware/query/node/3
+curl http://192.168.1.112:8080/hub/firmware/can/query/node/3
 ```
 
 若返回 `{"slot":"B"}`，选择 `edgenode/build/b/edegnode_image.bin`；返回 A 则选择 A 槽镜像。节点存在待确认升级或元数据无效时，接口返回错误。
@@ -368,7 +368,7 @@ scp ./edgenode/build/b/edegnode_image.bin qxc@192.168.1.112:/home/qxc/Desktop/ed
 
 ```bash
 curl -i -X POST \
-  http://192.168.1.112:8080/hub/firmware/send/node/3 \
+  http://192.168.1.112:8080/hub/firmware/can/send/node/3 \
   --data-raw '/home/qxc/Desktop/edegnode_b_image.bin'
 ```
 
