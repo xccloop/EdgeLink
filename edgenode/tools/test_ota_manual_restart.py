@@ -38,7 +38,12 @@ uint8_t gd25_clear(uint32_t address) {
     memset(relay, 0xFF, sizeof(relay)); erases++;
     return 1U;
 }
-uint8_t ota_metadata_load(ota_metadata_t *meta) { (void)meta; return OTA_METADATA_LOAD_FAIL; }
+static uint8_t metadata_valid;
+static ota_metadata_t metadata;
+uint8_t ota_metadata_load(ota_metadata_t *meta) {
+    if(!metadata_valid) return OTA_METADATA_LOAD_FAIL;
+    *meta = metadata; return OTA_METADATA_LOAD_REAL;
+}
 uint8_t ota_metadata_save(const ota_metadata_t *meta) { (void)meta; return OTA_METADATA_FAIL; }
 void delay_ms(uint32_t ms) { (void)ms; assert(0); }
 ips_flush_result_enum ips_flush_line(const uint8_t *data, uint16_t x, uint16_t y, uint16_t width) {
@@ -94,12 +99,46 @@ static ota_result_t receive_image(int corrupt) {
         uint8_t frame[OTA_FRAME_LENGTH];
         frame[0] = (uint8_t)(sequence >> 8); frame[1] = (uint8_t)sequence;
         memcpy(frame + 2, (const uint8_t *)&image + sequence * OTA_FRAME_PAYLOAD, OTA_FRAME_PAYLOAD);
-        result = ota_on_frame(CAN_OTA_DATA_BASE_ID + board_id, frame, sizeof(frame));
+        result = ota_can_on_frame(CAN_OTA_DATA_BASE_ID + board_id, frame, sizeof(frame));
     }
     return result;
 }
 
+static void check_tcp_queries(void) {
+    uint8_t query[2] = {1U, board_id};
+    uint8_t can_query[CAN_OTA_QUERY_LENGTH] = {CAN_OTA_QUERY_KIND_SLOT, 0U, 7U, 0U};
+    ota_result_t result;
+    ota_rx_state_t saved;
+    ota_reset(); metadata_valid = 1; metadata.active_slot = OTA_SLOT_A_BASE_ADDRESS;
+    metadata.pending_slot = OTA_SLOT_NONE;
+    saved = ota_state;
+    result = ota_tcp_on_frame(query, sizeof(query));
+    assert(result.reply && result.target_slot == OTA_SLOT_B_BASE_ADDRESS);
+    assert(memcmp(&saved, &ota_state, sizeof(saved)) == 0 && writes == 0 && erases == 0);
+    metadata.active_slot = OTA_SLOT_B_BASE_ADDRESS;
+    result = ota_tcp_on_frame(query, sizeof(query));
+    assert(result.reply && result.target_slot == OTA_SLOT_A_BASE_ADDRESS);
+    query[1]++; assert(!ota_tcp_on_frame(query, sizeof(query)).reply); query[1]--;
+    query[0] = 2; assert(!ota_tcp_on_frame(query, sizeof(query)).reply); query[0] = 1;
+    assert(!ota_tcp_on_frame(NULL, 2).reply && !ota_tcp_on_frame(query, 1).reply);
+    metadata_valid = 0;
+    assert(ota_tcp_on_frame(query, 2).target_slot == 0);
+    metadata_valid = 1; metadata.pending_slot = OTA_SLOT_A_BASE_ADDRESS;
+    assert(ota_tcp_on_frame(query, 2).target_slot == 0);
+    metadata.pending_slot = OTA_SLOT_NONE; ota_state.received_bytes = 6;
+    assert(ota_tcp_on_frame(query, 2).target_slot == 0);
+    result = ota_can_on_frame(CAN_OTA_QUERY_BASE_ID + board_id, can_query, sizeof(can_query));
+    assert(result.target_slot == OTA_SLOT_A_BASE_ADDRESS); /* CAN behavior unchanged. */
+    ota_state.done = 1;
+    assert(ota_tcp_on_frame(query, 2).target_slot == 0);
+    ota_reset(); metadata_valid = 0;
+    ota_state.received_bytes = 6;
+    result = ota_on_idle(OTA_TRANSFER_TIMEOUT_MS);
+    assert(ota_state.received_bytes == 0U); /* Actual elapsed time, independent of query traffic. */
+}
+
 int main(void) {
+    check_tcp_queries();
     unsigned i, completed_writes, completed_erases;
     uint8_t frame[OTA_FRAME_LENGTH] = {0};
     uint8_t query[CAN_OTA_QUERY_LENGTH] = {CAN_OTA_QUERY_KIND_SLOT, 0U, 7U, 0U};
@@ -109,33 +148,33 @@ int main(void) {
     result = receive_image(0);
     assert(result.finished == 1U && result.success == 1U && ota_restart_required_get() == 1U);
     last_sequence = result.contiguous;
-    result = ota_on_frame(CAN_OTA_QUERY_BASE_ID + board_id, query, sizeof(query));
+    result = ota_can_on_frame(CAN_OTA_QUERY_BASE_ID + board_id, query, sizeof(query));
     assert(result.reply == 1U && result.query_status == CAN_OTA_SLOT_QUERY_PENDING && result.request_id == 7U);
     check_pages(ota_restart_required_get());
     completed_writes = writes; completed_erases = erases;
     for(i = 0; i < (OTA_TRANSFER_TIMEOUT_MS * 4U) / OTA_IDLE_REPLY_MS; i++) {
-        result = ota_on_idle();
+        result = ota_on_idle(OTA_IDLE_REPLY_MS);
         assert(result.reply == 0U && result.finished == 0U);
     }
     assert(ota_restart_required_get() == 1U); /* Verified image survives the user wait. */
-    (void)ota_on_frame(CAN_OTA_DATA_BASE_ID + board_id, frame, sizeof(frame));
+    (void)ota_can_on_frame(CAN_OTA_DATA_BASE_ID + board_id, frame, sizeof(frame));
     assert(writes == completed_writes && erases == completed_erases);
     assert(ota_restart_required_get() == 1U);
     frame[0] = (uint8_t)(last_sequence >> 8); frame[1] = (uint8_t)last_sequence;
-    result = ota_on_frame(CAN_OTA_DATA_BASE_ID + board_id, frame, sizeof(frame));
+    result = ota_can_on_frame(CAN_OTA_DATA_BASE_ID + board_id, frame, sizeof(frame));
     assert(result.finished == 1U && result.success == 1U && result.contiguous == last_sequence);
     assert(writes == completed_writes && erases == completed_erases);
-    result = ota_on_frame(CAN_OTA_DATA_BASE_ID + board_id + 1U, frame, sizeof(frame));
+    result = ota_can_on_frame(CAN_OTA_DATA_BASE_ID + board_id + 1U, frame, sizeof(frame));
     assert(result.finished == 0U);
-    result = ota_on_frame(CAN_OTA_DATA_BASE_ID + board_id, frame, sizeof(frame) - 1U);
+    result = ota_can_on_frame(CAN_OTA_DATA_BASE_ID + board_id, frame, sizeof(frame) - 1U);
     assert(result.finished == 0U);
     memset(frame, 0, sizeof(frame));
     ota_reset(); assert(ota_restart_required_get() == 0U); check_pages(0);
     result = receive_image(1);
     assert(result.finished == 0U && ota_restart_required_get() == 0U);
     corrupt_read = 0;
-    (void)ota_on_frame(CAN_OTA_DATA_BASE_ID + board_id, frame, sizeof(frame));
-    for(i = 0; i <= OTA_TRANSFER_TIMEOUT_MS / OTA_IDLE_REPLY_MS; i++) (void)ota_on_idle();
+    (void)ota_can_on_frame(CAN_OTA_DATA_BASE_ID + board_id, frame, sizeof(frame));
+    for(i = 0; i <= OTA_TRANSFER_TIMEOUT_MS / OTA_IDLE_REPLY_MS; i++) (void)ota_on_idle(OTA_IDLE_REPLY_MS);
     assert(ota_state.received_bytes == 0U && ota_restart_required_get() == 0U);
     puts("OTA manual-restart and all-page restart hint regression passed");
     return 0;

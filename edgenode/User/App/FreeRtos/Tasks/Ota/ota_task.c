@@ -3,13 +3,14 @@
 #include "FreeRtos/Queue/rtos_queue.h"
 #include "Service/Ota/ota.h"
 #include "Protocol/Can/can_frame.h"
+#include "INTERRUPT/USART/usart.h"
 #include <stdint.h>
 
 /*
     OtaTask：固件接收的驱动层。
 
     它不做任何协议判断 —— 判断全在 ota.c 里。这里只负责"搬"：
-    把 CAN 中断分流过来的固件帧取出来递给 ota.c，没帧的时候问它一声。
+    把 CAN OTA 帧或 TCP 查询取出来递给 ota.c，并传入实际空闲时间。
 
     为什么不塞进现有任务：transmit_task 里发 TCP 要等 1 秒 ACK，log_task 会被
     gd25_clear 的 45ms 卡住。绑进去的话，8 深的 ota_frame_queue 会瞬间被灌爆
@@ -22,13 +23,49 @@ static StaticTask_t ota_task_tcb;
 static StackType_t ota_task_stack[512];
 static TaskHandle_t ota_task_handle;
 
+/* 服务层只返回结果，本任务负责按原链路排队。 */
+static void ota_result_send(QueueHandle_t ota_reply_queue, const ota_result_t *result,
+                            uint8_t source, uint32_t generation)
+{
+    if((result->reply != 0U) || (result->finished != 0U))
+    {
+        ota_transmit_request_t request = {0};
+        request.source = source;
+        request.tcp_generation = generation;
+
+        request.reply.kind = (result->finished != 0U) ? CAN_OTA_REPLY_KIND_RESULT
+                                                    : CAN_OTA_REPLY_KIND_PROGRESS;
+        if(result->reply_kind != 0U)
+        {
+            request.reply.kind = result->reply_kind;
+        }
+        request.reply.contiguous = result->contiguous;
+        request.reply.success = result->success;
+        request.reply.request_id = result->request_id;
+        request.reply.query_status = result->query_status;
+        request.reply.target_slot = result->target_slot;
+
+        if((xQueueSend(ota_reply_queue, &request, 0U) != pdPASS) &&
+           (source == RTOS_OTA_SOURCE_TCP))
+        {
+            rtos_tcp_ota_query_complete(generation);
+        }
+    }
+    else if(source == RTOS_OTA_SOURCE_TCP)
+    {
+        rtos_tcp_ota_query_complete(generation);
+    }
+}
+
 static void ota_task(void *argument)
 {
     QueueHandle_t ota_queue;
     QueueHandle_t ota_reply_queue;
-    can_receive_frame_t frame;
+    ota_receive_frame_t input = {0};
     ota_result_t result;
     TickType_t boot_tick;
+    TickType_t idle_tick;
+    TickType_t now;
     uint8_t confirmed;
 
     (void)argument;
@@ -41,6 +78,7 @@ static void ota_task(void *argument)
     }
 
     boot_tick = xTaskGetTickCount();
+    idle_tick = boot_tick;
     confirmed = 0U;
 
     while(1)
@@ -62,50 +100,35 @@ static void ota_task(void *argument)
             confirmed = 1U;
         }
 
-        /*
-            超时值用 OTA_IDLE_REPLY_MS，它有两个用途：
-            ① 没帧可收时让 ota.c 有机会累计"闲着多久" —— Hub 半路挂了，只有这条路能发现
-            ② 回复的节流也靠它兜底
-
-            configTICK_RATE_HZ 是 1000，所以 3 就是 3 毫秒、不是 0，不会退化成忙等空转。
-        */
-        if(xQueueReceive(ota_queue,
-                         &frame,
-                         pdMS_TO_TICKS(OTA_IDLE_REPLY_MS)) == pdPASS)
+        /* 同一输入队列接收两条链路；TCP 查询不重置 CAN 接收空闲计时。 */
+        if(xQueueReceive(ota_queue, &input, pdMS_TO_TICKS(OTA_IDLE_REPLY_MS)) == pdPASS)
         {
-            result = ota_on_frame(frame.standard_id,
-                                  frame.data,
-                                  frame.data_length);
-        }
-        else
-        {
-            result = ota_on_idle();
-        }
-
-        /*
-            ota.c 只"决定"该回什么，不发帧 —— 项目里 CAN 的唯一发送者是 TransmitTask。
-            这里只负责把请求转过去，到了那边才真正写邮箱。
-
-            塞不进就算了（超时给 0）：丢一次回复只让 Hub 多等一个超时周期，靠自愈，
-            不值得为它卡住收帧。
-        */
-        if((result.reply != 0U) || (result.finished != 0U))
-        {
-            ota_reply_request_t request = {0};
-
-            request.kind = (result.finished != 0U) ? CAN_OTA_REPLY_KIND_RESULT
-                                                   : CAN_OTA_REPLY_KIND_PROGRESS;
-            if(result.reply_kind != 0U)
+            if(input.source == RTOS_OTA_SOURCE_TCP)
             {
-                request.kind = result.reply_kind;
+                if(input.tcp_generation == esp12s_tcp_generation_get())
+                {
+                    result = ota_tcp_on_frame(input.frame.data, input.frame.data_length);
+                    ota_result_send(ota_reply_queue, &result, input.source, input.tcp_generation);
+                }
+                else
+                {
+                    rtos_tcp_ota_query_complete(input.tcp_generation);
+                }
             }
-            request.contiguous = result.contiguous;
-            request.success = result.success;
-            request.request_id = result.request_id;
-            request.query_status = result.query_status;
-            request.target_slot = result.target_slot;
-
-            (void)xQueueSend(ota_reply_queue, &request, 0U);
+            else
+            {
+                result = ota_can_on_frame(input.frame.standard_id,
+                                          input.frame.data, input.frame.data_length);
+                idle_tick = xTaskGetTickCount();
+                ota_result_send(ota_reply_queue, &result, RTOS_OTA_SOURCE_CAN, 0U);
+            }
+        }
+        now = xTaskGetTickCount();
+        if((now - idle_tick) >= pdMS_TO_TICKS(OTA_IDLE_REPLY_MS))
+        {
+            result = ota_on_idle((uint32_t)(now - idle_tick) * portTICK_PERIOD_MS);
+            idle_tick = now;
+            ota_result_send(ota_reply_queue, &result, RTOS_OTA_SOURCE_CAN, 0U);
         }
 
         /* 接收成功后继续运行当前固件，HMI 提示用户手动重启再安装。 */

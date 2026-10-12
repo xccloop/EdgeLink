@@ -33,7 +33,7 @@
 /* CAN接收中断交给 TransmitTask 的原始标准帧。 */
 #define RTOS_CAN_RECEIVE_FRAME_QUEUE_LENGTH             4U
 
-/* OTA 固件数据帧（ID 0x380 + node），由 CAN 中断按 ID 分流，只给 OtaTask 消费。 */
+/* CAN OTA 帧及 TCP 槽位查询，共用输入队列，只给 OtaTask 消费。 */
 #define RTOS_OTA_FRAME_QUEUE_LENGTH                     8U
 
 /*
@@ -78,6 +78,23 @@ typedef struct
     uint8_t data[8];
 } can_receive_frame_t;
 
+#define RTOS_OTA_SOURCE_CAN 0U
+#define RTOS_OTA_SOURCE_TCP 1U
+
+typedef struct
+{
+    uint8_t source;
+    uint32_t tcp_generation;
+    can_receive_frame_t frame; /* TCP 查询只使用 data_length 和 data[0..1]。 */
+} ota_receive_frame_t;
+
+typedef struct
+{
+    uint8_t source;
+    uint32_t tcp_generation;
+    ota_reply_request_t reply;
+} ota_transmit_request_t;
+
 /* 在调度器启动前调用一次；全部使用静态内存，不使用 FreeRTOS 堆。 */
 uint8_t rtos_queue_init(void);
 
@@ -102,5 +119,12 @@ uint8_t rtos_can_receive_frame_send_from_isr(const can_receive_frame_t *frame,
 
 uint8_t rtos_ota_frame_send_from_isr(const can_receive_frame_t *frame,
                                             BaseType_t *higher_priority_task_woken);
+
+uint8_t rtos_tcp_ota_query_send_from_isr(const uint8_t data[TCP_OTA_QUERY_LENGTH],
+                                        uint32_t generation,
+                                        BaseType_t *higher_priority_task_woken);
+
+/* 发送完成、丢弃或入队失败后释放唯一的待处理 TCP 查询。 */
+void rtos_tcp_ota_query_complete(uint32_t generation);
 
 #endif

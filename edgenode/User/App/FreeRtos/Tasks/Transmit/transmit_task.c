@@ -7,7 +7,10 @@
 #include "Output/Tcp/tcp.h"
 #include "Config/config.h"
 #include "Protocol/Tcp/tcp_frame.h"
+#include "Protocol/Tcp/tcp_receive.h"
 #include "Protocol/Can/can_frame.h"
+#include "INTERRUPT/USART/usart.h"
+#include "OTA/flash_layout.h"
 #include <stdint.h>
 #include <stdio.h>
 
@@ -147,7 +150,7 @@ static void transmit_task(void *argument)
     QueueHandle_t can_receive_queue;
     QueueHandle_t log_queue;
     QueueHandle_t ota_reply_queue;
-    ota_reply_request_t ota_reply;
+    ota_transmit_request_t ota_reply;
     char log_line[HMI_LOG_LINE_SIZE];
     const char *link;
 
@@ -169,6 +172,7 @@ static void transmit_task(void *argument)
     }
 
     /* TCP 建连可能等待 WiFi 回应，放在 TransmitTask 内不能阻塞 Log 恢复。 */
+    tcp_receive_init();
     (void)tcp_init(config_tcp_get());
 
     while(1)
@@ -184,8 +188,31 @@ static void transmit_task(void *argument)
         */
         if(xQueueReceive(ota_reply_queue, &ota_reply, 0U) == pdPASS)
         {
-            (void)can_ota_reply_send(board_id, &ota_reply);
-            continue;
+            if(ota_reply.source == RTOS_OTA_SOURCE_CAN)
+            {
+                (void)can_ota_reply_send(board_id, &ota_reply.reply);
+                continue;
+            }
+            if(ota_reply.source == RTOS_OTA_SOURCE_TCP)
+            {
+                if((ota_reply.tcp_generation == esp12s_tcp_generation_get()) &&
+                   (tcp_connected_get() == TCP_SUCCESS))
+                {
+                    uint8_t data[TCP_OTA_QUERY_LENGTH] = {
+                        TCP_OTA_QUERY_TYPE, TCP_OTA_SLOT_UNAVAILABLE};
+                    if(ota_reply.reply.target_slot == OTA_SLOT_A_BASE_ADDRESS)
+                    {
+                        data[1] = TCP_OTA_SLOT_A;
+                    }
+                    else if(ota_reply.reply.target_slot == OTA_SLOT_B_BASE_ADDRESS)
+                    {
+                        data[1] = TCP_OTA_SLOT_B;
+                    }
+                    (void)tcp_data_send(data, sizeof(data));
+                }
+                rtos_tcp_ota_query_complete(ota_reply.tcp_generation);
+                /* TCP 查询回复后仍给遥测一次发送机会。 */
+            }
         }
 
         /*

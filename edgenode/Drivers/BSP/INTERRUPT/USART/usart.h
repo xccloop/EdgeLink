@@ -33,7 +33,14 @@ uint8_t esp12s_diagnostic_get(char *buffer, uint8_t size);
 //获取ip
 uint8_t esp12s_local_ip_get(char *buffer, uint8_t size);
 
-/* APP发送新AT命令前调用，丢弃旧事件并重新同步当前行解析状态。 */
+/* APP发送新AT命令前仅清旧AT事件，不丢弃 TCP 半包。 */
 void esp12s_response_reset(void);
+
+/* 回调在 USART1 中断中执行；每次交付一个 +IPD 负载字节及连接编号。 */
+typedef void (*esp12s_data_receive_callback_t)(uint8_t data, uint32_t generation);
+void esp12s_data_receive_callback_set(esp12s_data_receive_callback_t callback);
+
+/* 连接切换时递增，上层可据此识别旧连接的数据。 */
+uint32_t esp12s_tcp_generation_get(void);
 
 #endif

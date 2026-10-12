@@ -1,5 +1,6 @@
 #include "rtos_queue.h"
 #include "FreeRTOS.h"
+#include "task.h"
 #include <stdint.h>
 /* Log 初始化恢复的 sequence 只需要交给 CollectTask 一次。 */
 static StaticQueue_t log_to_collect_sequence_queue_control;
@@ -55,16 +56,18 @@ static QueueHandle_t transmit_to_hmi_log_queue;
 
 static StaticQueue_t ota_frame_queue_control;
 static uint8_t ota_frame_queue_storage[
-    RTOS_OTA_FRAME_QUEUE_LENGTH * sizeof(can_receive_frame_t)];
+    RTOS_OTA_FRAME_QUEUE_LENGTH * sizeof(ota_receive_frame_t)];
 static QueueHandle_t ota_frame_queue;
 
 /* OtaTask 把"该回复什么"交给 TransmitTask，由唯一发送者真正发帧。 */
 static StaticQueue_t ota_reply_queue_control;
 static uint8_t ota_reply_queue_storage[
-    RTOS_OTA_REPLY_QUEUE_LENGTH * sizeof(ota_reply_request_t)];
+    RTOS_OTA_REPLY_QUEUE_LENGTH * sizeof(ota_transmit_request_t)];
 static QueueHandle_t ota_reply_queue;
 
 static uint8_t rtos_queue_ready;
+static volatile uint8_t tcp_query_pending;
+static volatile uint32_t tcp_query_generation;
 
 uint8_t rtos_queue_init(void)
 {
@@ -129,13 +132,13 @@ uint8_t rtos_queue_init(void)
     
     ota_frame_queue = xQueueCreateStatic(
         RTOS_OTA_FRAME_QUEUE_LENGTH,
-        sizeof(can_receive_frame_t),
+        sizeof(ota_receive_frame_t),
         ota_frame_queue_storage,
         &ota_frame_queue_control);
 
     ota_reply_queue = xQueueCreateStatic(
         RTOS_OTA_REPLY_QUEUE_LENGTH,
-        sizeof(ota_reply_request_t),
+        sizeof(ota_transmit_request_t),
         ota_reply_queue_storage,
         &ota_reply_queue_control);
 
@@ -287,14 +290,50 @@ uint8_t rtos_can_receive_frame_send_from_isr(const can_receive_frame_t *frame,
 uint8_t rtos_ota_frame_send_from_isr(const can_receive_frame_t *frame,
                                      BaseType_t *higher_priority_task_woken)
 {
+    ota_receive_frame_t input = {0};
     if((frame == NULL) || (higher_priority_task_woken == NULL) ||
        (rtos_queue_ready == 0U) || (ota_frame_queue == NULL))
     {
         return RTOS_QUEUE_FAIL;
     }
 
+    input.source = RTOS_OTA_SOURCE_CAN;
+    input.frame = *frame;
     return (xQueueSendFromISR(ota_frame_queue,
-                              frame,
+                              &input,
                               higher_priority_task_woken) == pdPASS) ?
            RTOS_QUEUE_SUCCESS : RTOS_QUEUE_FAIL;
+}
+uint8_t rtos_tcp_ota_query_send_from_isr(const uint8_t data[TCP_OTA_QUERY_LENGTH],
+                                        uint32_t generation,
+                                        BaseType_t *higher_priority_task_woken)
+{
+    ota_receive_frame_t input = {0};
+    if((data == NULL) || (higher_priority_task_woken == NULL) ||
+       (rtos_queue_ready == 0U) || (ota_frame_queue == NULL) || (tcp_query_pending != 0U))
+    {
+        return RTOS_QUEUE_FAIL;
+    }
+    input.source = RTOS_OTA_SOURCE_TCP;
+    input.tcp_generation = generation;
+    input.frame.data_length = TCP_OTA_QUERY_LENGTH;
+    input.frame.data[0] = data[0];
+    input.frame.data[1] = data[1];
+    if(xQueueSendFromISR(ota_frame_queue, &input, higher_priority_task_woken) != pdPASS)
+    {
+        return RTOS_QUEUE_FAIL;
+    }
+    tcp_query_generation = generation;
+    tcp_query_pending = 1U;
+    return RTOS_QUEUE_SUCCESS;
+}
+
+void rtos_tcp_ota_query_complete(uint32_t generation)
+{
+    taskENTER_CRITICAL();
+    if(tcp_query_generation == generation)
+    {
+        tcp_query_pending = 0U;
+    }
+    taskEXIT_CRITICAL();
 }

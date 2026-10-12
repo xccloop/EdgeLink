@@ -1,6 +1,5 @@
 #include "usart.h"
-#include "FreeRTOS.h"
-#include "FreeRtos/Queue/rtos_queue.h"
+#include <stddef.h>
 #include "gd32f10x.h"
 #include "gd32f10x_usart.h"
 
@@ -39,9 +38,26 @@ static char esp12s_response_line[ESP12S_RESPONSE_LINE_SIZE];
 static uint8_t esp12s_response_line_length;
 static uint8_t esp12s_response_line_overflow;
 static uint16_t esp12s_ipd_remaining;
-static uint8_t esp12s_ipd_store_ack;
-static uint8_t esp12s_ipd_ack_index;
-static tcp_ack_frame_t esp12s_ipd_ack_frame;
+static esp12s_data_receive_callback_t esp12s_data_receive_callback;
+static volatile uint32_t esp12s_tcp_generation;
+
+uint32_t esp12s_tcp_generation_get(void)
+{
+    return esp12s_tcp_generation;
+}
+
+static void esp12s_tcp_stream_reset(void)
+{
+    esp12s_ipd_remaining = 0U;
+    esp12s_tcp_generation++;
+}
+
+void esp12s_data_receive_callback_set(esp12s_data_receive_callback_t callback)
+{
+    usart_interrupt_disable(USART1, USART_INT_RBNE);
+    esp12s_data_receive_callback = callback;
+    usart_interrupt_enable(USART1, USART_INT_RBNE);
+}
 
 static uint8_t esp12s_ipd_length_get(uint16_t *length)
 {
@@ -170,10 +186,12 @@ static void esp12s_response_line_handle(void)
     }
     else if(esp12s_response_line_equal("CONNECT") != 0U)
     {
+        esp12s_tcp_stream_reset();
         esp12s_response_push(ESP12S_RESPONSE_CONNECT);
     }
     else if(esp12s_response_line_equal("CLOSED") != 0U)
     {
+        esp12s_tcp_stream_reset();
         esp12s_response_push(ESP12S_RESPONSE_CLOSED);
     }
     else if(esp12s_response_line_equal("WIFI CONNECTED") != 0U)
@@ -186,6 +204,7 @@ static void esp12s_response_line_handle(void)
     }
     else if(esp12s_response_line_equal("ready") != 0U)
     {
+        esp12s_tcp_stream_reset();
         esp12s_response_push(ESP12S_RESPONSE_READY);
     }
     else if(esp12s_response_line_start_with("busy") != 0U)
@@ -246,15 +265,11 @@ uint8_t esp12s_response_get(esp12s_response_t *response)
 
 void esp12s_response_reset(void)
 {
-    /* 复位队列和半行状态时暂时关闭RX中断，避免中断写指针与APP同时修改。 */
+    /* 清 AT 事件时暂时关闭 RX 中断，保留正在接收的数据。 */
     usart_interrupt_disable(USART1, USART_INT_RBNE);
     esp12s_response_write_index = 0U;
     esp12s_response_read_index = 0U;
-    esp12s_response_line_length = 0U;
-    esp12s_response_line_overflow = 0U;
-    esp12s_ipd_remaining = 0U;
-    esp12s_ipd_store_ack = 0U;
-    esp12s_ipd_ack_index = 0U;
+    /* 只清 AT 事件；TCP 半包和正在解析的 +IPD 不能被发送命令清掉。 */
     usart_interrupt_enable(USART1, USART_INT_RBNE);
 }
 
@@ -262,7 +277,6 @@ void USART1_IRQHandler(void)
 {
     uint8_t receive_data;
     uint16_t ipd_length;
-    BaseType_t higher_priority_task_woken = pdFALSE;
 
     if(usart_interrupt_flag_get(USART1, USART_INT_FLAG_RBNE) == SET)
     {
@@ -271,25 +285,10 @@ void USART1_IRQHandler(void)
         /* +IPD 的负载是二进制数据，不能再按 CR/LF 或 '>' 解释。 */
         if(esp12s_ipd_remaining != 0U)
         {
-            if(esp12s_ipd_store_ack != 0U)
-            {
-                esp12s_ipd_ack_frame.data[esp12s_ipd_ack_index] = receive_data;
-                esp12s_ipd_ack_index++;
-            }
-
             esp12s_ipd_remaining--;
-            if(esp12s_ipd_remaining == 0U)
+            if(esp12s_data_receive_callback != NULL)
             {
-                if(esp12s_ipd_store_ack != 0U)
-                {
-                    (void)rtos_tcp_ack_frame_send_from_isr(
-                        &esp12s_ipd_ack_frame,
-                        &higher_priority_task_woken);
-                    portYIELD_FROM_ISR(higher_priority_task_woken);
-                }
-
-                esp12s_ipd_store_ack = 0U;
-                esp12s_ipd_ack_index = 0U;
+                esp12s_data_receive_callback(receive_data, esp12s_tcp_generation);
             }
             return;
         }
@@ -322,8 +321,6 @@ void USART1_IRQHandler(void)
         if((receive_data == ':') && (esp12s_ipd_length_get(&ipd_length) != 0U))
         {
             esp12s_ipd_remaining = ipd_length;
-            esp12s_ipd_store_ack = (ipd_length == TCP_FRAME_LENGTH) ? 1U : 0U;
-            esp12s_ipd_ack_index = 0U;
             esp12s_response_line_length = 0U;
             esp12s_response_line_overflow = 0U;
             return;

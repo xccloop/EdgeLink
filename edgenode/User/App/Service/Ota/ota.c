@@ -21,6 +21,7 @@
 
 #include "ota.h"
 #include "Protocol/Can/can_frame.h"
+#include "Protocol/Tcp/tcp_frame.h"
 #include "Config/config.h"
 #include "GD25Q32/gd25.h"
 #include "ExFlash/external_flash_layout.h"
@@ -272,9 +273,55 @@ void ota_reset(void)
 }
 
 /*
-    这个函数处理一个固件帧，然后返回下一步需要干什么
+    CAN 与 TCP 查询共用的只读槽位判断。
 */
-ota_result_t ota_on_frame(uint16_t standard_id,const uint8_t *data,uint8_t data_length)
+static void ota_query_slot(ota_result_t *result)
+{
+    ota_metadata_t meta;
+    result->query_status = CAN_OTA_SLOT_QUERY_INVALID;
+    if(ota_state.done != 0U)
+    {
+        result->query_status = CAN_OTA_SLOT_QUERY_PENDING;
+        return;
+    }
+    if((ota_metadata_load(&meta) != OTA_METADATA_LOAD_REAL) ||
+       ((meta.active_slot != OTA_SLOT_A_BASE_ADDRESS) &&
+        (meta.active_slot != OTA_SLOT_B_BASE_ADDRESS)))
+    {
+        return;
+    }
+    if(meta.pending_slot != OTA_SLOT_NONE)
+    {
+        result->query_status = CAN_OTA_SLOT_QUERY_PENDING;
+        return;
+    }
+
+    result->query_status = CAN_OTA_SLOT_QUERY_OK;
+    result->target_slot = (meta.active_slot == OTA_SLOT_A_BASE_ADDRESS) ?
+        OTA_SLOT_B_BASE_ADDRESS : OTA_SLOT_A_BASE_ADDRESS;
+}
+
+ota_result_t ota_tcp_on_frame(const uint8_t *data, uint8_t data_length)
+{
+    ota_result_t result = {0};
+    if((data == 0) || (data_length != TCP_OTA_QUERY_LENGTH) ||
+       (data[0] != TCP_OTA_QUERY_TYPE) || (data[1] != board_id))
+    {
+        return result;
+    }
+    result.reply = 1U;
+    result.reply_kind = CAN_OTA_REPLY_KIND_SLOT;
+    ota_query_slot(&result);
+    /* TCP 查询把接收中也视为不可升级；不改变 CAN 既有查询语义。 */
+    if(ota_state.received_bytes != 0U)
+    {
+        result.target_slot = 0U;
+        result.query_status = CAN_OTA_SLOT_QUERY_PENDING;
+    }
+    return result;
+}
+
+ota_result_t ota_can_on_frame(uint16_t standard_id,const uint8_t *data,uint8_t data_length)
 {
     ota_result_t result;
     uint16_t raw_seq;
@@ -291,8 +338,6 @@ ota_result_t ota_on_frame(uint16_t standard_id,const uint8_t *data,uint8_t data_
     // 槽位查询独立于固件接收状态，不重置、不擦写，也不触发复位。
     if(standard_id == (CAN_OTA_QUERY_BASE_ID + board_id))
     {
-        ota_metadata_t meta;
-
         if((data_length != CAN_OTA_QUERY_LENGTH) ||
            (data[0] != CAN_OTA_QUERY_KIND_SLOT) || (data[3] != 0U))
         {
@@ -302,27 +347,7 @@ ota_result_t ota_on_frame(uint16_t standard_id,const uint8_t *data,uint8_t data_
         result.reply = 1U;
         result.reply_kind = CAN_OTA_REPLY_KIND_SLOT;
         result.request_id = ((uint16_t)data[1] << 8) | (uint16_t)data[2];
-        result.query_status = CAN_OTA_SLOT_QUERY_INVALID;
-        if(ota_state.done != 0U)
-        {
-            result.query_status = CAN_OTA_SLOT_QUERY_PENDING;
-            return result;
-        }
-        if((ota_metadata_load(&meta) != OTA_METADATA_LOAD_REAL) ||
-           ((meta.active_slot != OTA_SLOT_A_BASE_ADDRESS) &&
-            (meta.active_slot != OTA_SLOT_B_BASE_ADDRESS)))
-        {
-            return result;
-        }
-        if(meta.pending_slot != OTA_SLOT_NONE)
-        {
-            result.query_status = CAN_OTA_SLOT_QUERY_PENDING;
-            return result;
-        }
-
-        result.query_status = CAN_OTA_SLOT_QUERY_OK;
-        result.target_slot = (meta.active_slot == OTA_SLOT_A_BASE_ADDRESS) ?
-            OTA_SLOT_B_BASE_ADDRESS : OTA_SLOT_A_BASE_ADDRESS;
+        ota_query_slot(&result);
         return result;
     }
 
@@ -434,15 +459,14 @@ ota_result_t ota_on_frame(uint16_t standard_id,const uint8_t *data,uint8_t data_
 }
 
 /*
-    闲着的时候问一句（外壳在队列超时时调）。
-    ota.c 拿不到时钟，所以只能数"被叫了多少次"：
-    每次 ≈ OTA_IDLE_REPLY_MS 毫秒，累计到 OTA_TRANSFER_TIMEOUT_MS 就推断传输已经死了。
+    外壳传入实际空闲时间，累计到 OTA_TRANSFER_TIMEOUT_MS 时放弃未完成接收。
+    查询不应延长接收超时；ota.c 自己不读取 RTOS 时钟。
 
     为什么要有这一条：Hub 传到一半自己挂了，它什么都不发。
     设备看到的世界只是"安静"，和"Hub 正在准备下一批"长得一模一样 ——
     所以只能自己数时间推断，跟 bootloader 数试启动次数是同一个形状。
 */
-ota_result_t ota_on_idle(void)
+ota_result_t ota_on_idle(uint32_t elapsed_ms)
 {
     ota_result_t result;
 
@@ -454,7 +478,7 @@ ota_result_t ota_on_idle(void)
         return result;
     }
 
-    ota_state.idle_ms += OTA_IDLE_REPLY_MS;
+    ota_state.idle_ms += elapsed_ms;
 
     /*
         回复触发点②：卡住了，再报一次自己在哪。

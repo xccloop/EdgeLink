@@ -1,6 +1,7 @@
 ﻿<#
     在PowerShell中运行：
-    .\tools\compiled.ps1
+    .\tools\compiled.ps1 -v7
+    在 tools 目录也可运行：./compiled.ps1 -v7（7 为版本号）。
 
     只编译 EdgeNode APP，分别生成默认、A 槽、B 槽产物。
     不连接设备，也不烧录 Flash。
@@ -25,7 +26,18 @@ function script_success([string]$message)
     Write-Host "[成功] $message" -ForegroundColor Green
 }
 
-Write-Host "========== EdgeNode 编译三种 APP 布局 ==========" -ForegroundColor Cyan
+# 保留 -v7 这种紧凑写法；不使用参数绑定，直接检查脚本参数。
+[uint32]$image_version = 0
+if(($args.Count -ne 1) -or ([string]$args[0] -notmatch '^-[vV]([0-9]+)$'))
+{
+    script_fail "用法：./compiled.ps1 -v7（7 为版本号）"
+}
+if((-not [uint32]::TryParse($Matches[1], [ref]$image_version)) -or ($image_version -eq 0))
+{
+    script_fail "版本号必须是 1 到 4294967295 的整数。"
+}
+
+Write-Host "========== EdgeNode 编译三种 APP 布局（V$image_version） ==========" -ForegroundColor Cyan
 
 Write-Host "[步骤 1/3] 检查编译工具"
 if(-not (Test-Path -LiteralPath $make_path))
@@ -38,7 +50,7 @@ Write-Host "[步骤 2/3] 强制重新编译默认、A 槽和 B 槽 APP"
 try
 {
     Push-Location $project_path
-    & $make_path -B SLOT=all IMAGE_VERSION=4 all
+    & $make_path -B SLOT=all "IMAGE_VERSION=$image_version" all
     if($LASTEXITCODE -ne 0)
     {
         script_fail "编译命令返回错误码 $LASTEXITCODE。请根据上方 GCC 输出检查。"

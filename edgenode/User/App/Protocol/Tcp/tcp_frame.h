@@ -11,6 +11,13 @@
 
 #define TCP_ACK_STATUS_SUCCESS 0x00U
 
+/* TCP OTA 本阶段只支持查询：请求 type/node，回复 type/slot。 */
+#define TCP_OTA_QUERY_TYPE       0x01U
+#define TCP_OTA_QUERY_LENGTH     2U
+#define TCP_OTA_SLOT_UNAVAILABLE 0U
+#define TCP_OTA_SLOT_A           1U
+#define TCP_OTA_SLOT_B           2U
+
 /* Message 提供统一业务数据；TCP V5 遥测固定占 16 字节。 */
 uint8_t tcp_frame_encode(uint8_t frame[TCP_FRAME_LENGTH],
                          const telemetry_sample_struct *message);
