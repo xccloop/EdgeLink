@@ -38,7 +38,7 @@ Write-Host "[步骤 2/3] 强制重新编译默认、A 槽和 B 槽 APP"
 try
 {
     Push-Location $project_path
-    & $make_path -B SLOT=all all
+    & $make_path -B SLOT=all IMAGE_VERSION=4 all
     if($LASTEXITCODE -ne 0)
     {
         script_fail "编译命令返回错误码 $LASTEXITCODE。请根据上方 GCC 输出检查。"

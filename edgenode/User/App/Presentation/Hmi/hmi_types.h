@@ -57,6 +57,7 @@ typedef struct
     uint8_t          node_id;
     uint32_t         firmware_version;   /* 元数据 active_slot 对应镜像的版本 */
     uint8_t          firmware_version_valid;
+    uint8_t          ota_restart_required; /* 新镜像已校验通过，等待用户重启安装 */
     uint8_t          temperature_valid;   /* 0 = 没有有效温度，显示 --.- */
     int16_t          temperature_deci_c;  /* 0.1 °C，有符号 */
     hmi_link_state_t wifi_state;

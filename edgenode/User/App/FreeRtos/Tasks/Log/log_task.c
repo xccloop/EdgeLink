@@ -1,4 +1,5 @@
 #include "log_task.h"
+#include "FreeRtos/Tasks/Hmi/hmi_task.h"
 #include "FreeRtos/Tasks/Transmit/transmit_task.h"
 #include "FreeRtos/Tasks/task_common.h"
 #include "FreeRtos/Queue/rtos_queue.h"
@@ -97,7 +98,7 @@ static StackType_t log_task_stack[512];   /* 512：任务内调用 printf，栈�
 TaskHandle_t log_task_handle;
 
 /*
-    这个任务是上电后第一个运行的第一个任务
+    上电先等待 HMI 启动页，再执行存储恢复并放行正常页面。
 */
 static void log_task(void *argument)
 {
@@ -128,6 +129,9 @@ static void log_task(void *argument)
     {
         task_block_forever();
     }
+
+    /* HMI 完成首帧后再扫描 Flash，任务创建顺序不承担启动同步。 */
+    (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
     /* 1. LogTask 首先初始化 Flash。 */
     if(log_init(&log_result) != LOG_SUCCESS)
@@ -166,6 +170,9 @@ static void log_task(void *argument)
                          &collect_permission,
                          portMAX_DELAY);
     }
+
+    /* 存储前置流程完成，允许 HMI 进入 HOME、LINKS 等正常页面。 */
+    xTaskNotifyGive(hmi_task_handle);
 
     while(1)
     {

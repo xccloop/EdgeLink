@@ -1,8 +1,11 @@
 #include "hmi_task.h"
+#include "FreeRtos/Tasks/Log/log_task.h"
 #include "FreeRtos/Tasks/Transmit/transmit_task.h"
 #include "FreeRtos/Tasks/task_common.h"
 #include "FreeRtos/Queue/rtos_queue.h"
 #include "Presentation/Hmi/Control/hmi_control.h"
+#include "Presentation/Hmi/Page/hmi_page.h"
+#include "IPS/ips.h"
 #include "Output/Log/log.h"
 #include "Output/Tcp/tcp.h"
 #include "Config/config.h"
@@ -28,9 +31,9 @@ static void hmi_task(void *argument)
 
     uint8_t key_event;//按键事件
     uint8_t need_commit;//这一轮有没有新数据要提交
+    uint8_t restart_required;
     uint8_t i;
     uint32_t pending_now;
-    last_wake_time = xTaskGetTickCount();
 
     sample_queue =
         rtos_collect_to_hmi_queue_get();
@@ -41,16 +44,33 @@ static void hmi_task(void *argument)
         task_block_forever();
     }
 
+    if(hmi_startup_show() != IPS_SUCCESS)
+    {
+        printf("[hmi] startup screen failed\r\n");
+    }
+    /* 显示失败也放行存储，避免一个装饰画面阻断正常数据链路。 */
+    xTaskNotifyGive(log_task_handle);
+    (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+    last_wake_time = xTaskGetTickCount();
     memset(&hmi_snapshot, 0, sizeof(hmi_snapshot));
     hmi_snapshot.node_id = board_id;
     hmi_snapshot.firmware_version_valid =
         ota_active_version_get(&hmi_snapshot.firmware_version);
+    hmi_snapshot.ota_restart_required = ota_restart_required_get();
     version_check_tick = xTaskGetTickCount();
     hmi_control_init(board_id);
     (void)hmi_set_view_data(&hmi_snapshot);
     while(1)
     {
         need_commit = 0U;
+
+        restart_required = ota_restart_required_get();
+        if(restart_required != hmi_snapshot.ota_restart_required)
+        {
+            hmi_snapshot.ota_restart_required = restart_required;
+            need_commit = 1U;
+        }
 
         /* active_slot 在新固件启动确认后才更新，定期读取以同步版本显示。 */
         if((xTaskGetTickCount() - version_check_tick) >= pdMS_TO_TICKS(1000U))

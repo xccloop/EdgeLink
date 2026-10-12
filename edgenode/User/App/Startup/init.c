@@ -69,5 +69,8 @@ uint8_t init_all(void)
     }
     printf("display buffer init success\r\n");
 
+    led1_off();
+    led2_off();
+
     return INIT_ALL_SUCCESS;
 }

@@ -24,4 +24,7 @@ typedef struct
 /* 这个函数就是构建page的核心 */
 uint8_t hmi_page_build(hmi_page_t *page, const hmi_view_data_t *data,hmi_page_id_t current_page, hmi_page_id_t selected_page);
 
+/* 仅在 HmiTask 启动时调用；返回前等待整屏像素传输完成。 */
+uint8_t hmi_startup_show(void);
+
 #endif

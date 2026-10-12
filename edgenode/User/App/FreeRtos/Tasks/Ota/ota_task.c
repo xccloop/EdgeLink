@@ -3,7 +3,6 @@
 #include "FreeRtos/Queue/rtos_queue.h"
 #include "Service/Ota/ota.h"
 #include "Protocol/Can/can_frame.h"
-#include "gd32f10x.h"
 #include <stdint.h>
 
 /*
@@ -109,32 +108,7 @@ static void ota_task(void *argument)
             (void)xQueueSend(ota_reply_queue, &request, 0U);
         }
 
-        /*
-            整个 OTA 收完了：结果回复已经进了队列，但 TransmitTask 还没取走。
-
-            先等它出队，再留一点余量让 CAN 帧真的离开总线，然后复位整机 ——
-            复位之后就没机会再说"我成功了"。**复位才是这次升级的终点**：
-            复位 → bootloader 上电 → 发现中转区有完整镜像 → 搬进槽 → 试启动。
-            少了这一步，新固件会一直躺在中转区，直到下一次碰巧掉电。
-
-            等不到也照样复位：不能因为 Hub 没收到最后一句就停在这儿。
-        */
-        if(result.finished != 0U)
-        {
-            uint32_t wait;
-
-            for(wait = 0U; wait < OTA_RESET_FLUSH_WAIT_MS; wait++)
-            {
-                if(uxQueueMessagesWaiting(ota_reply_queue) == 0U)
-                {
-                    break;
-                }
-                vTaskDelay(pdMS_TO_TICKS(1U));
-            }
-            vTaskDelay(pdMS_TO_TICKS(OTA_RESET_FLUSH_MS));
-
-            NVIC_SystemReset();     /* 不返回 */
-        }
+        /* 接收成功后继续运行当前固件，HMI 提示用户手动重启再安装。 */
     }
 }
 

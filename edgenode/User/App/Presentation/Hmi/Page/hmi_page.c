@@ -1,4 +1,6 @@
 #include "hmi_page.h"
+#include "IPS/ips.h"
+#include "board_time.h"
 #include "Hmi/hmi_widget.h"
 #include "Presentation/Hmi/hmi_types.h"
 #include <stdint.h>
@@ -275,6 +277,12 @@ uint8_t hmi_page_build(hmi_page_t *page, const hmi_view_data_t *data,hmi_page_id
         return 0U;
     }
 
+    if((data->ota_restart_required != 0U) &&
+       !page_add_text(page, 108U, 30U, "New Version please Restart", 1U, COLOR_WAIT))
+    {
+        return 0U;
+    }
+
     uint8_t page_result;
     //以下是选择绘制哪个页面
     if(current_page == HMI_PAGE_HOME)
@@ -322,4 +330,76 @@ uint8_t hmi_page_build(hmi_page_t *page, const hmi_view_data_t *data,hmi_page_id
         }
     }
     return 1U;//success
+}
+
+uint8_t hmi_startup_show(void)
+{
+    static const char text[] = "EdgeNode starting";
+    static uint8_t line[IPS_DMA_LINE_BYTES];
+    const uint16_t text_x = (IPS_WIDTH - (sizeof(text) - 1U) * 12U) / 2U;
+    uint16_t y;
+    uint16_t x;
+
+    for(y = 0U; y < IPS_HEIGHT; y++)
+    {
+        ips_flush_result_enum result;
+
+        for(x = 0U; x < IPS_WIDTH; x++)
+        {
+            uint16_t color = 0x0841U;
+
+            /* 两条装饰线与三个静态圆点位置，不表示真实加载进度。 */
+            if((x >= 48U) && (x < 272U) && (y >= 88U) && (y < 90U))
+            {
+                color = 0x05FFU;
+            }
+            else if((x >= 48U) && (x < 272U) && (y == 158U))
+            {
+                color = 0x2104U;
+            }
+            else if((y >= 138U) && (y < 142U) &&
+                    (((x >= 146U) && (x < 150U)) ||
+                     ((x >= 158U) && (x < 162U)) ||
+                     ((x >= 170U) && (x < 174U))))
+            {
+                color = 0x05FFU;
+            }
+
+            if((y >= 108U) && (y < 122U) && (x >= text_x))
+            {
+                uint16_t text_column = (x - text_x) / 2U;
+                uint16_t character = text_column / 6U;
+                uint8_t column = (uint8_t)(text_column % 6U);
+
+                if((character < sizeof(text) - 1U) && (column < 5U) &&
+                   ((hmi_font_column((uint8_t)text[character], column) >>
+                     ((y - 108U) / 2U)) & 1U) != 0U)
+                {
+                    color = 0xFFFFU;
+                }
+            }
+
+            line[x * 2U] = (uint8_t)(color >> 8U);
+            line[x * 2U + 1U] = (uint8_t)color;
+        }
+
+        if(ips_flush_line(line, 0U, y, IPS_WIDTH) != IPS_FLUSH_ACCEPTED)
+        {
+            return IPS_FAIL;
+        }
+
+        /* DMA 正在读 line 时不能合成下一行；最后一行也要等到 SPI 发完。 */
+        do
+        {
+            delay_ms(1U);
+            result = ips_flush_line(0, 0U, 0U, 0U);
+        } while(result == IPS_FLUSH_BUSY);
+
+        if(result != IPS_FLUSH_COMPLETE)
+        {
+            return IPS_FAIL;
+        }
+    }
+
+    return IPS_SUCCESS;
 }

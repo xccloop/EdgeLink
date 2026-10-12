@@ -64,7 +64,7 @@ typedef struct
     uint32_t idle_ms;         /* 已经闲着多久（毫秒），用来推断传输死没死 */
     uint16_t frames_since_reply; /* 距上次回复又收了几帧 */
     uint8_t  idle_replied;    /* 这次卡住已经报过一次了，别刷屏 */
-    uint8_t  done;            /* 1 = 收完且校验通过；后面再来的帧一律不理 */
+    volatile uint8_t done;    /* 1 = 收完且校验通过，HmiTask 可读取，等待用户重启 */
 } ota_rx_state_t;
 
 static ota_rx_state_t ota_state;
@@ -303,6 +303,11 @@ ota_result_t ota_on_frame(uint16_t standard_id,const uint8_t *data,uint8_t data_
         result.reply_kind = CAN_OTA_REPLY_KIND_SLOT;
         result.request_id = ((uint16_t)data[1] << 8) | (uint16_t)data[2];
         result.query_status = CAN_OTA_SLOT_QUERY_INVALID;
+        if(ota_state.done != 0U)
+        {
+            result.query_status = CAN_OTA_SLOT_QUERY_PENDING;
+            return result;
+        }
         if((ota_metadata_load(&meta) != OTA_METADATA_LOAD_REAL) ||
            ((meta.active_slot != OTA_SLOT_A_BASE_ADDRESS) &&
             (meta.active_slot != OTA_SLOT_B_BASE_ADDRESS)))
@@ -321,11 +326,20 @@ ota_result_t ota_on_frame(uint16_t standard_id,const uint8_t *data,uint8_t data_
         return result;
     }
 
-    /* 已经收完并校验通过了：后面再来的帧一律不理。
-       少了这一句，Hub 窗口尾巴多送几帧，就会把 ota_finalize 从头再跑一遍
-       —— 重读 100+ KB、重算一次 CRC，而且数据会一路写到镜像后面去。 */
+    /* 完成后不再写入；尾帧重传只补发成功回复，允许 Hub 恢复丢失的确认。 */
     if(ota_state.done != 0U)
     {
+        if((standard_id == (CAN_OTA_DATA_BASE_ID + board_id)) &&
+           (data_length == OTA_FRAME_LENGTH))
+        {
+            raw_seq = ((uint16_t)data[0] << 8) | (uint16_t)data[1];
+            if(raw_seq == ota_reported_seq())
+            {
+                result.finished = 1U;
+                result.success = 1U;
+                result.contiguous = ota_reported_seq();
+            }
+        }
         return result;
     }
 
@@ -407,8 +421,7 @@ ota_result_t ota_on_frame(uint16_t standard_id,const uint8_t *data,uint8_t data_
             result.success  = 1U;
             result.contiguous = ota_reported_seq();
             /*
-                剩下的交给外壳：先把这个结果回给 Hub，再复位整机。
-                ota.c 自己不复位 —— 一复位，这最后一条回复就永远发不出去了。
+                外壳把结果回给 Hub，HMI 提示用户重启；当前固件继续运行。
             */
         }
         else
@@ -435,8 +448,8 @@ ota_result_t ota_on_idle(void)
 
     memset(&result, 0, sizeof(result));
 
-    /* 还没开始收，不用计时。 */
-    if(ota_state.received_bytes == 0U)
+    /* 收完后保持等待重启，不再发进度或按接收超时清掉完成状态。 */
+    if((ota_state.done != 0U) || (ota_state.received_bytes == 0U))
     {
         return result;
     }
@@ -460,6 +473,11 @@ ota_result_t ota_on_idle(void)
     }
 
     return result;
+}
+
+uint8_t ota_restart_required_get(void)
+{
+    return ota_state.done;
 }
 
 /* 版本来源固定为元数据 active_slot，不读取待安装的中转镜像。 */

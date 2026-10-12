@@ -72,18 +72,6 @@ typedef struct
 */
 #define OTA_CONFIRM_DELAY_MS      10000U
 
-/*
-    收满 + 校验通过之后，等结果回复真的发出去，再复位整机。
-
-    第一步等"回复出队"：TransmitTask 每 OTA_REPLY_POLL_MS 来取一次，取走就发。
-    第二步再留一点余量让 CAN 帧离开总线 —— 复位会掐断还没发完的帧。
-
-    两个都是【上限】，等不到也照样复位：复位才是升级的目的，
-    不能因为 Hub 没收到就停在这儿。最坏 150ms。
-*/
-#define OTA_RESET_FLUSH_WAIT_MS   100U
-#define OTA_RESET_FLUSH_MS        50U
-
 /* 1. 吃一帧 */
 ota_result_t ota_on_frame(uint16_t standard_id, const uint8_t *data, uint8_t data_length);
 
@@ -109,5 +97,8 @@ uint8_t ota_confirm_boot(void);
 
 /* 读取元数据 active_slot 的镜像头版本；返回 1 表示成功，0 表示不可用。 */
 uint8_t ota_active_version_get(uint32_t *version);
+
+/* 本次接收已完整校验通过，等待用户重启安装；返回 1 时不再接收新镜像。 */
+uint8_t ota_restart_required_get(void);
 
 #endif
