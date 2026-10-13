@@ -328,6 +328,24 @@ uint8_t rtos_tcp_ota_query_send_from_isr(const uint8_t data[TCP_OTA_QUERY_LENGTH
     return RTOS_QUEUE_SUCCESS;
 }
 
+uint8_t rtos_tcp_ota_block_send_from_isr(const uint8_t *data, uint16_t length,
+                                        uint32_t generation,
+                                        BaseType_t *higher_priority_task_woken)
+{
+    ota_receive_frame_t input = {0};
+    if((data == NULL) || (higher_priority_task_woken == NULL) ||
+       (rtos_queue_ready == 0U) || (ota_frame_queue == NULL))
+    {
+        return RTOS_QUEUE_FAIL;
+    }
+    input.source = RTOS_OTA_SOURCE_TCP;
+    input.tcp_generation = generation;
+    input.tcp_data = data;
+    input.tcp_length = length;
+    return (xQueueSendFromISR(ota_frame_queue, &input, higher_priority_task_woken) == pdPASS) ?
+           RTOS_QUEUE_SUCCESS : RTOS_QUEUE_FAIL;
+}
+
 void rtos_tcp_ota_query_complete(uint32_t generation)
 {
     taskENTER_CRITICAL();

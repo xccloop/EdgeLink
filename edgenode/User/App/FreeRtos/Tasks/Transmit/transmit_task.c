@@ -198,19 +198,37 @@ static void transmit_task(void *argument)
                 if((ota_reply.tcp_generation == esp12s_tcp_generation_get()) &&
                    (tcp_connected_get() == TCP_SUCCESS))
                 {
-                    uint8_t data[TCP_OTA_QUERY_LENGTH] = {
-                        TCP_OTA_QUERY_TYPE, TCP_OTA_SLOT_UNAVAILABLE};
-                    if(ota_reply.reply.target_slot == OTA_SLOT_A_BASE_ADDRESS)
+                    if(ota_reply.tcp_data_reply != 0U)
                     {
-                        data[1] = TCP_OTA_SLOT_A;
+                        uint32_t transfer = ota_reply.tcp_transfer_id;
+                        uint16_t block = ota_reply.reply.contiguous;
+                        uint8_t data[TCP_OTA_DATA_REPLY_LENGTH] = {
+                            TCP_OTA_DATA_TYPE,
+                            (uint8_t)(transfer >> 24), (uint8_t)(transfer >> 16),
+                            (uint8_t)(transfer >> 8), (uint8_t)transfer,
+                            (uint8_t)(block >> 8), (uint8_t)block,
+                            ota_reply.reply.success};
+                        (void)tcp_data_send(data, sizeof(data));
                     }
-                    else if(ota_reply.reply.target_slot == OTA_SLOT_B_BASE_ADDRESS)
+                    else
                     {
-                        data[1] = TCP_OTA_SLOT_B;
+                        uint8_t data[TCP_OTA_QUERY_LENGTH] = {
+                            TCP_OTA_QUERY_TYPE, TCP_OTA_SLOT_UNAVAILABLE};
+                        if(ota_reply.reply.target_slot == OTA_SLOT_A_BASE_ADDRESS)
+                        {
+                            data[1] = TCP_OTA_SLOT_A;
+                        }
+                        else if(ota_reply.reply.target_slot == OTA_SLOT_B_BASE_ADDRESS)
+                        {
+                            data[1] = TCP_OTA_SLOT_B;
+                        }
+                        (void)tcp_data_send(data, sizeof(data));
                     }
-                    (void)tcp_data_send(data, sizeof(data));
                 }
-                rtos_tcp_ota_query_complete(ota_reply.tcp_generation);
+                if(ota_reply.tcp_data_reply == 0U)
+                {
+                    rtos_tcp_ota_query_complete(ota_reply.tcp_generation);
+                }
                 /* TCP 查询回复后仍给遥测一次发送机会。 */
             }
         }

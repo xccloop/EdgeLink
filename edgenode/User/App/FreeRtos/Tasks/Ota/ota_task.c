@@ -3,6 +3,7 @@
 #include "FreeRtos/Queue/rtos_queue.h"
 #include "Service/Ota/ota.h"
 #include "Protocol/Can/can_frame.h"
+#include "Protocol/Tcp/tcp_receive.h"
 #include "INTERRUPT/USART/usart.h"
 #include <stdint.h>
 
@@ -32,6 +33,8 @@ static void ota_result_send(QueueHandle_t ota_reply_queue, const ota_result_t *r
         ota_transmit_request_t request = {0};
         request.source = source;
         request.tcp_generation = generation;
+        request.tcp_transfer_id = result->tcp_transfer_id;
+        request.tcp_data_reply = result->tcp_data_reply;
 
         request.reply.kind = (result->finished != 0U) ? CAN_OTA_REPLY_KIND_RESULT
                                                     : CAN_OTA_REPLY_KIND_PROGRESS;
@@ -46,12 +49,12 @@ static void ota_result_send(QueueHandle_t ota_reply_queue, const ota_result_t *r
         request.reply.target_slot = result->target_slot;
 
         if((xQueueSend(ota_reply_queue, &request, 0U) != pdPASS) &&
-           (source == RTOS_OTA_SOURCE_TCP))
+           (source == RTOS_OTA_SOURCE_TCP) && (result->tcp_data_reply == 0U))
         {
             rtos_tcp_ota_query_complete(generation);
         }
     }
-    else if(source == RTOS_OTA_SOURCE_TCP)
+    else if((source == RTOS_OTA_SOURCE_TCP) && (result->tcp_data_reply == 0U))
     {
         rtos_tcp_ota_query_complete(generation);
     }
@@ -67,6 +70,7 @@ static void ota_task(void *argument)
     TickType_t idle_tick;
     TickType_t now;
     uint8_t confirmed;
+    uint32_t tcp_generation;
 
     (void)argument;
 
@@ -80,9 +84,16 @@ static void ota_task(void *argument)
     boot_tick = xTaskGetTickCount();
     idle_tick = boot_tick;
     confirmed = 0U;
+    tcp_generation = esp12s_tcp_generation_get();
 
     while(1)
     {
+        tcp_receive_service();
+        if(tcp_generation != esp12s_tcp_generation_get())
+        {
+            ota_tcp_disconnect();
+            tcp_generation = esp12s_tcp_generation_get();
+        }
         /*
             跑满 OTA_CONFIRM_DELAY_MS 之后，向 bootloader 销账一次。
 
@@ -100,26 +111,50 @@ static void ota_task(void *argument)
             confirmed = 1U;
         }
 
-        /* 同一输入队列接收两条链路；TCP 查询不重置 CAN 接收空闲计时。 */
+        /* 仅服务层认可的数据刷新接收进度；查询和其他链路不延长超时。 */
         if(xQueueReceive(ota_queue, &input, pdMS_TO_TICKS(OTA_IDLE_REPLY_MS)) == pdPASS)
         {
             if(input.source == RTOS_OTA_SOURCE_TCP)
             {
                 if(input.tcp_generation == esp12s_tcp_generation_get())
                 {
-                    result = ota_tcp_on_frame(input.frame.data, input.frame.data_length);
+                    /* 连接可能在上面的阻塞取队列期间切换。 */
+                    if(tcp_generation != input.tcp_generation)
+                    {
+                        ota_tcp_disconnect();
+                        tcp_generation = input.tcp_generation;
+                    }
+                    if(input.tcp_data != NULL)
+                    {
+                        result = ota_tcp_on_frame(input.tcp_data, input.tcp_length);
+                        tcp_receive_block_release();
+                        if(result.success == TCP_OTA_DATA_SUCCESS)
+                        {
+                            idle_tick = xTaskGetTickCount();
+                        }
+                    }
+                    else
+                    {
+                        result = ota_tcp_on_frame(input.frame.data, input.frame.data_length);
+                    }
                     ota_result_send(ota_reply_queue, &result, input.source, input.tcp_generation);
                 }
                 else
                 {
-                    rtos_tcp_ota_query_complete(input.tcp_generation);
+                    if(input.tcp_data != NULL)
+                    {
+                        tcp_receive_block_release();
+                    }
+                    else
+                    {
+                        rtos_tcp_ota_query_complete(input.tcp_generation);
+                    }
                 }
             }
             else
             {
                 result = ota_can_on_frame(input.frame.standard_id,
                                           input.frame.data, input.frame.data_length);
-                idle_tick = xTaskGetTickCount();
                 ota_result_send(ota_reply_queue, &result, RTOS_OTA_SOURCE_CAN, 0U);
             }
         }
@@ -128,7 +163,9 @@ static void ota_task(void *argument)
         {
             result = ota_on_idle((uint32_t)(now - idle_tick) * portTICK_PERIOD_MS);
             idle_tick = now;
-            ota_result_send(ota_reply_queue, &result, RTOS_OTA_SOURCE_CAN, 0U);
+            ota_result_send(ota_reply_queue, &result,
+                            result.tcp_data_reply ? RTOS_OTA_SOURCE_TCP : RTOS_OTA_SOURCE_CAN,
+                            tcp_generation);
         }
 
         /* 接收成功后继续运行当前固件，HMI 提示用户手动重启再安装。 */

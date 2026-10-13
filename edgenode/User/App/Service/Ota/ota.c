@@ -54,6 +54,11 @@
 */
 typedef struct
 {
+    uint8_t tcp_active;
+    uint32_t tcp_transfer_id;
+    uint16_t tcp_next_block;
+    uint16_t tcp_last_length;
+    uint32_t tcp_last_crc;
     uint16_t expected_seq;    /* 我期待的下一个序号 */
     uint16_t block_bytes;     /* 当前块已经攒了多少字节 */
     uint32_t block_offset;    /* 当前块要写到镜像区内的哪个偏移 */
@@ -301,23 +306,151 @@ static void ota_query_slot(ota_result_t *result)
         OTA_SLOT_B_BASE_ADDRESS : OTA_SLOT_A_BASE_ADDRESS;
 }
 
-ota_result_t ota_tcp_on_frame(const uint8_t *data, uint8_t data_length)
+void ota_tcp_disconnect(void)
+{
+    if((ota_state.tcp_active != 0U) && (ota_state.done == 0U))
+    {
+        ota_reset();
+    }
+}
+
+ota_result_t ota_tcp_on_frame(const uint8_t *data, uint16_t data_length)
 {
     ota_result_t result = {0};
-    if((data == 0) || (data_length != TCP_OTA_QUERY_LENGTH) ||
-       (data[0] != TCP_OTA_QUERY_TYPE) || (data[1] != board_id))
+    uint32_t transfer;
+    uint32_t block_crc;
+    uint32_t remain;
+    uint16_t sequence;
+    uint16_t length;
+    if((data == NULL) || (data_length == 0U))
     {
         return result;
     }
-    result.reply = 1U;
-    result.reply_kind = CAN_OTA_REPLY_KIND_SLOT;
-    ota_query_slot(&result);
-    /* TCP 查询把接收中也视为不可升级；不改变 CAN 既有查询语义。 */
-    if(ota_state.received_bytes != 0U)
+    if(data[0] == TCP_OTA_QUERY_TYPE)
     {
-        result.target_slot = 0U;
-        result.query_status = CAN_OTA_SLOT_QUERY_PENDING;
+        if((data_length != TCP_OTA_QUERY_LENGTH) || (data[1] != board_id))
+        {
+            return result;
+        }
+        result.reply = 1U;
+        result.reply_kind = CAN_OTA_REPLY_KIND_SLOT;
+        ota_query_slot(&result);
+        if(ota_state.received_bytes != 0U)
+        {
+            result.target_slot = 0U;
+            result.query_status = CAN_OTA_SLOT_QUERY_PENDING;
+        }
+        return result;
     }
+    if((data[0] != TCP_OTA_DATA_TYPE) || (data_length < TCP_OTA_DATA_HEADER_LENGTH))
+    {
+        return result;
+    }
+    transfer = ((uint32_t)data[1] << 24) | ((uint32_t)data[2] << 16) |
+               ((uint32_t)data[3] << 8) | data[4];
+    sequence = ((uint16_t)data[5] << 8) | data[6];
+    length = ((uint16_t)data[7] << 8) | data[8];
+    result.reply = 1U;
+    result.tcp_data_reply = 1U;
+    result.tcp_transfer_id = transfer;
+    result.contiguous = ota_state.tcp_next_block;
+    result.success = TCP_OTA_DATA_FAIL;
+    if((transfer == 0U) || (length == 0U) || (length > OTA_BLOCK_SIZE) ||
+       (data_length != TCP_OTA_DATA_HEADER_LENGTH + length))
+    {
+        return result;
+    }
+    block_crc = crc32_generate(data + TCP_OTA_DATA_HEADER_LENGTH, length);
+    if(ota_state.tcp_active != 0U)
+    {
+        if(transfer != ota_state.tcp_transfer_id)
+        {
+            return result;
+        }
+        /* ACK 丢失后的重传只补回复，不能再次擦写或推进计数。 */
+        if((ota_state.tcp_next_block != 0U) &&
+           (sequence == (uint16_t)(ota_state.tcp_next_block - 1U)) &&
+           (length == ota_state.tcp_last_length) && (block_crc == ota_state.tcp_last_crc))
+        {
+            result.contiguous = sequence;
+            result.success = TCP_OTA_DATA_SUCCESS;
+            ota_state.idle_ms = 0U;
+            return result;
+        }
+        if((ota_state.done != 0U) || (sequence != ota_state.tcp_next_block))
+        {
+            return result;
+        }
+    }
+    else
+    {
+        ota_result_t slot = {0};
+        if((ota_state.received_bytes != 0U) || (ota_state.done != 0U) ||
+           (sequence != 0U) || (length < OTA_IMAGE_HEADER_SIZE))
+        {
+            return result;
+        }
+        ota_query_slot(&slot);
+        if(slot.query_status != CAN_OTA_SLOT_QUERY_OK)
+        {
+            return result;
+        }
+        memcpy(ota_block, data + TCP_OTA_DATA_HEADER_LENGTH, length);
+        if((((const ota_image_header_t *)ota_block)->application_length >
+            OTA_RELAY_IMAGE_CAPACITY - OTA_IMAGE_HEADER_SIZE) ||
+           (((const ota_image_header_t *)ota_block)->application_length >
+            OTA_SLOT_SIZE - OTA_IMAGE_HEADER_SIZE) ||
+           (ota_header_parse() == 0U) ||
+           (((const ota_image_header_t *)ota_block)->target_slot != slot.target_slot))
+        {
+            ota_reset();
+            return result;
+        }
+        ota_state.tcp_active = 1U;
+        ota_state.tcp_transfer_id = transfer;
+    }
+    remain = ota_state.image_total - ota_state.received_bytes;
+    if(length != ((remain > OTA_BLOCK_SIZE) ? OTA_BLOCK_SIZE : remain))
+    {
+        if(ota_state.received_bytes == 0U)
+        {
+            ota_reset(); /* 第 0 块未接受，重传时必须重新检查镜像头。 */
+        }
+        return result;
+    }
+    memcpy(ota_block, data + TCP_OTA_DATA_HEADER_LENGTH, length);
+    ota_state.block_bytes = length;
+    ota_state.received_bytes += length;
+    if(ota_state.received_bytes == ota_state.image_total)
+    {
+        /* 尾块成功意味着整包已读回校验，Hub 无需额外的完成状态。 */
+        if(ota_finalize() == 0U)
+        {
+            ota_reset();
+            result.contiguous = 0U;
+            return result;
+        }
+        ota_state.done = 1U;
+    }
+    else
+    {
+        if(ota_flash_write(ota_block, length,
+                           OTA_RELAY_IMAGE_BASE + ota_state.block_offset) == 0U)
+        {
+            ota_reset();
+            result.contiguous = 0U;
+            return result;
+        }
+        ota_state.block_offset += length;
+        ota_state.written_bytes += length;
+        ota_state.block_bytes = 0U;
+    }
+    ota_state.tcp_last_length = length;
+    ota_state.tcp_last_crc = block_crc;
+    ota_state.tcp_next_block++;
+    ota_state.idle_ms = 0U;
+    result.contiguous = sequence;
+    result.success = TCP_OTA_DATA_SUCCESS;
     return result;
 }
 
@@ -348,6 +481,11 @@ ota_result_t ota_can_on_frame(uint16_t standard_id,const uint8_t *data,uint8_t d
         result.reply_kind = CAN_OTA_REPLY_KIND_SLOT;
         result.request_id = ((uint16_t)data[1] << 8) | (uint16_t)data[2];
         ota_query_slot(&result);
+        return result;
+    }
+
+    if(ota_state.tcp_active != 0U)
+    {
         return result;
     }
 
@@ -471,6 +609,24 @@ ota_result_t ota_on_idle(uint32_t elapsed_ms)
     ota_result_t result;
 
     memset(&result, 0, sizeof(result));
+
+    if(ota_state.tcp_active != 0U)
+    {
+        if(ota_state.done == 0U)
+        {
+            ota_state.idle_ms += elapsed_ms;
+            if(ota_state.idle_ms >= OTA_TRANSFER_TIMEOUT_MS)
+            {
+                result.reply = 1U;
+                result.tcp_data_reply = 1U;
+                result.tcp_transfer_id = ota_state.tcp_transfer_id;
+                result.contiguous = 0U; /* 本次放弃，下一次只能从头开始。 */
+                result.success = TCP_OTA_DATA_FAIL;
+                ota_reset();
+            }
+        }
+        return result;
+    }
 
     /* 收完后保持等待重启，不再发进度或按接收超时清掉完成状态。 */
     if((ota_state.done != 0U) || (ota_state.received_bytes == 0U))

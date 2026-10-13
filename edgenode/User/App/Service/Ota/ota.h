@@ -34,6 +34,8 @@ typedef struct
     uint16_t request_id;
     uint8_t query_status;
     uint32_t target_slot;
+    uint32_t tcp_transfer_id;
+    uint8_t tcp_data_reply; /* 1：contiguous 是 TCP 块号，success 使用 1/2。 */
 } ota_result_t;
 
 /*
@@ -74,8 +76,10 @@ typedef struct
 /* 1. 吃一帧 */
 ota_result_t ota_can_on_frame(uint16_t standard_id, const uint8_t *data, uint8_t data_length);
 
-/* TCP 本阶段只处理 type/target_node 查询；不接收固件数据。 */
-ota_result_t ota_tcp_on_frame(const uint8_t *data, uint8_t data_length);
+/* TCP 查询或完整固件块；长度包含 type 和协议头。 */
+ota_result_t ota_tcp_on_frame(const uint8_t *data, uint16_t data_length);
+/* 连接切换只放弃未完成的 TCP 接收，不清除等待重启状态。 */
+void ota_tcp_disconnect(void);
 
 /* 2. 闲着的时候问一句（外壳在队列超时时调） */
 ota_result_t ota_on_idle(uint32_t elapsed_ms);

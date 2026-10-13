@@ -86,6 +86,8 @@ typedef struct
     uint8_t source;
     uint32_t tcp_generation;
     can_receive_frame_t frame; /* TCP 查询只使用 data_length 和 data[0..1]。 */
+    const uint8_t *tcp_data;   /* 非 NULL：接收器持有的完整 TCP 固件块。 */
+    uint16_t tcp_length;
 } ota_receive_frame_t;
 
 typedef struct
@@ -93,6 +95,8 @@ typedef struct
     uint8_t source;
     uint32_t tcp_generation;
     ota_reply_request_t reply;
+    uint32_t tcp_transfer_id;
+    uint8_t tcp_data_reply;
 } ota_transmit_request_t;
 
 /* 在调度器启动前调用一次；全部使用静态内存，不使用 FreeRTOS 堆。 */
@@ -126,5 +130,9 @@ uint8_t rtos_tcp_ota_query_send_from_isr(const uint8_t data[TCP_OTA_QUERY_LENGTH
 
 /* 发送完成、丢弃或入队失败后释放唯一的待处理 TCP 查询。 */
 void rtos_tcp_ota_query_complete(uint32_t generation);
+
+uint8_t rtos_tcp_ota_block_send_from_isr(const uint8_t *data, uint16_t length,
+                                        uint32_t generation,
+                                        BaseType_t *higher_priority_task_woken);
 
 #endif

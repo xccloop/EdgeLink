@@ -11,12 +11,22 @@
 
 #define TCP_ACK_STATUS_SUCCESS 0x00U
 
-/* TCP OTA 本阶段只支持查询：请求 type/node，回复 type/slot。 */
+/* 查询：请求 type/node，回复 type/slot。 */
 #define TCP_OTA_QUERY_TYPE       0x01U
 #define TCP_OTA_QUERY_LENGTH     2U
 #define TCP_OTA_SLOT_UNAVAILABLE 0U
 #define TCP_OTA_SLOT_A           1U
 #define TCP_OTA_SLOT_B           2U
+
+/* 数据：type/u32 transfer/u16 block/u16 length/payload，大端序。 */
+#define TCP_OTA_DATA_TYPE          0x02U
+#define TCP_OTA_DATA_HEADER_LENGTH 9U
+#define TCP_OTA_DATA_MAX_PAYLOAD   768U
+#define TCP_OTA_DATA_MAX_LENGTH    (TCP_OTA_DATA_HEADER_LENGTH + TCP_OTA_DATA_MAX_PAYLOAD)
+/* 回复：type/u32 transfer/u16 block/status；成功块号，失败期待块号。 */
+#define TCP_OTA_DATA_REPLY_LENGTH  8U
+#define TCP_OTA_DATA_SUCCESS       1U
+#define TCP_OTA_DATA_FAIL          2U
 
 /* Message 提供统一业务数据；TCP V5 遥测固定占 16 字节。 */
 uint8_t tcp_frame_encode(uint8_t frame[TCP_FRAME_LENGTH],
