@@ -27,6 +27,9 @@ void HttpHandle::clear()
     request_path.clear();
     can_query_node = 0;
     tcp_query_node = 0;
+    firmware_node = 0;
+    tcp_firmware_node = 0;
+    firmware_path.clear();
 }
 
 //这个函数就是负责解析业务的函数
@@ -71,7 +74,8 @@ void HttpHandle::handle(HttpRequest request)
             if((routes[index].prefix && path.compare(0, routes[index].path.size(), routes[index].path) == 0) ||
                (!routes[index].prefix && path == routes[index].path))
             {
-                const bool is_send = routes[index].handler == &HttpHandle::handleFirmwareSlotCanSend;
+                const bool is_send = routes[index].handler == &HttpHandle::handleFirmwareSlotCanSend ||
+                                     routes[index].handler == &HttpHandle::handleFirmwareSlotTcpSend;
                 if((is_send && method != "POST") || (!is_send && method != "GET"))
                 {
                     status = 405;
@@ -91,7 +95,8 @@ void HttpHandle::handle(HttpRequest request)
             if((routes[index].prefix && path.compare(0, routes[index].path.size(), routes[index].path) == 0) ||
                (!routes[index].prefix && path == routes[index].path))
             {
-                const bool is_send = routes[index].handler == &HttpHandle::handleFirmwareSlotCanSend;
+                const bool is_send = routes[index].handler == &HttpHandle::handleFirmwareSlotCanSend ||
+                                     routes[index].handler == &HttpHandle::handleFirmwareSlotTcpSend;
                 if((is_send && method != "POST") || (!is_send && method != "GET"))
                 {
                     status = 405;
@@ -203,5 +208,20 @@ void HttpHandle::handleFirmwareSlotQueryTcp()
 
 void HttpHandle::handleFirmwareSlotTcpSend()
 {
-
+    const std::string prefix = "/hub/firmware/tcp/send/node/";
+    std::string node_text = request_path.substr(prefix.size());
+    unsigned int node = 0;
+    status = 400;
+    body = "{\"error\":\"node must be an integer from 1 to 127\"}";
+    if(node_text.empty() || node_text.size() > 3U) return;
+    for(char digit : node_text)
+    {
+        if(digit < '0' || digit > '9') return;
+        node = node * 10U + static_cast<unsigned int>(digit - '0');
+    }
+    if(node == 0U || node > 127U) return;
+    tcp_firmware_node = static_cast<uint8_t>(node);
+    firmware_path = request_body;
+    status = 200;
+    body.clear();
 }

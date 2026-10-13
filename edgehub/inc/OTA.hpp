@@ -14,7 +14,7 @@ public:
     enum class Error
     {
         None, Busy, InvalidArgument, FileNotFound, FileOpenFailed, InvalidFile, InvalidImage,
-        ReadFailed, CanSendFailed, InvalidReply, MetadataInvalid, NodePending, Timeout, NodeRejected
+        ReadFailed, CanSendFailed, TcpSendFailed, InvalidReply, MetadataInvalid, NodePending, Timeout, NodeRejected
     };
     enum class Slot { None, A, B };
     struct Result
@@ -41,11 +41,22 @@ public:
     bool sendFirmware(uint64_t request_id, uint8_t node, const std::string& path, Result& result);
     // 每次发送最多 8 帧；true 表示本次传输结束，结果写入 result。
     bool serviceSend(Result& result);
+    //判断file是否可以发送
     bool isSending() const { return send.file >= 0; }
     // 返回是否属于 OTA 帧；result.request_id 非零表示有请求结果。
     bool onCanFrame(const can_frame& frame, Result& result);
     bool pollTimeout(Result& result);
     void cancel(uint64_t request_id);
+    // TCP 每块最多 768 字节；Runtime 负责 socket，OTA 负责块状态和应答。
+    bool sendFirmwareTcp(uint64_t request_id, uint8_t node, const std::string& path, Result& result);
+    bool serviceTcpSend(Result& result);
+    bool isSendingTcp() const { return tcp_send.file >= 0; }
+    uint64_t tcpRequestId() const { return tcp_send.request_id; }
+    bool tcpFrame(const uint8_t*& data, size_t& length) const;
+    void tcpFrameQueued();
+    void tcpFrameSent(uint64_t request_id);
+    bool onTcpReply(uint64_t request_id, const uint8_t* data, size_t length, Result& result);
+    void finishTcpSend(Result& result, Error error, const char* message);
     bool hasPendingQueries() const { return !queries.empty(); }
 
 private:
@@ -65,6 +76,26 @@ private:
         std::chrono::steady_clock::time_point deadline;
     };
     FirmwareSendState send;
+    struct TcpSendState
+    {
+        int file{-1};
+        uint64_t request_id{0};
+        uint8_t node{0};
+        uint32_t transfer_id{0};
+        size_t file_size{0};
+        size_t confirmed_bytes{0};
+        size_t submitted_bytes{0};
+        uint16_t block{0};
+        uint8_t frame[777]{}; // type/transfer/block/length + 768 字节数据。
+        size_t frame_length{0};
+        unsigned retries{0};
+        bool queued{false};
+        bool waiting_ack{false};
+        std::chrono::steady_clock::time_point deadline;
+    };
+    TcpSendState tcp_send;
+    uint32_t next_transfer_id{static_cast<uint32_t>(
+        std::chrono::steady_clock::now().time_since_epoch().count())};
     struct Query
     {
         uint8_t node;

@@ -50,6 +50,11 @@ struct ClientState
     uint64_t query_request_id{0}; // 与等待槽位结果的 HTTP 请求关联。
     std::chrono::steady_clock::time_point query_started;
     bool close_pending{false}; // 跨连接操作请求关闭，事件批次结束后执行。
+    uint64_t firmware_request_id{0}; // 绑定本连接，关闭后不可迁移到重连连接。
+    std::string output;
+    size_t output_sent{0};
+    size_t firmware_output_end{0}; // 当前固件帧在 output 中的结束位置。
+    bool firmware_output_pending{false};
 };
 
 struct HttpClientState
@@ -104,6 +109,11 @@ private:
     void drainTcpclient(int slot, bool &close_client);
     void parseTcpFrames(int slot, bool &close_client);
     bool sendTcpAck(int slot, const Message &message);
+    bool queueTcpBytes(int slot, const uint8_t* data, size_t length, bool firmware = false);
+    bool flushTcpOutput(int slot);
+    bool startTcpFirmware(uint64_t request_id, uint8_t node, const std::string& path, OTA::Result& result);
+    void serviceTcpFirmware();
+    void completeTcpFirmware(const OTA::Result& result);
     bool sendCanAck(const Message &message);
     void closeTcpclient(int fd, int slot);
     void closeUntrackedTcpclient(int fd);

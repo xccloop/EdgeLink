@@ -154,6 +154,7 @@ bool Gateruntime::run(volatile sig_atomic_t *g_running)
     {
         int timeout_ms = -1;
         if(_ota.isSending()) timeout_ms = 1;
+        else if(_ota.isSendingTcp()) timeout_ms = 50;
         else if(_ota.hasPendingQueries()) timeout_ms = 100;
         for(const auto& node : clients)
         {
@@ -185,6 +186,7 @@ bool Gateruntime::run(volatile sig_atomic_t *g_running)
         OTA::Result result;
         if(_ota.serviceSend(result))
             completeHttpRequest(result);
+        serviceTcpFirmware();
         while(_ota.pollTimeout(result))
             completeHttpRequest(result);
         for(int slot = 0; slot < MAX_CLIENTS; ++slot)
@@ -395,6 +397,10 @@ bool Gateruntime::handleTcpclient(int fd,uint32_t event_mask)
     {
         drainTcpclient(slot, close_client);
     }
+    if(!close_client && !clients[slot]->close_pending && (event_mask & EPOLLOUT) != 0)
+    {
+        close_client = !flushTcpOutput(slot);
+    }
     //修复：同一个事件可能同时带EPOLLIN和关闭标志，上面先读完最后一批数据，再根据RDHUP/HUP进入清理流程
     if((event_mask & (EPOLLRDHUP | EPOLLHUP)) != 0)
     {
@@ -535,6 +541,20 @@ void Gateruntime::parseTcpFrames(int slot, bool &close_client)
             continue;
         }
 
+        if(type == 0x02U)
+        {
+            if(length < 8) break;
+            uint8_t reply[8];
+            clients[slot]->receive_ringbuffer.read(reply, sizeof(reply));
+            OTA::Result result;
+            if(_ota.onTcpReply(clients[slot]->firmware_request_id, reply, sizeof(reply), result))
+            {
+                completeTcpFirmware(result);
+                if(clients[slot]->close_pending) break;
+            }
+            continue;
+        }
+
         TcpFrame frame{};
         Message message{};
         int parse_result = tcp_frame_parser(&clients[slot]->receive_ringbuffer, &frame);
@@ -548,7 +568,12 @@ void Gateruntime::parseTcpFrames(int slot, bool &close_client)
                 (long)message.temperature,
                 (int)message.temperatureScale);
 
-                clients[slot]->node_id = message.nodeId;
+            if(clients[slot]->firmware_request_id != 0U && clients[slot]->node_id != message.nodeId)
+            {
+                close_client = true;
+                break;
+            }
+            clients[slot]->node_id = message.nodeId;
             if(_storage.isOpen() == true)
             {
                 StorageInsertResult insert_result = _storage.insertMessage(message);
@@ -559,7 +584,7 @@ void Gateruntime::parseTcpFrames(int slot, bool &close_client)
                 }
                 else if(sendTcpAck(slot, message) == false)
                 {
-                    /* 非阻塞 socket 只发出部分 ACK 时关闭连接，避免后续 ACK 拼接成损坏字节流。 */
+                    /* 发送失败或积压超过上限，关闭连接并清理在途业务。 */
                     close_client = true;
                     break;
                 }
@@ -585,9 +610,7 @@ bool Gateruntime::sendTcpAck(int slot, const Message &message)
         return false;
     }
 
-    ssize_t sent_length = clients[slot]->connection.data_send(
-        reinterpret_cast<const char *>(frame), FRAME_LENGTH);
-    return sent_length == static_cast<ssize_t>(FRAME_LENGTH);
+    return queueTcpBytes(slot, frame, FRAME_LENGTH);
 }
 
 bool Gateruntime::sendCanAck(const Message &message)
@@ -607,6 +630,13 @@ bool Gateruntime::sendCanAck(const Message &message)
 */
 void Gateruntime::closeTcpclient(int fd, int slot)
 {
+    if(clients[slot]->firmware_request_id != 0U &&
+       clients[slot]->firmware_request_id == _ota.tcpRequestId())
+    {
+        OTA::Result result;
+        _ota.finishTcpSend(result, OTA::Error::TcpSendFailed, "Node TCP connection closed");
+        completeTcpFirmware(result);
+    }
     completeTcpSlotQuery(slot, 503, "{\"error\":\"Node TCP connection closed\"}\n");
     //按 epoll 登记、类型登记、ClientState 所有权的顺序统一清理。
     _epoll.del(fd, 0);
@@ -842,6 +872,17 @@ bool Gateruntime::handleHttpClient(int fd,uint32_t event_mask)
                     completeHttpRequest(result);
                 }
             }
+            else if(handler.firmwareSendTcpNode() != 0U)
+            {
+                if(++next_request_id == 0U) ++next_request_id;
+                client.request_id = next_request_id;
+                OTA::Result result;
+                if(!startTcpFirmware(client.request_id, handler.firmwareSendTcpNode(),
+                                     handler.firmwareSendNodePath(), result))
+                {
+                    completeHttpRequest(result);
+                }
+            }
             else if(handler.firmwareSendNode() != 0U)
             {
                 //这里表示我们要处理下发固件的逻辑
@@ -883,6 +924,12 @@ bool Gateruntime::handleHttpClient(int fd,uint32_t event_mask)
         {
             for(int node_slot = 0; node_slot < MAX_CLIENTS; ++node_slot)
             {
+                if(clients[node_slot] &&
+                   clients[node_slot]->firmware_request_id == client.request_id)
+                {
+                    clients[node_slot]->firmware_request_id = 0U;
+                    clients[node_slot]->close_pending = true;
+                }
                 if(clients[node_slot] &&
                    clients[node_slot]->query_request_id == client.request_id)
                 {
@@ -995,8 +1042,6 @@ void Gateruntime::sendHttpResponse(int slot, bool &close_client)
     close_client = true;
 }
 
-
-
 void Gateruntime::completeHttpRequest(const OTA::Result& result)
 {
     for(auto& client : httpclients)
@@ -1008,7 +1053,8 @@ void Gateruntime::completeHttpRequest(const OTA::Result& result)
             case OTA::Error::None: break;
             case OTA::Error::FileNotFound: status = 404; break;
             case OTA::Error::ReadFailed: status = 500; break;
-            case OTA::Error::CanSendFailed: status = 503; break;
+            case OTA::Error::CanSendFailed:
+            case OTA::Error::TcpSendFailed: status = 503; break;
             case OTA::Error::InvalidReply:
             case OTA::Error::MetadataInvalid:
             case OTA::Error::NodeRejected: status = 502; break;
@@ -1060,15 +1106,14 @@ bool Gateruntime::sendTcpSlotQuery(uint8_t node_id, uint64_t request_id)
 
         if(clients[slot]->node_id == node_id)
         {
-            if(clients[slot]->query_request_id != 0U || clients[slot]->close_pending)
+            if(clients[slot]->query_request_id != 0U || clients[slot]->firmware_request_id != 0U ||
+               clients[slot]->close_pending)
             {
                 return false;
             }
             clients[slot]->query_request_id = request_id;
             clients[slot]->query_started = std::chrono::steady_clock::now();
-            sent = clients[slot]->connection.data_send(
-                (const char *)query_frame,
-                QUERY_FRAME_LENGTH);
+            sent = queueTcpBytes(slot, query_frame, QUERY_FRAME_LENGTH) ? QUERY_FRAME_LENGTH : -1;
 
             if(sent != QUERY_FRAME_LENGTH)
             {
@@ -1100,4 +1145,121 @@ void Gateruntime::completeTcpSlotQuery(int slot, int status, const char *body)
             return;
         }
     }
+}
+
+
+bool Gateruntime::queueTcpBytes(int slot, const uint8_t* data, size_t length, bool firmware)
+{
+    ClientState& client = *clients[slot];
+    if(client.close_pending) return false;
+    if(client.output_sent != 0U)
+    {
+        client.output.erase(0, client.output_sent);
+        if(client.firmware_output_pending) client.firmware_output_end -= client.output_sent;
+        client.output_sent = 0U;
+    }
+    if(length > 4096U - client.output.size()) return false;
+    client.output.append(reinterpret_cast<const char*>(data), length);
+    if(firmware)
+    {
+        client.firmware_output_pending = true;
+        client.firmware_output_end = client.output.size();
+    }
+    return flushTcpOutput(slot);
+}
+
+bool Gateruntime::flushTcpOutput(int slot)
+{
+    ClientState& client = *clients[slot];
+    while(client.output_sent < client.output.size())
+    {
+        ssize_t sent = client.connection.data_send(client.output.data() + client.output_sent,
+                                                  client.output.size() - client.output_sent);
+        if(sent > 0)
+        {
+            client.output_sent += static_cast<size_t>(sent);
+            if(client.firmware_output_pending && client.output_sent >= client.firmware_output_end)
+            {
+                client.firmware_output_pending = false;
+                _ota.tcpFrameSent(client.firmware_request_id);
+            }
+            continue;
+        }
+        if(sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+        {
+            return _epoll.mod(client.connection.fd(), EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET) != -1;
+        }
+        return false;
+    }
+    client.output.clear();
+    client.output_sent = 0U;
+    return _epoll.mod(client.connection.fd(), EPOLLIN | EPOLLRDHUP | EPOLLET) != -1;
+}
+
+bool Gateruntime::startTcpFirmware(uint64_t request_id, uint8_t node,
+                                   const std::string& path, OTA::Result& result)
+{
+    result = OTA::Result{};
+    result.request_id = request_id;
+    result.node = node;
+    result.operation = OTA::Operation::FirmwareSend;
+    int target = -1;
+    for(int slot = 0; slot < MAX_CLIENTS; ++slot)
+    {
+        if(!clients[slot] || clients[slot]->node_id != node || clients[slot]->close_pending) continue;
+        if(target != -1 || clients[slot]->query_request_id != 0U ||
+           clients[slot]->firmware_request_id != 0U)
+        {
+            result.error = OTA::Error::Busy;
+            result.message = "node connection is busy or ambiguous";
+            return false;
+        }
+        target = slot;
+    }
+    if(target == -1)
+    {
+        result.error = OTA::Error::TcpSendFailed;
+        result.message = "node TCP connection is offline";
+        return false;
+    }
+    if(!_ota.sendFirmwareTcp(request_id, node, path, result)) return false;
+    clients[target]->firmware_request_id = request_id;
+    return true;
+}
+
+void Gateruntime::serviceTcpFirmware()
+{
+    OTA::Result result;
+    if(_ota.serviceTcpSend(result))
+    {
+        completeTcpFirmware(result);
+        return;
+    }
+    const uint8_t* data;
+    size_t length;
+    if(!_ota.tcpFrame(data, length)) return;
+    for(int slot = 0; slot < MAX_CLIENTS; ++slot)
+    {
+        if(!clients[slot] || clients[slot]->firmware_request_id != _ota.tcpRequestId()) continue;
+        if(clients[slot]->close_pending) return;
+        _ota.tcpFrameQueued();
+        if(!queueTcpBytes(slot, data, length, true)) clients[slot]->close_pending = true;
+        return;
+    }
+    _ota.finishTcpSend(result, OTA::Error::TcpSendFailed, "node TCP connection is no longer available");
+    completeTcpFirmware(result);
+}
+
+void Gateruntime::completeTcpFirmware(const OTA::Result& result)
+{
+    for(auto& client : clients)
+    {
+        if(client && client->firmware_request_id == result.request_id)
+        {
+            client->firmware_request_id = 0U;
+            // 失败可能留下半帧，关闭连接后重新从第 0 块发起。
+            if(result.error != OTA::Error::None) client->close_pending = true;
+        }
+    }
+    completeHttpRequest(result);
 }

@@ -6,12 +6,18 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+/*
+    此函数用于将4字节小端序数据转换为 uint32_t 整数
+*/
 static uint32_t le32(const uint8_t* p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
         ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+/*
+    此函数用于
+*/
 bool OTA::onCanFrame(const can_frame& frame, Result& result)
 {
     result = Result{};
@@ -216,6 +222,20 @@ bool OTA::pollTimeout(Result& result)
     return false;
 }
 
+/**
+ * @brief 校验 OTA 固件文件并初始化固件发送上下文
+ *
+ * 该函数不执行实际的固件数据发送。它负责校验请求参数、检查 OTA
+ * 发送状态、打开并验证固件文件，并初始化后续固件传输所需的发送状态。
+ *
+ * @param request_id 请求唯一标识符
+ * @param node       目标节点 ID，有效范围为 1~127
+ * @param path       OTA 固件镜像文件路径
+ * @param result     输出参数，用于返回操作结果及错误信息
+ *
+ * @return true  固件文件校验通过，发送上下文初始化成功
+ * @return false 参数、状态或固件文件校验失败
+ */
 bool OTA::sendFirmware(uint64_t request_id, uint8_t node, const std::string& path, Result& result)
 {
     result = Result{};
@@ -229,7 +249,7 @@ bool OTA::sendFirmware(uint64_t request_id, uint8_t node, const std::string& pat
         result.message = "invalid node or firmware path";
         return false;
     }
-    if(isSending())
+    if(isSending() || isSendingTcp())
     {
         result.error = Error::Busy;
         result.message = "firmware transfer already in progress";
@@ -346,11 +366,17 @@ void OTA::finishSend(Result& result, Error error, const char* message)
 OTA::~OTA()
 {
     if(isSending()) close(send.file);
+    if(isSendingTcp()) close(tcp_send.file);
 }
 
 void OTA::cancel(uint64_t request_id)
 {
     queries.erase(request_id);
+    if(isSendingTcp() && tcp_send.request_id == request_id)
+    {
+        close(tcp_send.file);
+        tcp_send = TcpSendState{};
+    }
     if(isSending() && send.request_id == request_id)
     {
         close(send.file);
@@ -368,6 +394,15 @@ bool OTA::ota_can_frame(uint16_t sequence, const uint8_t* bytes, size_t length, 
     return true;
 }
 
+/**
+ * @brief 检查固件镜像头是否合法且完整
+ *
+ * @param file      固件文件描述符
+ * @param file_size 固件文件大小，单位为字节
+ *
+ * @return true  镜像头校验通过
+ * @return false 镜像头不完整或校验失败
+ */
 bool OTA::ota_image_header_valid(int file, size_t file_size)
 {
     if(file_size < 256U) return false;
@@ -396,4 +431,231 @@ bool OTA::ota_image_header_valid(int file, size_t file_size)
         return false;
     }
     return true;
+}
+
+/**
+* @brief 校验固件镜像并初始化 TCP OTA 发送上下文，实际发送由事件循环推进。
+*
+* 复用 sendFirmware() 的参数检查、传输互斥和镜像文件校验。
+* 校验通过后，将临时保存在 send 中的文件句柄及文件信息交给 tcp_send，
+* 分配非零的传输编号，再清空 send，避免同一文件句柄被两份上
+*
+* @param request_id 请求唯一标识符
+* @param node       目标节点 ID，有效范围为 1~127
+* @param path       OTA 固件镜像文件路径
+* @param result     输出参数，用于返回操作结果及错误信息
+*
+* @return true  固件文件校验通过，发送上下文初始化成功
+* @return false 参数、状态或固件文件校验失败
+*/
+bool OTA::sendFirmwareTcp(uint64_t request_id, uint8_t node, const std::string& path, Result& result)
+{
+    // sendFirmware 只打开并检查镜像，不发送 CAN；复用它的文件检查。
+    if(!sendFirmware(request_id, node, path, result)) return false;
+    tcp_send.file = send.file;
+    tcp_send.request_id = request_id;
+    tcp_send.node = node;
+    tcp_send.file_size = send.file_size;
+    if(++next_transfer_id == 0U) ++next_transfer_id;
+    tcp_send.transfer_id = next_transfer_id;
+    send = FirmwareSendState{};
+    return true;
+}
+
+/** 
+ * @brief 
+ *
+ * @param result:输入参数，用于传入
+ *
+ * @return true:
+ * @return false:
+ */
+bool OTA::serviceTcpSend(Result& result)
+{
+    result = Result{};
+    if(!isSendingTcp()) return false;
+    if(tcp_send.queued && std::chrono::steady_clock::now() >= tcp_send.deadline)
+    {
+        if(!tcp_send.waiting_ack || tcp_send.retries >= 3U)
+        {
+            finishTcpSend(result, Error::Timeout, "TCP firmware send or node confirmation timed out");
+            return true;
+        }
+        ++tcp_send.retries;
+        tcp_send.queued = false;
+        tcp_send.waiting_ack = false;
+    }
+    if(tcp_send.frame_length != 0U) return false;
+
+    size_t remaining = tcp_send.file_size - tcp_send.confirmed_bytes;
+    size_t wanted = remaining < 768U ? remaining : 768U;
+    size_t length = 0;
+    while(length < wanted)
+    {
+        ssize_t count = pread(tcp_send.file, tcp_send.frame + 9U + length,
+                              wanted - length, tcp_send.confirmed_bytes + length);
+        if(count < 0 && errno == EINTR) continue;
+        if(count <= 0)
+        {
+            finishTcpSend(result, Error::ReadFailed, "firmware file read failed");
+            return true;
+        }
+        length += static_cast<size_t>(count);
+    }
+    uint32_t transfer = tcp_send.transfer_id;
+    tcp_send.frame[0] = 0x02U;
+    tcp_send.frame[1] = static_cast<uint8_t>(transfer >> 24);
+    tcp_send.frame[2] = static_cast<uint8_t>(transfer >> 16);
+    tcp_send.frame[3] = static_cast<uint8_t>(transfer >> 8);
+    tcp_send.frame[4] = static_cast<uint8_t>(transfer);
+    tcp_send.frame[5] = static_cast<uint8_t>(tcp_send.block >> 8);
+    tcp_send.frame[6] = static_cast<uint8_t>(tcp_send.block);
+    tcp_send.frame[7] = static_cast<uint8_t>(wanted >> 8);
+    tcp_send.frame[8] = static_cast<uint8_t>(wanted);
+    tcp_send.frame_length = wanted + 9U;
+    return false;
+}
+
+/**
+ * @brief 获取当前待发送的 TCP OTA 帧及其长度
+ *
+ * 该函数仅返回当前已经准备好的 TCP 帧数据，不执行实际发送。
+ *
+ * @param data   输出参数，返回待发送帧数据的首地址
+ * @param length 输出参数，返回待发送帧的字节长度
+ *
+ * @return true  成功获取待发送帧
+ * @return false 当前无可用帧、帧已入队或未处于 TCP 发送状态
+ */
+bool OTA::tcpFrame(const uint8_t*& data, size_t& length) const
+{
+    if(!isSendingTcp() || tcp_send.queued || tcp_send.frame_length == 0U) return false;
+    data = tcp_send.frame;
+    length = tcp_send.frame_length;
+    return true;
+}
+
+/**
+ * @brief 标记当前固件帧已交给发送流程，并设置发送超时。
+ *
+ * 防止事件循环重复取出同一帧安排发送。
+ * 本函数只更新状态，不复制数据，也不调用 socket 发送。
+ * 实际数据由 Gateruntime 放入连接发送缓冲并发送。
+ */
+void OTA::tcpFrameQueued()
+{
+    tcp_send.queued = true;
+
+    // 整帧应在 5 秒内提交给 socket，否则结束本次传输。
+    tcp_send.deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(5);
+}
+
+/**
+ * @brief 当前完整固件帧已提交给 socket，更新提交进度并开始等待 Node 应答。
+ *
+ * 根据已确认字节数和当前块有效数据长度，计算本块结束位置，
+ * 更新累计已提交字节数。普通块应答超时为 2 秒，
+ * 尾块需要等待 Node 完成整包 Flash 读回 CRC 校验，超时为 10 秒。
+ *
+ * @param request_id 本次发送所属的请求编号，用于防止无关或旧请求更新发送状态
+ *
+ * @note 提交给 socket 不代表 Node 已收到或写入成功；
+ *       confirmed_bytes 只在收到对应块的成功应答后更新。
+ */
+void OTA::tcpFrameSent(uint64_t request_id)
+{
+    // 没有 TCP 传输，或者请求编号不匹配，不更新状态。
+    if(!isSendingTcp() || tcp_send.request_id != request_id) return;
+
+    // 扣除 9 字节协议头，计算当前块在镜像文件中的结束位置。
+    size_t end = tcp_send.confirmed_bytes + tcp_send.frame_length - 9U;
+
+    // 重传同一块时，累计已提交字节数不能重复增加。
+    if(end > tcp_send.submitted_bytes) tcp_send.submitted_bytes = end;
+
+    // 整帧已提交，接下来等待 Node 的处理结果。
+    tcp_send.waiting_ack = true;
+
+    // 尾块包含整包校验，给予更长的应答时间。
+    tcp_send.deadline = std::chrono::steady_clock::now() +
+        std::chrono::seconds(end == tcp_send.file_size ? 10 : 2);
+}
+
+bool OTA::onTcpReply(uint64_t request_id, const uint8_t* data, size_t length, Result& result)
+{
+    result = Result{};
+    if(!isSendingTcp() || request_id != tcp_send.request_id || length != 8U || data[0] != 0x02U)
+        return false;
+    uint32_t transfer = (static_cast<uint32_t>(data[1]) << 24) |
+        (static_cast<uint32_t>(data[2]) << 16) | (static_cast<uint32_t>(data[3]) << 8) | data[4];
+    uint16_t block = (static_cast<uint16_t>(data[5]) << 8) | data[6];
+    if(transfer != tcp_send.transfer_id || !tcp_send.waiting_ack) return false;
+    if(data[7] == 1U)
+    {
+        if(block != tcp_send.block) return false; // 旧成功回复不重复推进。
+        tcp_send.confirmed_bytes += tcp_send.frame_length - 9U;
+        if(tcp_send.confirmed_bytes == tcp_send.file_size)
+        {
+            finishTcpSend(result, Error::None, "");
+            result.relay_verified = true;
+            return true;
+        }
+        ++tcp_send.block;
+        tcp_send.frame_length = 0U;
+        tcp_send.queued = false;
+        tcp_send.waiting_ack = false;
+        tcp_send.retries = 0;
+    }
+    else if(data[7] == 2U)
+    {
+        if(block != tcp_send.block || tcp_send.retries >= 3U)
+        {
+            finishTcpSend(result, Error::NodeRejected, "node rejected firmware; start a new transfer");
+            return true;
+        }
+        ++tcp_send.retries;
+        tcp_send.queued = false;
+        tcp_send.waiting_ack = false;
+    }
+    else
+    {
+        finishTcpSend(result, Error::InvalidReply, "invalid TCP firmware reply status");
+        return true;
+    }
+    return false;
+}
+
+/**
+ * @brief 结束本次 TCP 固件传输，保存结果并释放发送资源。
+ *
+ * 正常完成或发生错误时调用。将当前发送上下文中的请求编号、
+ * 目标节点和已提交字节数等信息保存到 result，再关闭镜像文件，
+ * 清空 tcp_send，为下一次传输做准备。
+ *
+ * @param result  输出参数，保存本次传输结果，供调用方生成 HTTP 响应
+ * @param error   结束原因；Error::None 表示正常完成，其他值表示失败
+ * @param message 结果说明字符串；正常完成时可传入空字符串 ""
+ *
+ * @note 本函数不设置 relay_verified，整包校验成功的标志由调用方设置。
+ */
+void OTA::finishTcpSend(Result& result, Error error, const char* message)
+{
+    // 先保存说明，避免 message 指向 result.message 时被下面的清空操作影响。
+    std::string detail(message);
+
+    // 清除旧结果，再填写本次传输的信息。
+    result = Result{};
+    result.request_id = tcp_send.request_id;
+    result.operation = Operation::FirmwareSend;
+    result.node = tcp_send.node;
+    result.transfer_started = true;
+    result.submitted_bytes = tcp_send.submitted_bytes;
+    result.transfer_submitted = tcp_send.submitted_bytes == tcp_send.file_size;
+    result.error = error;
+    result.message = detail;
+
+    // 先关闭文件，再清空发送状态，避免丢失文件句柄。
+    if(tcp_send.file >= 0) close(tcp_send.file);
+    tcp_send = TcpSendState{};
 }
