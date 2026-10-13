@@ -12,6 +12,8 @@
 #define LOG_FAIL    0U
 /* 查询完成但没有找到 pending；与 Flash 读取失败必须区分。 */
 #define LOG_NO_PENDING 2U
+/* 本页已处理，但流程还未结束；任务收到此结果后休眠，再继续调用。 */
+#define LOG_MORE       3U
 
 /*
     Log 初始化时一次扫描得到的结果。
@@ -42,6 +44,14 @@ uint8_t log_write_pending(const telemetry_sample_struct *message,uint32_t *flash
 uint8_t log_write_pending_ready(void);
 
 uint8_t log_confirm(uint32_t flash_address,uint32_t ack_sequence);
+
+/* 仅由 LogTask 调用，扫描及补发期间不得追加新记录。 */
+uint8_t log_pending_scan_begin(void);
+/* 一次最多读取一页。LOG_SUCCESS 表示完整索引已建立，LOG_MORE 表示还有下一页。 */
+uint8_t log_pending_scan_step(void);
+/* 完整索引建立后调用；按物理页顺序返回 pending，页间返回 LOG_MORE。 */
+uint8_t log_pending_replay_next(telemetry_sample_struct *message,
+                                uint32_t *flash_address);
 
 /* 这个函数是为了可以循环去找下没有发送的记录 */
 uint8_t log_find_next_pending(

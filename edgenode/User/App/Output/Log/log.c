@@ -3,6 +3,7 @@
 #include "ExFlash/external_flash_layout.h"
 #include "crc32.h"
 #include <stdint.h>
+#include <string.h>
 
 /*
     这个文件用于存储，主要是数据和flash的交互逻辑
@@ -28,6 +29,20 @@
 #define LOG_CRC_COVER_LENGTH  11U
 
 static uint8_t log_scan_page[LOG_SCAN_PAGE_SIZE];
+
+#define LOG_PAGE_COUNT ((LOG_END_ADDRESS - LOG_BASE_ADDRESS) / LOG_SCAN_PAGE_SIZE)
+#define LOG_PAGE_BITMAP_SIZE ((LOG_PAGE_COUNT + 7U) / 8U)
+
+/* 页位图只保存位置；记录本身以及确认状态仍以 Flash 为准。 */
+static uint8_t log_pending_page_bitmap[LOG_PAGE_BITMAP_SIZE];
+/* 独立缓存，确认和扇区检查使用 log_scan_page 时不会破坏当前补发页。 */
+static uint8_t log_replay_page[LOG_SCAN_PAGE_SIZE];
+static uint32_t log_pending_scan_page;
+static uint32_t log_replay_page_index;
+static uint32_t log_replay_slot_offset;
+static uint8_t log_pending_index_ready;
+static uint8_t log_pending_scan_active;
+static uint8_t log_replay_page_loaded;
 
 static uint32_t log_next_address;
 static uint8_t log_can_append;
@@ -125,6 +140,20 @@ static uint8_t log_record_crc_is_valid(
     stored_crc = log_u32_read_be(&record[LOG_CRC_OFFSET]);
 
     return crc32_check(record, LOG_CRC_COVER_LENGTH, stored_crc);
+}
+
+/* 空槽不参与 CRC，状态不是精确的 0x00 就仍需等待 Hub 确认。 */
+static uint8_t log_record_is_pending(const uint8_t *record)
+{
+    return (log_slot_is_empty(record) == 0U) &&
+           (log_record_crc_is_valid(record) != 0U) &&
+           (record[15] != LOG_CONFIRMED);
+}
+
+static void log_pending_page_mark(uint32_t page_index)
+{
+    log_pending_page_bitmap[page_index / 8U] |=
+        (uint8_t)(1U << (page_index % 8U));
 }
 
 /*
@@ -334,6 +363,8 @@ static uint8_t log_scan_log(log_init_result_t *result)
             /* status 只要不是 0x00 都视为 pending，包括确认写入时掉电留下的中间值。 */
             if(record[15] != LOG_CONFIRMED)
             {
+                log_pending_page_mark(
+                    (page_address - LOG_BASE_ADDRESS) / LOG_SCAN_PAGE_SIZE);
                 pending_total++;
                 if((result->has_pending == 0U) ||
                    (sequence < oldest_pending_sequence))
@@ -389,6 +420,7 @@ static uint8_t log_scan_log(log_init_result_t *result)
     log_scan_sequence_finish(result, has_valid_record, max_sequence);
     /* 全盘扫完才把计数一次性放出去，扫描中途失败不会留下半数。 */
     log_pending_count = pending_total;
+    log_pending_index_ready = 1U;
     return LOG_SUCCESS;
 }
 
@@ -409,6 +441,12 @@ uint8_t log_init(log_init_result_t *result)
     log_next_address = LOG_BASE_ADDRESS;
     log_can_append = 0U;
     log_pending_count = 0U;
+    memset(log_pending_page_bitmap, 0, sizeof(log_pending_page_bitmap));
+    log_pending_index_ready = 0U;
+    log_pending_scan_active = 0U;
+    log_replay_page_index = 0U;
+    log_replay_slot_offset = 0U;
+    log_replay_page_loaded = 0U;
     result->next_sequence = 0U;
     result->next_write_address = LOG_BASE_ADDRESS;
     result->can_append = 0U;
@@ -491,6 +529,8 @@ uint8_t log_write_pending(const telemetry_sample_struct *message,
 
     /* 刚写进去的记录默认就是 pending，等 Hub ACK 之后才由 log_confirm 减掉。 */
     log_pending_count++;
+    /* 新写入使旧快照失效，下一轮重连必须完整重建索引。 */
+    log_pending_index_ready = 0U;
 
     return LOG_SUCCESS;
 }
@@ -596,12 +636,156 @@ uint8_t log_confirm(uint32_t flash_address,
     */
     log_pending_count--;
 
+    /* 其他在途记录也可能被确认，同步缓存，防止随后重复取出旧的 pending 状态。 */
+    if((log_replay_page_loaded != 0U) &&
+       ((flash_address - LOG_BASE_ADDRESS) / LOG_SCAN_PAGE_SIZE ==
+        log_replay_page_index))
+    {
+        log_replay_page[(flash_address - LOG_BASE_ADDRESS) %
+                        LOG_SCAN_PAGE_SIZE + 15U] = LOG_CONFIRMED;
+    }
+
     return LOG_SUCCESS;
 }
 
 uint32_t log_pending_count_get(void)
 {
     return log_pending_count;
+}
+
+uint8_t log_pending_scan_begin(void)
+{
+    /* 新一轮快照从头建立；中途失败留下的半张位图不能用于发送。 */
+    if(log_ready == 0U)
+    {
+        return LOG_FAIL;
+    }
+
+    memset(log_pending_page_bitmap, 0, sizeof(log_pending_page_bitmap));
+    log_pending_scan_page = 0U;
+    log_pending_index_ready = 0U;
+    log_pending_scan_active = 1U;
+    log_replay_page_index = 0U;
+    log_replay_slot_offset = 0U;
+    log_replay_page_loaded = 0U;
+    return LOG_SUCCESS;
+}
+
+uint8_t log_pending_scan_step(void)
+{
+    uint32_t offset;
+
+    /* 每次只读取一页；调度与确认事件的处理由 LogTask 放在两次调用之间。 */
+    if((log_ready == 0U) || (log_pending_scan_active == 0U))
+    {
+        return LOG_FAIL;
+    }
+
+    if(log_pending_count == 0U)
+    {
+        log_pending_scan_active = 0U;
+        log_pending_index_ready = 1U;
+        return LOG_SUCCESS;
+    }
+
+    if(gd25_read(LOG_BASE_ADDRESS + log_pending_scan_page * LOG_SCAN_PAGE_SIZE,
+                 log_scan_page, LOG_SCAN_PAGE_SIZE) == 0U)
+    {
+        log_pending_scan_active = 0U;
+        return LOG_FAIL;
+    }
+
+    for(offset = 0U; offset < LOG_SCAN_PAGE_SIZE; offset += LOG_SLOT_SIZE)
+    {
+        if(log_record_is_pending(&log_scan_page[offset]) != 0U)
+        {
+            log_pending_page_mark(log_pending_scan_page);
+            break;
+        }
+    }
+
+    log_pending_scan_page++;
+    if(log_pending_scan_page == LOG_PAGE_COUNT)
+    {
+        log_pending_scan_active = 0U;
+        log_pending_index_ready = 1U;
+        return LOG_SUCCESS;
+    }
+    return LOG_MORE;
+}
+
+uint8_t log_pending_replay_next(telemetry_sample_struct *message,
+                                uint32_t *flash_address)
+{
+    uint32_t offset;
+    uint8_t *record;
+
+    /* 只在完整快照上补发；调用者必须处理上一条结果后才取下一条。 */
+    if((message == 0) || (flash_address == 0) ||
+       (log_ready == 0U) || (log_pending_index_ready == 0U))
+    {
+        return LOG_FAIL;
+    }
+    if(log_pending_count == 0U)
+    {
+        return LOG_NO_PENDING;
+    }
+
+    while(log_replay_page_index < LOG_PAGE_COUNT)
+    {
+        if((log_pending_page_bitmap[log_replay_page_index / 8U] &
+            (1U << (log_replay_page_index % 8U))) != 0U)
+        {
+            break;
+        }
+        /* 位图在 RAM，整字节为零时一次跳过八页，无需访问 GD25。 */
+        if((log_replay_page_index % 8U == 0U) &&
+           (log_pending_page_bitmap[log_replay_page_index / 8U] == 0U))
+        {
+            log_replay_page_index += 8U;
+        }
+        else
+        {
+            log_replay_page_index++;
+        }
+    }
+    if(log_replay_page_index >= LOG_PAGE_COUNT)
+    {
+        return LOG_NO_PENDING;
+    }
+
+    if(log_replay_page_loaded == 0U)
+    {
+        if(gd25_read(LOG_BASE_ADDRESS + log_replay_page_index * LOG_SCAN_PAGE_SIZE,
+                     log_replay_page, LOG_SCAN_PAGE_SIZE) == 0U)
+        {
+            log_pending_index_ready = 0U;
+            return LOG_FAIL;
+        }
+        log_replay_page_loaded = 1U;
+    }
+
+    for(offset = log_replay_slot_offset;
+        offset < LOG_SCAN_PAGE_SIZE; offset += LOG_SLOT_SIZE)
+    {
+        record = &log_replay_page[offset];
+        if(log_record_is_pending(record) != 0U)
+        {
+            log_record_message_decode(record, message);
+            *flash_address = LOG_BASE_ADDRESS +
+                log_replay_page_index * LOG_SCAN_PAGE_SIZE + offset;
+            log_replay_slot_offset = offset + LOG_SLOT_SIZE;
+            return LOG_SUCCESS;
+        }
+    }
+
+    /* 整页都已处理，才清位；失败重试仍持有同一条，不能走到这里。 */
+    log_pending_page_bitmap[log_replay_page_index / 8U] &=
+        (uint8_t)~(1U << (log_replay_page_index % 8U));
+    log_replay_page_index++;
+    log_replay_slot_offset = 0U;
+    log_replay_page_loaded = 0U;
+    return LOG_MORE;
 }
 
 /*
