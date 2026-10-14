@@ -43,6 +43,10 @@ static uint32_t log_replay_slot_offset;
 static uint8_t log_pending_index_ready;
 static uint8_t log_pending_scan_active;
 static uint8_t log_replay_page_loaded;
+static uint32_t log_latest_sequence;
+static uint8_t log_has_record;
+static uint32_t log_replay_sequence_limit;
+static uint8_t log_replay_has_history;
 
 static uint32_t log_next_address;
 static uint8_t log_can_append;
@@ -148,6 +152,14 @@ static uint8_t log_record_is_pending(const uint8_t *record)
     return (log_slot_is_empty(record) == 0U) &&
            (log_record_crc_is_valid(record) != 0U) &&
            (record[15] != LOG_CONFIRMED);
+}
+
+/* 历史边界固定在建图开始时，新样本继续落盘但不延长本轮补发。 */
+static uint8_t log_record_is_replay_pending(const uint8_t *record)
+{
+    return (log_replay_has_history != 0U) &&
+           (log_record_is_pending(record) != 0U) &&
+           (log_u32_read_be(&record[4]) <= log_replay_sequence_limit);
 }
 
 static void log_pending_page_mark(uint32_t page_index)
@@ -420,6 +432,10 @@ static uint8_t log_scan_log(log_init_result_t *result)
     log_scan_sequence_finish(result, has_valid_record, max_sequence);
     /* 全盘扫完才把计数一次性放出去，扫描中途失败不会留下半数。 */
     log_pending_count = pending_total;
+    log_latest_sequence = max_sequence;
+    log_has_record = has_valid_record;
+    log_replay_sequence_limit = max_sequence;
+    log_replay_has_history = has_valid_record;
     log_pending_index_ready = 1U;
     return LOG_SUCCESS;
 }
@@ -447,6 +463,10 @@ uint8_t log_init(log_init_result_t *result)
     log_replay_page_index = 0U;
     log_replay_slot_offset = 0U;
     log_replay_page_loaded = 0U;
+    log_latest_sequence = 0U;
+    log_has_record = 0U;
+    log_replay_sequence_limit = 0U;
+    log_replay_has_history = 0U;
     result->next_sequence = 0U;
     result->next_write_address = LOG_BASE_ADDRESS;
     result->can_append = 0U;
@@ -510,6 +530,13 @@ uint8_t log_write_pending(const telemetry_sample_struct *message,
         {
             return LOG_FAIL;
         }
+        /* 擦除会影响整扇区，不仅是本次写入所在的第一页。保留页内游标。 */
+        if((log_replay_page_loaded != 0U) &&
+           (log_sector_base(LOG_BASE_ADDRESS +
+                log_replay_page_index * LOG_SCAN_PAGE_SIZE) == log_next_address))
+        {
+            log_replay_page_loaded = 0U;
+        }
     }
     //message解码为record
     log_record_message_encode(record, message);
@@ -529,8 +556,15 @@ uint8_t log_write_pending(const telemetry_sample_struct *message,
 
     /* 刚写进去的记录默认就是 pending，等 Hub ACK 之后才由 log_confirm 减掉。 */
     log_pending_count++;
-    /* 新写入使旧快照失效，下一轮重连必须完整重建索引。 */
-    log_pending_index_ready = 0U;
+    log_latest_sequence = message->sequence;
+    log_has_record = 1U;
+    /* 同页追加后重新读取缓存，历史边界和已建立的位图仍然有效。 */
+    if((log_replay_page_loaded != 0U) &&
+       ((*flash_address - LOG_BASE_ADDRESS) / LOG_SCAN_PAGE_SIZE ==
+        log_replay_page_index))
+    {
+        log_replay_page_loaded = 0U;
+    }
 
     return LOG_SUCCESS;
 }
@@ -565,7 +599,7 @@ uint8_t log_write_pending_ready(void)
 
     if(target_sector_has_pending != 0U)
     {
-        return LOG_FAIL;
+        return LOG_FULL;
     }
 
     return LOG_SUCCESS;
@@ -596,6 +630,11 @@ uint8_t log_confirm(uint32_t flash_address,
         return LOG_FAIL;
     }
 
+    if(log_slot_is_empty(record) != 0U)
+    {
+        return LOG_STALE;
+    }
+
     /* 原记录坏了，不能确认。 */
     if(log_record_crc_is_valid(record) == 0U)
     {
@@ -608,7 +647,7 @@ uint8_t log_confirm(uint32_t flash_address,
     /* ACK 不能确认错误地址上的另一条记录。 */
     if(record_sequence != ack_sequence)
     {
-        return LOG_FAIL;
+        return LOG_STALE;
     }
 
     /* 已确认，重复 ACK 直接成功。 */
@@ -668,6 +707,8 @@ uint8_t log_pending_scan_begin(void)
     log_replay_page_index = 0U;
     log_replay_slot_offset = 0U;
     log_replay_page_loaded = 0U;
+    log_replay_sequence_limit = log_latest_sequence;
+    log_replay_has_history = log_has_record;
     return LOG_SUCCESS;
 }
 
@@ -681,7 +722,7 @@ uint8_t log_pending_scan_step(void)
         return LOG_FAIL;
     }
 
-    if(log_pending_count == 0U)
+    if((log_replay_has_history == 0U) || (log_pending_count == 0U))
     {
         log_pending_scan_active = 0U;
         log_pending_index_ready = 1U;
@@ -697,7 +738,7 @@ uint8_t log_pending_scan_step(void)
 
     for(offset = 0U; offset < LOG_SCAN_PAGE_SIZE; offset += LOG_SLOT_SIZE)
     {
-        if(log_record_is_pending(&log_scan_page[offset]) != 0U)
+        if(log_record_is_replay_pending(&log_scan_page[offset]) != 0U)
         {
             log_pending_page_mark(log_pending_scan_page);
             break;
@@ -769,7 +810,7 @@ uint8_t log_pending_replay_next(telemetry_sample_struct *message,
         offset < LOG_SCAN_PAGE_SIZE; offset += LOG_SLOT_SIZE)
     {
         record = &log_replay_page[offset];
-        if(log_record_is_pending(record) != 0U)
+        if(log_record_is_replay_pending(record) != 0U)
         {
             log_record_message_decode(record, message);
             *flash_address = LOG_BASE_ADDRESS +

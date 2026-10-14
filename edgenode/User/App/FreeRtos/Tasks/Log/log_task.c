@@ -7,182 +7,77 @@
 #include <stdint.h>
 #include <stdio.h>
 
-/* 扫描期间也处理正常发送留下的结果，避免确认队列塞满挡住 TransmitTask。 */
-static void log_confirm_queue_drain(QueueHandle_t confirm_queue)
+typedef enum
 {
-    log_confirm_event_t event;
+    LOG_REPLAY_IDLE,
+    LOG_REPLAY_SCAN,
+    LOG_REPLAY_FIND,
+    LOG_REPLAY_SUBMIT,
+    LOG_REPLAY_WAIT
+} log_replay_state_t;
 
-    while(xQueueReceive(confirm_queue, &event, 0U) == pdPASS)
-    {
-        if((event.success != 0U) &&
-           (log_confirm(event.flash_address, event.sequence) != LOG_SUCCESS))
-        {
-            task_block_forever();
-        }
-    }
-}
-
-static void log_pending_index_build(QueueHandle_t confirm_queue)
+typedef struct
 {
-    uint8_t result;
+    log_replay_state_t state;
+    transmit_work_item_t work;
+    uint8_t fail_count;
+} log_replay_context_t;
 
-    /* Log 层只读一页；任务层负责页间休眠，完整扫描成功之前不投递补发。 */
-    if(log_pending_scan_begin() != LOG_SUCCESS)
-    {
-        task_block_forever();
-    }
-    do
-    {
-        log_confirm_queue_drain(confirm_queue);
-        result = log_pending_scan_step();
-        if(result == LOG_FAIL)
-        {
-            task_block_forever();
-        }
-        vTaskDelay(1U);
-    } while(result == LOG_MORE);
-}
-
-static uint8_t log_replay_next(transmit_work_item_t *work,
-                                QueueHandle_t confirm_queue)
+static void log_replay_step(log_replay_context_t *replay,
+                             QueueHandle_t transmit_queue,
+                             uint8_t normal_pending,
+                             uint8_t normal_in_flight)
 {
     uint8_t result;
-
-    /* 页内继续使用独立缓存，换页时休眠；没有 pending 的页只查 RAM 位图。 */
-    do
-    {
-        log_confirm_queue_drain(confirm_queue);
-        result = log_pending_replay_next(&work->message, &work->flash_address);
-        if(result == LOG_MORE)
-        {
-            vTaskDelay(1U);
-        }
-    } while(result == LOG_MORE);
-    if(result == LOG_FAIL)
-    {
-        task_block_forever();
-    }
-    return result;
-}
-
-/*
-    把一条待补发的记录交给 TransmitTask，再根据回来的确认事件决定下一步：
-      - 确认成功 → log_confirm 写 confirmed，然后找下一条 pending；
-      - 连续 3 次失败 → 放弃这一条直接返回（留给下次补发或下次上电），
-        不让一条补不动的数据把补发流程永久卡死；
-      - 全部 pending 确认完 → 返回。
-    上电使用初始化扫描建立的位图；重连必须先完成分步建图再调用。
-*/
-static void log_replay_pending(QueueHandle_t transmit_queue,
-                                   QueueHandle_t confirm_queue)
-{
-    transmit_work_item_t transmit_work;
-    uint8_t fail_count = 0U;
-
-    if(log_replay_next(&transmit_work, confirm_queue) == LOG_NO_PENDING)
-    {
-        return;
-    }
-    (void)xQueueSend(transmit_queue, &transmit_work, portMAX_DELAY);
-
-    while(1)
-    {
-        log_confirm_event_t confirm_event;
-        uint8_t find_result;
-
-        if(xQueueReceive(confirm_queue, &confirm_event, portMAX_DELAY) != pdPASS)
-        {
-            task_block_forever();
-        }
-
-        /*
-            运行期补发时，TransmitTask 可能刚处理完上一条正常发送，
-            它的事件会先于我们要的那条到达。这种“别人的”事件就地消化：
-            成功就照常写 confirmed，失败则忽略，然后继续等自己这条。
-        */
-        if((confirm_event.sequence != transmit_work.message.sequence) ||
-           (confirm_event.flash_address != transmit_work.flash_address))
-        {
-            if(confirm_event.success != 0U)
-            {
-                if(log_confirm(confirm_event.flash_address,
-                                   confirm_event.sequence) != LOG_SUCCESS)
-                {
-                    task_block_forever();
-                }
-            }
-            continue;
-        }
-
-        if(confirm_event.success == 0U)
-        {
-            fail_count++;
-
-            if(fail_count < 3U)
-            {
-                (void)xQueueSend(transmit_queue, &transmit_work, portMAX_DELAY);
-                continue;
-            }
-
-            return;
-        }
-
-        if(log_confirm(confirm_event.flash_address,
-                           confirm_event.sequence) != LOG_SUCCESS)
-        {
-            task_block_forever();
-        }
-
-        fail_count = 0U;
-
-        find_result = log_replay_next(&transmit_work, confirm_queue);
-
-        if(find_result == LOG_SUCCESS)
-        {
-            (void)xQueueSend(transmit_queue, &transmit_work, portMAX_DELAY);
-            continue;
-        }
-
-        if(find_result == LOG_NO_PENDING)
-        {
-            return;
-        }
-
-        task_block_forever();
-    }
-}
-
-static void log_collect_pause(QueueHandle_t permission_queue,
-                               QueueHandle_t collect_queue,
-                               QueueHandle_t confirm_queue,
-                               uint8_t *permission_outstanding)
-{
-    uint8_t permission;
-    telemetry_sample_struct sample;
-    uint32_t address;
 
     /*
-        尚未取走的许可直接撤回；已取走则等本次采样落盘，或失败归还许可。
-        不再发新许可，确保建图期间没有新记录落到已经扫描过的页里。
+        每轮只推进一个状态，不在这里循环扫描，也不等待确认队列。
+        历史最多一条在途，正常发送优先；已有正常结果全部处理后才投递历史，
+        避免同一条旧记录的正常结果被误认为当前补发结果。
     */
-    while(*permission_outstanding != 0U)
+    switch(replay->state)
     {
-        if(xQueueReceive(permission_queue, &permission, 0U) == pdPASS)
-        {
-            *permission_outstanding = 0U;
-            break;
-        }
-        if(xQueueReceive(collect_queue, &sample, 0U) == pdPASS)
-        {
-            if(log_write_pending(&sample, &address) != LOG_SUCCESS)
+        case LOG_REPLAY_SCAN:
+            result = log_pending_scan_step();
+            if(result == LOG_FAIL)
             {
                 task_block_forever();
             }
-            *permission_outstanding = 0U;
+            if(result == LOG_SUCCESS)
+            {
+                replay->state = LOG_REPLAY_FIND;
+            }
             break;
-        }
-        log_confirm_queue_drain(confirm_queue);
-        vTaskDelay(1U);
+
+        case LOG_REPLAY_FIND:
+            result = log_pending_replay_next(&replay->work.message,
+                                             &replay->work.flash_address);
+            if(result == LOG_FAIL)
+            {
+                task_block_forever();
+            }
+            if(result == LOG_SUCCESS)
+            {
+                replay->fail_count = 0U;
+                replay->state = LOG_REPLAY_SUBMIT;
+            }
+            else if(result == LOG_NO_PENDING)
+            {
+                replay->state = LOG_REPLAY_IDLE;
+            }
+            break;
+
+        case LOG_REPLAY_SUBMIT:
+            if((normal_pending == 0U) && (normal_in_flight == 0U) &&
+               (xQueueSend(transmit_queue, &replay->work, 0U) == pdPASS))
+            {
+                replay->state = LOG_REPLAY_WAIT;
+            }
+            break;
+
+        default:
+            /* IDLE 没有恢复工作；WAIT 由主循环收到对应结果后推进。 */
+            break;
     }
 }
 
@@ -190,17 +85,19 @@ static StaticTask_t log_task_tcb;
 static StackType_t log_task_stack[512];   /* 512：任务内调用 printf，栈需求变大 */
 TaskHandle_t log_task_handle;
 
-/*
-    上电先等待 HMI 启动页，再执行存储恢复并放行正常页面。
-*/
 static void log_task(void *argument)
 {
     log_init_result_t log_result;
     telemetry_sample_struct collected_message;
-    transmit_work_item_t transmit_work;
+    transmit_work_item_t normal_work;
+    log_replay_context_t replay = {0};
     log_confirm_event_t confirm_event;
+    uint8_t normal_pending = 0U;
+    uint8_t normal_in_flight = 0U;
     uint8_t permission_outstanding = 0U;
-
+    uint8_t permission_check_needed = 1U;
+    uint8_t replay_requested = 0U;
+    uint8_t retry_on_delivery = 0U;
     QueueHandle_t sequence_queue;
     QueueHandle_t permission_queue;
     QueueHandle_t collect_queue;
@@ -208,170 +105,176 @@ static void log_task(void *argument)
     QueueHandle_t confirm_queue;
 
     (void)argument;
-
     sequence_queue = rtos_log_to_collect_sequence_queue_get();
     permission_queue = rtos_log_to_collect_permission_queue_get();
     collect_queue = rtos_collect_to_log_queue_get();
     transmit_queue = rtos_log_to_transmit_queue_get();
     confirm_queue = rtos_transmit_to_log_confirm_queue_get();
-
-    if((sequence_queue == NULL) ||
-       (permission_queue == NULL) ||
-       (collect_queue == NULL) ||
-       (transmit_queue == NULL) ||
-       (confirm_queue == NULL))
+    if((sequence_queue == NULL) || (permission_queue == NULL) ||
+       (collect_queue == NULL) || (transmit_queue == NULL) || (confirm_queue == NULL))
     {
         task_block_forever();
     }
 
-    /* HMI 完成首帧后再扫描 Flash，任务创建顺序不承担启动同步。 */
+    /* HMI 首帧完成后恢复序号。上电全区扫描保持原逻辑，历史发送不再挡住采集。 */
     (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
-    /* 1. LogTask 首先初始化 Flash。 */
     if(log_init(&log_result) != LOG_SUCCESS)
     {
         task_block_forever();
     }
-
-    /*
-        2. 上电恢复：初始化扫描同时建立页位图，按物理页顺序补发完再放行采集。
-           不再为寻找下一条 pending 执行无休眠的逐槽全区搜索。
-    */
     if(log_result.has_pending != 0U)
     {
-        log_replay_pending(transmit_queue, confirm_queue);
+        replay.state = LOG_REPLAY_FIND;
     }
-
-    if(log_write_pending_ready() != LOG_SUCCESS)
-    {
-        task_block_forever();
-    }
-
-    (void)xQueueSend(sequence_queue,
-                     &log_result.next_sequence,
-                     portMAX_DELAY);
-
-    {
-        uint8_t collect_permission = 1U;
-
-        (void)xQueueSend(permission_queue,
-                         &collect_permission,
-                         portMAX_DELAY);
-        permission_outstanding = 1U;
-    }
-
-    /* 存储前置流程完成，允许 HMI 进入 HOME、LINKS 等正常页面。 */
+    (void)xQueueSend(sequence_queue, &log_result.next_sequence, portMAX_DELAY);
     xTaskNotifyGive(hmi_task_handle);
 
     while(1)
     {
         /*
-            TransmitTask 投递每次发送的成功或失败事件。
-            LogTask 是唯一写 Flash 的任务，所以二次写入必须在这里完成。
-            此处先取尽已经到达的事件，避免采集频繁时 ACK 长时间滞留。
+            成功结果先确认 Flash；仅地址和 sequence 都匹配，才推进历史工作。
+            normal_in_flight 只统计普通工作，每条工作由 TransmitTask 回一个结果。
         */
         while(xQueueReceive(confirm_queue, &confirm_event, 0U) == pdPASS)
         {
+            uint8_t is_replay =
+                (replay.state == LOG_REPLAY_WAIT) &&
+                (confirm_event.sequence == replay.work.message.sequence) &&
+                (confirm_event.flash_address == replay.work.flash_address);
+
             if(confirm_event.success != 0U)
             {
-                if(log_confirm(confirm_event.flash_address,
-                                   confirm_event.sequence) != LOG_SUCCESS)
+                uint8_t result = log_confirm(confirm_event.flash_address,
+                                             confirm_event.sequence);
+                if(result == LOG_FAIL)
                 {
                     task_block_forever();
                 }
-
-            }
-        }
-
-        /*
-            运行期链路恢复：TransmitTask 在 TCP 重连成功后置 link_restored。
-            先暂停采集，按页完整建立位图，然后集中补发。
-            扫描和补发页间均会休眠，期间的新重连通知留到下一轮处理，不嵌套调用。
-        */
-        if(link_restored != 0U)
-        {
-            link_restored = 0U;
-
-            log_collect_pause(permission_queue, collect_queue, confirm_queue,
-                              &permission_outstanding);
-            log_pending_index_build(confirm_queue);
-            log_replay_pending(transmit_queue, confirm_queue);
-
-            /* 补发失败也可恢复采集，但仍不能擦除含 pending 的目标扇区。 */
-            if(log_write_pending_ready() == LOG_SUCCESS)
-            {
-                uint8_t collect_permission = 1U;
-                (void)xQueueSend(permission_queue, &collect_permission, portMAX_DELAY);
-                permission_outstanding = 1U;
-            }
-        }
-
-        /*
-            4. 等待 CollectTask 的新采样。
-            最多等待 100 ms；这样没有新采样时也会回来检查确认队列。
-            FreeRTOS 当前没有启用 Queue Set，不能同时永久阻塞在两条队列上。
-        */
-        if(xQueueReceive(collect_queue,
-                         &collected_message,
-                         pdMS_TO_TICKS(100U)) == pdPASS)
-        {
-            permission_outstanding = 0U;
-            if(log_write_pending(&collected_message,
-                                     &transmit_work.flash_address)
-               == LOG_SUCCESS)
-            {
-                /* 调试：显示本次写入 Flash 的内容与地址。 */
-                printf("[log] seq=%lu temp=%d scale=%d addr=0x%06lX\r\n",
-                       (unsigned long)collected_message.sequence,
-                       (int)collected_message.temperature,
-                       (int)collected_message.temperature_scale,
-                       (unsigned long)transmit_work.flash_address);
-
-                transmit_work.message = collected_message;
-
-                /*
-                    先成功写 Flash，再交给 TransmitTask。
-                    至此断电，重启扫描仍能找到 pending。
-                */
-                xQueueSend(transmit_queue,
-                           &transmit_work,
-                           portMAX_DELAY);
-
-                if(log_write_pending_ready() != LOG_SUCCESS)
+                /* LOG_STALE 是槽位已复用的旧结果，不得确认新记录。 */
+                if(result == LOG_SUCCESS)
                 {
-                    continue;
+                    permission_check_needed = 1U;
                 }
+            }
 
+            if(is_replay != 0U)
+            {
+                if(confirm_event.success != 0U)
                 {
-                    uint8_t collect_permission = 1U;
-
-                    (void)xQueueSend(permission_queue,
-                                     &collect_permission,
-                                     portMAX_DELAY);
-                    permission_outstanding = 1U;
+                    replay.state = LOG_REPLAY_FIND;
+                    replay.fail_count = 0U;
+                }
+                else if(++replay.fail_count < 3U)
+                {
+                    replay.state = LOG_REPLAY_SUBMIT;
+                }
+                else
+                {
+                    /* 不自动无限重试同一条，正常采集继续，Flash pending 保留。 */
+                    replay.state = LOG_REPLAY_IDLE;
                 }
             }
             else
             {
-                /*
-                    已取出的 Message 不能在未落盘时继续跳过；停止本任务，
-                    防止 CollectTask 继续分配 sequence 后造成静默数据丢失。
-                    上电后由 log_init() 重新扫描实际 Flash 状态。
-                */
-                task_block_forever();
+                if(normal_in_flight != 0U)
+                {
+                    normal_in_flight--;
+                }
+                if(confirm_event.success == 0U)
+                {
+                    retry_on_delivery = 1U;
+                }
+                else if(retry_on_delivery != 0U)
+                {
+                    /* 新记录失败后留在 Flash，后续通信成功再安排恢复，离线时不空转建图。 */
+                    replay_requested = 1U;
+                    retry_on_delivery = 0U;
+                }
             }
         }
+
+        if(link_restored != 0U)
+        {
+            link_restored = 0U;
+            replay_requested = 1U;
+        }
+        if((replay_requested != 0U) && (replay.state == LOG_REPLAY_IDLE))
+        {
+            /* 捕获已落盘序号上限，之后的新采样不延长这一次历史恢复。 */
+            if(log_pending_scan_begin() != LOG_SUCCESS)
+            {
+                task_block_forever();
+            }
+            replay.state = LOG_REPLAY_SCAN;
+            replay.fail_count = 0U;
+            replay_requested = 0U;
+        }
+
+        /* 待投递普通记录只有一个，未成功入队时保留，不用 portMAX_DELAY 堵住恢复。 */
+        if((normal_pending == 0U) &&
+           (xQueueReceive(collect_queue, &collected_message, 0U) == pdPASS))
+        {
+            permission_outstanding = 0U;
+            if(log_write_pending(&collected_message, &normal_work.flash_address)
+               != LOG_SUCCESS)
+            {
+                task_block_forever();
+            }
+            normal_work.message = collected_message;
+            normal_pending = 1U;
+            permission_check_needed = 1U;
+            printf("[log] seq=%lu temp=%d scale=%d addr=0x%06lX\r\n",
+                   (unsigned long)collected_message.sequence,
+                   (int)collected_message.temperature,
+                   (int)collected_message.temperature_scale,
+                   (unsigned long)normal_work.flash_address);
+        }
+        if((normal_pending != 0U) &&
+           (xQueueSend(transmit_queue, &normal_work, 0U) == pdPASS))
+        {
+            normal_pending = 0U;
+            normal_in_flight++;
+        }
+
+        /*
+            恢复状态不阻止发许可。队列满的待投递记录先保留，形成有界背压；
+            目标扇区含 pending 时等确认后再检查，不每毫秒反复读取整个扇区。
+        */
+        if((permission_outstanding == 0U) && (normal_pending == 0U) &&
+           (permission_check_needed != 0U))
+        {
+            uint8_t result = log_write_pending_ready();
+            if(result == LOG_FAIL)
+            {
+                task_block_forever();
+            }
+            if(result == LOG_SUCCESS)
+            {
+                uint8_t permission = 1U;
+                if(xQueueSend(permission_queue, &permission, 0U) != pdPASS)
+                {
+                    task_block_forever();
+                }
+                permission_outstanding = 1U;
+            }
+            permission_check_needed = 0U;
+        }
+
+        log_replay_step(&replay, transmit_queue, normal_pending, normal_in_flight);
+        /* 恢复时每轮让出 CPU，空闲时短睡眠，既不忙等也不让扫描每页等 100 ms。 */
+        vTaskDelay((replay.state != LOG_REPLAY_IDLE || normal_pending != 0U)
+                       ? 1U : pdMS_TO_TICKS(10U));
     }
 }
 
 void log_task_create(void)
 {
     log_task_handle = xTaskCreateStatic(log_task,
-                                            "log",
-                                            512,
-                                            NULL,
-                                            4,//storage任务我希望他可以上电后就启动，因此设置为最高优先级
-                                            log_task_stack,
-                                            &log_task_tcb);
+                                      "log",
+                                      512,
+                                      NULL,
+                                      4,
+                                      log_task_stack,
+                                      &log_task_tcb);
     configASSERT(log_task_handle != NULL);
 }

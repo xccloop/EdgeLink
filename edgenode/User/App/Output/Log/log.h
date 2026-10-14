@@ -14,6 +14,10 @@
 #define LOG_NO_PENDING 2U
 /* 本页已处理，但流程还未结束；任务收到此结果后休眠，再继续调用。 */
 #define LOG_MORE       3U
+/* 该地址已擦除或复用；忽略旧工作项，不能确认新记录。 */
+#define LOG_STALE      4U
+/* 下一写入扇区仍含 pending；等待确认释放空间，与 IO 失败区分。 */
+#define LOG_FULL       5U
 
 /*
     Log 初始化时一次扫描得到的结果。
@@ -40,12 +44,12 @@ uint8_t log_init(log_init_result_t *result);
 
 uint8_t log_write_pending(const telemetry_sample_struct *message,uint32_t *flash_address);
 
-/* 不修改 Flash；确认下一次 pending 写入不会擦除仍含 pending 的扇区。 */
+/* 不修改 Flash；返回 LOG_FULL 表示等待 pending 释放，LOG_FAIL 表示访问异常。 */
 uint8_t log_write_pending_ready(void);
 
 uint8_t log_confirm(uint32_t flash_address,uint32_t ack_sequence);
 
-/* 仅由 LogTask 调用，扫描及补发期间不得追加新记录。 */
+/* 仅由 LogTask 调用；捕获当前最大 sequence，后续新写入不进入本轮历史。 */
 uint8_t log_pending_scan_begin(void);
 /* 一次最多读取一页。LOG_SUCCESS 表示完整索引已建立，LOG_MORE 表示还有下一页。 */
 uint8_t log_pending_scan_step(void);
