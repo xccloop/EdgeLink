@@ -30,6 +30,21 @@ uint8_t esp12s_response_get(esp12s_response_t *response);
 #define ESP12S_DIAGNOSTIC_LINE_SIZE 96U
 uint8_t esp12s_diagnostic_get(char *buffer, uint8_t size);
 
+/* 只统计，不记录原始串口内容，避免打印命令回显中的密码。 */
+typedef struct
+{
+    uint32_t rx_bytes;
+    uint32_t text_lines;
+    uint32_t events;
+    uint32_t dropped_events;
+    uint32_t framing_errors;
+    uint32_t overrun_errors;
+    uint16_t ipd_remaining;
+    uint8_t partial_line_length;
+    uint8_t line_overflow;
+} esp12s_uart_health_t;
+void esp12s_uart_health_get(esp12s_uart_health_t *health);
+
 //获取ip
 uint8_t esp12s_local_ip_get(char *buffer, uint8_t size);
 

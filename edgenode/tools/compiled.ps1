@@ -28,7 +28,7 @@ function script_success([string]$message)
 
 # 保留 -v7 这种紧凑写法；不使用参数绑定，直接检查脚本参数。
 [uint32]$image_version = 0
-if(($args.Count -ne 1) -or ([string]$args[0] -notmatch '^-[vV]([0-9]+)$'))
+if(($args.Count -notin @(1, 3)) -or ([string]$args[0] -notmatch '^-[vV]([0-9]+)$'))
 {
     script_fail "用法：./compiled.ps1 -v7（7 为版本号）"
 }
@@ -36,6 +36,23 @@ if((-not [uint32]::TryParse($Matches[1], [ref]$image_version)) -or ($image_versi
 {
     script_fail "版本号必须是 1 到 4294967295 的整数。"
 }
+
+# 默认使用仓库外的本机密钥；也可用环境变量或 -SigningKey 显式指定。
+$signing_key_path = $env:EDGENODE_SIGNING_KEY
+if([string]::IsNullOrWhiteSpace($signing_key_path))
+{
+    $signing_key_path = Join-Path $env:USERPROFILE ".edgelink\keys\ota-signing.pem"
+}
+if($args.Count -eq 3)
+{
+    if([string]$args[1] -ne "-SigningKey") { script_fail "第二个参数应为 -SigningKey" }
+    $signing_key_path = [string]$args[2]
+}
+if(-not (Test-Path -LiteralPath $signing_key_path -PathType Leaf))
+{
+    script_fail "缺少OTA私钥：$signing_key_path；不会生成无签名镜像。"
+}
+$signing_key_path = (Resolve-Path -LiteralPath $signing_key_path).Path
 
 Write-Host "========== EdgeNode 编译三种 APP 布局（V$image_version） ==========" -ForegroundColor Cyan
 
@@ -50,7 +67,7 @@ Write-Host "[步骤 2/3] 强制重新编译默认、A 槽和 B 槽 APP"
 try
 {
     Push-Location $project_path
-    & $make_path -B SLOT=all "IMAGE_VERSION=$image_version" all
+    & $make_path -B SLOT=all "IMAGE_VERSION=$image_version" "SIGNING_KEY=$signing_key_path" all
     if($LASTEXITCODE -ne 0)
     {
         script_fail "编译命令返回错误码 $LASTEXITCODE。请根据上方 GCC 输出检查。"

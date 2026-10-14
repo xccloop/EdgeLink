@@ -4,6 +4,11 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import struct
+import sys
+sys.dont_write_bytecode = True
+from cryptography.hazmat.primitives.asymmetric import ec
+from make_ota_image import build_header, SLOTS
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = r'''
@@ -84,17 +89,13 @@ static ota_result_t receive_image(int corrupt) {
     struct { ota_image_header_t header; uint8_t application[8]; } image;
     uint16_t sequence;
     ota_result_t result = {0};
-    memset(&image, 0, sizeof(image));
-    image.header.magic = OTA_IMAGE_MAGIC;
-    image.header.header_version = OTA_IMAGE_FORMAT_VERSION;
-    image.header.header_size = OTA_IMAGE_HEADER_SIZE;
-    image.header.hardware_model = OTA_CURRENT_HARDWARE_MODEL;
-    image.header.firmware_version = 2U;
-    image.header.target_slot = OTA_SLOT_B_BASE_ADDRESS;
-    image.header.application_length = sizeof(image.application);
-    image.header.application_crc32 = crc32_generate(image.application, sizeof(image.application));
-    image.header.header_crc32 = crc32_generate((const uint8_t *)&image.header, OTA_IMAGE_HEADER_CRC_LENGTH);
-    ota_reset(); writes = erases = 0; corrupt_read = corrupt;
+    static const uint8_t signed_image[] = {SIGNED_IMAGE};
+    memcpy(&image, signed_image, sizeof(image));
+    if(corrupt == 2) {
+        image.header.signature[0] ^= 1U;
+        image.header.header_crc32 = crc32_generate((const uint8_t *)&image.header, OTA_IMAGE_HEADER_CRC_LENGTH);
+    }
+    ota_reset(); writes = erases = 0; corrupt_read = (corrupt == 1);
     for(sequence = 0; sequence < sizeof(image) / OTA_FRAME_PAYLOAD; sequence++) {
         uint8_t frame[OTA_FRAME_LENGTH];
         frame[0] = (uint8_t)(sequence >> 8); frame[1] = (uint8_t)sequence;
@@ -102,6 +103,38 @@ static ota_result_t receive_image(int corrupt) {
         result = ota_can_on_frame(CAN_OTA_DATA_BASE_ID + board_id, frame, sizeof(frame));
     }
     return result;
+}
+
+static void check_signed_tcp(void) {
+    static const uint8_t signed_image[] = {SIGNED_IMAGE};
+    uint8_t frame[TCP_OTA_DATA_HEADER_LENGTH + sizeof(signed_image)] = {2U,0U,0U,0U,123U,0U,0U};
+    ota_image_header_t header;
+    ota_result_t result;
+    unsigned mode;
+    for(mode = 0U; mode < 3U; ++mode) {
+        metadata_valid = 1; metadata.active_slot = OTA_SLOT_A_BASE_ADDRESS;
+        metadata.pending_slot = OTA_SLOT_NONE;
+        ota_reset(); writes = erases = 0; corrupt_read = 0;
+        memcpy(frame + TCP_OTA_DATA_HEADER_LENGTH, signed_image, sizeof(signed_image));
+        memcpy(&header, signed_image, sizeof(header));
+        if(mode == 1U) header.signature[0] ^= 1U;
+        if(mode == 2U) header.header_version = 1U;
+        header.header_crc32 = crc32_generate((const uint8_t *)&header, OTA_IMAGE_HEADER_CRC_LENGTH);
+        memcpy(frame + TCP_OTA_DATA_HEADER_LENGTH, &header, sizeof(header));
+        frame[7] = (uint8_t)(sizeof(signed_image) >> 8); frame[8] = (uint8_t)sizeof(signed_image);
+        result = ota_tcp_on_frame(frame, sizeof(frame));
+        assert(result.tcp_data_reply && result.tcp_transfer_id == 123U);
+        if(mode == 0U) {
+            unsigned saved_writes = writes;
+            assert(result.success == TCP_OTA_DATA_SUCCESS && ota_restart_required_get());
+            result = ota_tcp_on_frame(frame, sizeof(frame));
+            assert(result.success == TCP_OTA_DATA_SUCCESS && writes == saved_writes);
+        } else {
+            assert(result.success == TCP_OTA_DATA_FAIL && !ota_restart_required_get());
+            if(mode == 2U) assert(writes == 0U && erases == 0U);
+        }
+    }
+    ota_reset(); writes = erases = 0; metadata_valid = 0;
 }
 
 static void check_tcp_queries(void) {
@@ -138,6 +171,7 @@ static void check_tcp_queries(void) {
 }
 
 int main(void) {
+    check_signed_tcp();
     check_tcp_queries();
     unsigned i, completed_writes, completed_erases;
     uint8_t frame[OTA_FRAME_LENGTH] = {0};
@@ -176,6 +210,8 @@ int main(void) {
     (void)ota_can_on_frame(CAN_OTA_DATA_BASE_ID + board_id, frame, sizeof(frame));
     for(i = 0; i <= OTA_TRANSFER_TIMEOUT_MS / OTA_IDLE_REPLY_MS; i++) (void)ota_on_idle(OTA_IDLE_REPLY_MS);
     assert(ota_state.received_bytes == 0U && ota_restart_required_get() == 0U);
+    result = receive_image(2);
+    assert(result.success == 0U && ota_restart_required_get() == 0U);
     puts("OTA manual-restart and all-page restart hint regression passed");
     return 0;
 }
@@ -186,18 +222,32 @@ with tempfile.TemporaryDirectory(prefix="edgelink-ota-restart-") as temp:
     (directory / "gd32f10x.h").write_text(
         "#include <stdint.h>\ntypedef struct { uint32_t VTOR; } test_scb_t;\n"
         "extern test_scb_t test_scb;\n#define SCB (&test_scb)\n")
-    (directory / "test.c").write_text(SOURCE)
+    test_key = ec.derive_private_key(7, ec.SECP256R1())
+    app = struct.pack('<II', 0x2000C000, SLOTS['b'] + 257)
+    signed_image = build_header(app, 2, SLOTS['b'], test_key) + app
+    (directory / "test.c").write_text(SOURCE.replace('SIGNED_IMAGE', ','.join(str(b) for b in signed_image)))
+    numbers = test_key.public_key().public_numbers()
+    raw = numbers.x.to_bytes(32, 'big') + numbers.y.to_bytes(32, 'big')
+    (directory / "test_key.c").write_text('#include <stdint.h>\nconst uint8_t ota_signature_public_key[64] = {' + ','.join(str(b) for b in raw) + '};\n')
     compiler = os.environ.get("HOST_CC", "gcc")
     if not shutil.which(compiler):
         raise SystemExit("Host C compiler missing; set HOST_CC")
     binary = directory / ("test.exe" if os.name == "nt" else "test")
     subprocess.run([compiler, "-std=c11", "-Wall", "-Wextra", "-Werror",
-                    "-Wno-int-to-pointer-cast",
+                    "-Wno-int-to-pointer-cast", "-Wno-unknown-pragmas",
+                    "-DuECC_SUPPORTS_secp160r1=0", "-DuECC_SUPPORTS_secp192r1=0",
+                    "-DuECC_SUPPORTS_secp224r1=0", "-DuECC_SUPPORTS_secp256k1=0",
+                    "-DuECC_SUPPORT_COMPRESSED_POINT=0",
                     "-I" + str(directory), "-I" + str(ROOT / "User/App/Service/Ota"),
                     "-I" + str(ROOT / "User/App"), "-I" + str(ROOT / "Common"),
+                    "-I" + str(ROOT / "Common/Crypto/micro-ecc"),
+                    "-I" + str(ROOT / "Common/Crypto/sha256"),
                     "-I" + str(ROOT / "Drivers/BSP"),
                     "-I" + str(ROOT / "Drivers/BOARD"),
-                    str(directory / "test.c"), str(ROOT / "Common/CRC/crc32.c"),
+                    str(directory / "test.c"), str(directory / "test_key.c"),
+                    str(ROOT / "Common/OTA/ota_signature.c"),
+                    str(ROOT / "Common/Crypto/micro-ecc/uECC.c"),
+                    str(ROOT / "Common/Crypto/sha256/sha256.c"), str(ROOT / "Common/CRC/crc32.c"),
                     str(ROOT / "User/App/Presentation/Hmi/Page/hmi_page.c"),
                     str(ROOT / "Common/Hmi/hmi_widget.c"),
                     "-o", str(binary)], check=True)

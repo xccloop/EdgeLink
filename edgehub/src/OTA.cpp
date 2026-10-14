@@ -1,19 +1,11 @@
 #include "OTA.hpp"
+#include "OtaImageVerify.h"
 #include <cstring>
 #include <cerrno>
 #include <cstdio>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
-
-/*
-    此函数用于将4字节小端序数据转换为 uint32_t 整数
-*/
-static uint32_t le32(const uint8_t* p)
-{
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
-        ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
 
 /*
     此函数用于
@@ -270,11 +262,11 @@ bool OTA::sendFirmware(uint64_t request_id, uint8_t node, const std::string& pat
         result.message = "expected an OTA image file of 264 to 120832 bytes";
         return false;
     }
-    if(!ota_image_header_valid(file, static_cast<size_t>(info.st_size)))
+    if(!ota_image_valid(file, static_cast<size_t>(info.st_size)))
     {
         close(file);
         result.error = Error::InvalidImage;
-        result.message = "invalid OTA image header; use a packaged firmware image";
+        result.message = "invalid OTA image or signature; use a signed firmware image";
         return false;
     }
     send.file = file;
@@ -400,37 +392,12 @@ bool OTA::ota_can_frame(uint16_t sequence, const uint8_t* bytes, size_t length, 
  * @param file      固件文件描述符
  * @param file_size 固件文件大小，单位为字节
  *
- * @return true  镜像头校验通过
- * @return false 镜像头不完整或校验失败
+ * @return true  完整镜像CRC和签名校验通过
+ * @return false 镜像不完整、CRC错误或签名校验失败
  */
-bool OTA::ota_image_header_valid(int file, size_t file_size)
+bool OTA::ota_image_valid(int file, size_t file_size)
 {
-    if(file_size < 256U) return false;
-    // Identify a packaged Node OTA image before putting any file bytes on CAN.
-    uint8_t header[256];
-    ssize_t header_bytes;
-    do { header_bytes = pread(file, header, sizeof(header), 0); }
-    while(header_bytes < 0 && errno == EINTR);
-    uint32_t header_crc = 0xFFFFFFFFU;
-    if(header_bytes == sizeof(header))
-    {
-        for(size_t i = 0; i < 252U; ++i)
-        {
-            header_crc ^= header[i];
-            for(unsigned bit = 0; bit < 8U; ++bit)
-                header_crc = (header_crc >> 1) ^ ((header_crc & 1U) ? 0xEDB88320U : 0U);
-        }
-    }
-    if(header_bytes != sizeof(header) || le32(header) != 0x3141544FU ||
-       header[4] != 1U || header[5] != 0U || header[6] != 0U || header[7] != 1U ||
-       le32(header + 8) != 1U ||
-       (le32(header + 16) != OTA_SLOT_A_BASE_ADDRESS && le32(header + 16) != OTA_SLOT_B_BASE_ADDRESS) ||
-       le32(header + 20) != file_size - sizeof(header) ||
-       (header_crc ^ 0xFFFFFFFFU) != le32(header + 252))
-    {
-        return false;
-    }
-    return true;
+    return ota_image_verify_file(file, file_size) != 0;
 }
 
 /**

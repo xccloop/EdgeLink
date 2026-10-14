@@ -1,6 +1,7 @@
 #include "image_verify.h"
 #include "flash_layout.h"
 #include "ota_image.h"
+#include "ota_signature.h"
 #include "crc32.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -70,6 +71,15 @@ bool image_verify(uint32_t slot_base)
     if (crc32_check(payload,
                     header->application_length,
                     header->application_crc32) == 0U)
+    {
+        return false;
+    }
+
+    ota_signature_context_t signature;
+    if((header->target_slot != slot_base) ||
+       (ota_signature_begin(&signature, header) == 0U) ||
+       (ota_signature_update(&signature, payload, header->application_length) == 0U) ||
+       (ota_signature_finish(&signature) == 0U))
     {
         return false;
     }

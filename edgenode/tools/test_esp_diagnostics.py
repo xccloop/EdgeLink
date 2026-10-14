@@ -16,6 +16,7 @@ static unsigned char incoming;
 static unsigned ack_count, query_count;
 static uint8_t last_query[2];
 static uint32_t last_generation;
+int usart_flag_get(unsigned port, unsigned flag) { (void)port; (void)flag; return 0; }
 int usart_interrupt_flag_get(unsigned port, unsigned flag) { (void)port; (void)flag; return SET; }
 unsigned usart_data_receive(unsigned port) { (void)port; return incoming; }
 void usart_interrupt_disable(unsigned port, unsigned flag) { (void)port; (void)flag; }
@@ -25,6 +26,9 @@ int rtos_tcp_ack_frame_send_from_isr(const tcp_ack_frame_t *f, BaseType_t *w) {
 }
 int rtos_tcp_ota_query_send_from_isr(const uint8_t *data, uint32_t generation, BaseType_t *w) {
     (void)w; query_count++; memcpy(last_query, data, 2); last_generation = generation; return 1;
+}
+int rtos_tcp_ota_block_send_from_isr(const uint8_t *data, uint16_t length, uint32_t generation, BaseType_t *w) {
+    (void)data; (void)length; (void)generation; (void)w; return RTOS_QUEUE_SUCCESS;
 }
 static void feed(const char *s) { while(*s) { incoming = (unsigned char)*s++; USART1_IRQHandler(); } }
 int main(void) {
@@ -88,13 +92,15 @@ with tempfile.TemporaryDirectory(prefix="edgelink-esp-test-") as temp:
     directory = Path(temp)
     queue = directory / "FreeRtos/Queue/rtos_queue.h"
     queue.parent.mkdir(parents=True)
-    queue.write_text("#define TCP_FRAME_LENGTH 16\n#define TCP_OTA_QUERY_TYPE 1\n#define TCP_OTA_QUERY_LENGTH 2\n"
+    queue.write_text("#include \"Protocol/Tcp/tcp_frame.h\"\n#define RTOS_QUEUE_SUCCESS 1U\n"
                      "typedef struct { unsigned char data[16]; } tcp_ack_frame_t;\n"
                      "int rtos_tcp_ack_frame_send_from_isr(const tcp_ack_frame_t *, BaseType_t *);\n"
-                     "int rtos_tcp_ota_query_send_from_isr(const uint8_t *, uint32_t, BaseType_t *);\n")
-    (directory / "FreeRTOS.h").write_text("typedef int BaseType_t;\n#define pdFALSE 0\n#define portYIELD_FROM_ISR(x) ((void)(x))\n")
+                     "int rtos_tcp_ota_query_send_from_isr(const uint8_t *, uint32_t, BaseType_t *);\n"
+                     "int rtos_tcp_ota_block_send_from_isr(const uint8_t *, uint16_t, uint32_t, BaseType_t *);\n")
+    (directory / "FreeRTOS.h").write_text("typedef int BaseType_t;\ntypedef unsigned TickType_t;\n#define pdMS_TO_TICKS(ms) (ms)\n#define pdFALSE 0\n#define portYIELD_FROM_ISR(x) ((void)(x))\n")
+    (directory / "task.h").write_text("#define taskENTER_CRITICAL() ((void)0)\n#define taskEXIT_CRITICAL() ((void)0)\nstatic inline TickType_t xTaskGetTickCountFromISR(void) { return 0; }\nstatic inline TickType_t xTaskGetTickCount(void) { return 0; }\n")
     (directory / "gd32f10x.h").write_text("#define SET 1\n#define USART0 0\n#define USART1 1\n")
-    (directory / "gd32f10x_usart.h").write_text("#define USART_INT_FLAG_RBNE 1\n#define USART_INT_RBNE 1\nint usart_interrupt_flag_get(unsigned,unsigned);\nunsigned usart_data_receive(unsigned);\nvoid usart_interrupt_disable(unsigned,unsigned);\nvoid usart_interrupt_enable(unsigned,unsigned);\n")
+    (directory / "gd32f10x_usart.h").write_text("#define USART_FLAG_FERR 2\n#define USART_FLAG_ORERR 3\nint usart_flag_get(unsigned,unsigned);\n#define USART_INT_FLAG_RBNE 1\n#define USART_INT_RBNE 1\nint usart_interrupt_flag_get(unsigned,unsigned);\nunsigned usart_data_receive(unsigned);\nvoid usart_interrupt_disable(unsigned,unsigned);\nvoid usart_interrupt_enable(unsigned,unsigned);\n")
     (directory / "test.c").write_text(SOURCE)
     compiler = os.environ.get("HOST_CC", "gcc")
     if not shutil.which(compiler):
@@ -105,5 +111,7 @@ with tempfile.TemporaryDirectory(prefix="edgelink-esp-test-") as temp:
                     "-I" + str(ROOT / "Drivers/BSP/INTERRUPT/USART"),
                     "-I" + str(ROOT / "Drivers/BSP"),
                     "-I" + str(ROOT / "User/App/Protocol/Tcp"),
+                    "-I" + str(ROOT / "User/App"),
+                    "-I" + str(ROOT / "Common"),
                     str(directory / "test.c"), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True)

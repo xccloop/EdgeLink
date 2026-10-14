@@ -47,7 +47,13 @@ EdgeLink 的 GD32F103RCT6 采集节点，使用 FreeRTOS 静态任务和队列�
 | A | `build/a/` | 带 256 B 镜像头的 A 槽应用，槽起点 `0x08004000` |
 | B | `build/b/` | 带 256 B 镜像头的 B 槽应用，槽起点 `0x08021800` |
 
-A/B 的 OTA 文件为 `edegnode_image.bin`，不能用未带头的普通 BIN 替代。版本号写入镜像头，构建规则也支持 `mingw32-make -C edgenode SLOT=all IMAGE_VERSION=7`。
+A/B 的 OTA 文件为 `edegnode_image.bin`，不能用未带头的普通 BIN 替代。版本号写入镜像头，构建规则也支持 `mingw32-make -C edgenode SLOT=all IMAGE_VERSION=7 "SIGNING_KEY=<仓库外私钥路径>"`。
+
+## 固件签名
+
+验签库及公共实现都放在 `Common`：`Common/Crypto` 保存SHA-256和micro-ecc，`Common/OTA`保存分块验签接口、镜像格式和固定公钥。APP接收读回、Bootloader搬运前和A/B启动前都验证签名，旧无签名镜像被拒绝。
+
+首次构建安装 `python -m pip install -r ./edgenode/tools/requirements-signing.txt`；`compiled.ps1 -v10` 默认使用仓库外本机私钥，也可通过 `-SigningKey` 或环境变量指定。直接make需要传入 `SIGNING_KEY`。密钥备份、首次SWD迁移、验证命令和范围见[签名说明](Common/OTA/SIGNING.md)。
 
 ## 首次烧录与 OTA
 
@@ -139,4 +145,4 @@ python edgenode/tools/test_ota_manual_restart.py
 
 以上三项在 2026-10-14 的文档核验中通过。旧的 `test_esp_diagnostics.py` 尚未适配新版 TCP 接收代码，当前因缺少 `task.h` 测试桩而编译失败，需要单独修复。
 
-`test_log_replay.py` 模拟 Flash/队列并运行真实 Log/LogTask；`test_tcp_recovery.py` 模拟 UART 与时间；`test_ota_manual_restart.py` 模拟中转区并运行真实 OTA/HMI Page。三者都需要主机 C 编译器，但不模拟完整硬件实时性。[10 月 12 日记录](../docs/develop/2026-10-12/main.md)包含 CAN 升级和部分故障实测；[10 月 13 日记录](../docs/develop/2026-10-13/main.md)包含 TCP OTA 和页索引实现。新版扫描的 IPS 刷新、实际耗时以及 TCP OTA 端到端仍需设备验收，固件签名尚未实现。
+`test_log_replay.py` 模拟 Flash/队列并运行真实 Log/LogTask；`test_tcp_recovery.py` 模拟 UART 与时间；`test_ota_manual_restart.py` 模拟中转区并运行真实 OTA/HMI Page。三者都需要主机 C 编译器，但不模拟完整硬件实时性。[10 月 12 日记录](../docs/develop/2026-10-12/main.md)包含 CAN 升级和部分故障实测；[10 月 13 日记录](../docs/develop/2026-10-13/main.md)包含 TCP OTA 和页索引实现。新版扫描的 IPS 刷新、实际耗时以及 TCP OTA 端到端仍需设备验收，v2 固件签名已实现并通过主机验证，签名版实机验收仍待完成。

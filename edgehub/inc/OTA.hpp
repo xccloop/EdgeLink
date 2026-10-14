@@ -107,7 +107,7 @@ private:
     std::unordered_map<uint64_t, Query> queries;
     bool finishSlotQuery(uint8_t node, const can_frame& frame, Result& result);
     void finishSend(Result& result, Error error, const char* message);
-    bool ota_image_header_valid(int file, size_t file_size);
+    bool ota_image_valid(int file, size_t file_size);
     bool ota_can_frame(uint16_t sequence, const uint8_t* bytes, size_t length, uint8_t data[8]);
 
     static constexpr uint32_t CAN_OTA_DATA_BASE_ID = 0x380U;

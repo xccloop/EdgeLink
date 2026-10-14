@@ -40,6 +40,21 @@ static uint8_t esp12s_response_line_overflow;
 static uint16_t esp12s_ipd_remaining;
 static esp12s_data_receive_callback_t esp12s_data_receive_callback;
 static volatile uint32_t esp12s_tcp_generation;
+static volatile esp12s_uart_health_t esp12s_uart_health;
+
+void esp12s_uart_health_get(esp12s_uart_health_t *health)
+{
+    if(health == NULL)
+    {
+        return;
+    }
+    usart_interrupt_disable(USART1, USART_INT_RBNE);
+    *health = esp12s_uart_health;
+    health->ipd_remaining = esp12s_ipd_remaining;
+    health->partial_line_length = esp12s_response_line_length;
+    health->line_overflow = esp12s_response_line_overflow;
+    usart_interrupt_enable(USART1, USART_INT_RBNE);
+}
 
 uint32_t esp12s_tcp_generation_get(void)
 {
@@ -95,6 +110,8 @@ static void esp12s_response_push(esp12s_response_t response)
 {
     uint8_t next_index = (uint8_t)(esp12s_response_write_index + 1U);
 
+    esp12s_uart_health.events++;
+
     if(next_index >= ESP12S_RESPONSE_QUEUE_SIZE)
     {
         next_index = 0U;
@@ -105,6 +122,10 @@ static void esp12s_response_push(esp12s_response_t response)
     {
         esp12s_response_queue[esp12s_response_write_index] = response;
         esp12s_response_write_index = next_index;
+    }
+    else
+    {
+        esp12s_uart_health.dropped_events++;
     }
 }
 
@@ -280,7 +301,17 @@ void USART1_IRQHandler(void)
 
     if(usart_interrupt_flag_get(USART1, USART_INT_FLAG_RBNE) == SET)
     {
+        /* 先读错误标志，再读DATA；硬件会在状态/数据读取后清除接收错误。 */
+        if(usart_flag_get(USART1, USART_FLAG_FERR) == SET)
+        {
+            esp12s_uart_health.framing_errors++;
+        }
+        if(usart_flag_get(USART1, USART_FLAG_ORERR) == SET)
+        {
+            esp12s_uart_health.overrun_errors++;
+        }
         receive_data = (uint8_t)usart_data_receive(USART1);
+        esp12s_uart_health.rx_bytes++;
 
         /* +IPD 的负载是二进制数据，不能再按 CR/LF 或 '>' 解释。 */
         if(esp12s_ipd_remaining != 0U)
@@ -307,6 +338,10 @@ void USART1_IRQHandler(void)
 
         if(receive_data == '\n')
         {
+            if(esp12s_response_line_length != 0U)
+            {
+                esp12s_uart_health.text_lines++;
+            }
             if((esp12s_response_line_length != 0U) && (esp12s_response_line_overflow == 0U))
             {
                 esp12s_response_line_handle();

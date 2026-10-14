@@ -220,4 +220,12 @@ sqlite3 data/edgehub.db 'SELECT nodeId, sequence, COUNT(*) FROM messages WHERE n
 - 本次 README 整理没有重新部署 Hub 或运行设备测试；Node 主机回归及已知测试桩问题见 [EdgeNode README](../edgenode/README.md#主机回归与设备验证)。CMake 当前没有注册 Hub CTest 回归套件，编译成功不等于网络和故障验收通过。
 - CAN 进度/结果帧没有传输编号，仍需考虑迟到旧回复；完成后的尾帧重传会补发成功结果，但接收中的重复/乱序帧不会推进序号，也不能假设每次重复帧都有新应答。
 - TCP 数据帧带 `transfer_id` 并支持上一块重复应答；两字节槽位查询没有请求编号，Hub 在查询超时后关闭连接以隔离迟到回复。
-- HTTP 管理未做身份认证，固件签名尚未实现；当前部署范围为受控局域网。
+- HTTP 管理未做身份认证，当前部署范围为受控局域网。Hub在CAN/TCP下发前读取完整v2镜像，验证头CRC、应用CRC和P-256/SHA-256签名，通过后才进入发送状态。它独立使用tools中的验签源码和与Node一致的固定公钥，不保存私钥；Node接收及启动时仍独立验签。首次启用需配套更新Hub、Bootloader和签名APP，见[签名说明](../edgenode/Common/OTA/SIGNING.md)。
+
+### 签名镜像下发前校验
+
+`src/OtaImageVerify.c`负责分块读取镜像文件，调用Hub自己的`tools/ota/ota_signature.c`，`OTA.cpp`的CAN/TCP下发共用此检查。签名错误、旧格式、应用损坏或文件不完整时，返回现有`InvalidImage`错误，尚未开始固件发送。
+
+CMake只编译Hub内的文件：`tools/crypto`保存SHA-256和micro-ecc，`tools/ota`保存镜像格式、验签接口、公钥及CRC。Hub可以单独复制并构建，不依赖Node源码或本机签名私钥。两项目的镜像格式和信任公钥需要保持一致。
+
+Linux/WSL主机回归：`python3 edgehub/tools/test_ota_signature.py`。测试使用独立密钥和假的CAN发送函数，运行真实OTA下发入口；不需要can0，也不向设备发送数据。

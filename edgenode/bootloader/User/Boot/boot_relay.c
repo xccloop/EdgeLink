@@ -1,6 +1,7 @@
 #include "boot_relay.h"
 #include "flash_layout.h"
 #include "ota_image.h"
+#include "ota_signature.h"
 #include "ExFlash/external_flash_layout.h"
 #include "gd25.h"
 #include "gd32f10x_fmc.h"
@@ -73,6 +74,7 @@ static uint8_t relay_ensure_flash(void)
 */
 static uint8_t relay_verify(void)
 {
+    ota_signature_context_t signature;
     uint32_t app_length;
     uint32_t app_start;
     uint32_t crc;
@@ -126,6 +128,10 @@ static uint8_t relay_verify(void)
     }
 
     /* 应用本体读回来算 CRC。一段一段喂给分块接口，不能整个搬进 RAM。 */
+    if(ota_signature_begin(&signature, &relay_header) == 0U)
+    {
+        return 0U;
+    }
     crc = crc32_begin();
     addr = OTA_IMAGE_HEADER_SIZE;
     remain = app_length;
@@ -139,10 +145,15 @@ static uint8_t relay_verify(void)
             return 0U;
         }
         crc = crc32_update(crc, relay_chunk, chunk);
+        if(ota_signature_update(&signature, relay_chunk, chunk) == 0U)
+        {
+            return 0U;
+        }
         addr += (uint32_t)chunk;
         remain -= (uint32_t)chunk;
     }
-    if(crc32_finish(crc) != relay_header.application_crc32)
+    if((crc32_finish(crc) != relay_header.application_crc32) ||
+       (ota_signature_finish(&signature) == 0U))
     {
         return 0U;
     }

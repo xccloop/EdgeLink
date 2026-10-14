@@ -21,7 +21,7 @@
     太低排空 CAN 队列不及时，太高会饿死采集。
 */
 static StaticTask_t ota_task_tcb;
-static StackType_t ota_task_stack[512];
+static StackType_t ota_task_stack[768]; /* 验签有多层大整数调用，预留3KiB；实机继续观察栈水位。 */
 static TaskHandle_t ota_task_handle;
 
 /* 服务层只返回结果，本任务负责按原链路排队。 */
@@ -176,7 +176,7 @@ void ota_task_create(void)
 {
     ota_task_handle = xTaskCreateStatic(ota_task,
                                         "ota",
-                                        512,
+                                        768,
                                         NULL,
                                         3,
                                         ota_task_stack,

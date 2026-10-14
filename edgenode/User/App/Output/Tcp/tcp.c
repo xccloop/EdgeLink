@@ -63,6 +63,26 @@ static uint8_t recovery_attempts;
 static uint8_t recovery_ack_misses;
 static uint8_t recovery_connect_seen;
 static uint8_t recovery_ok_seen;
+static esp12s_uart_health_t recovery_uart_before;
+
+static void tcp_uart_health_print(const char *reason,
+                                   const esp12s_uart_health_t *before)
+{
+    esp12s_uart_health_t now;
+    esp12s_uart_health_get(&now);
+    printf("[esp uart] %s rx=%lu total=%lu lines=%lu events=%lu drop=%lu ferr=%lu oerr=%lu ipd_left=%u line=%u overflow=%u\r\n",
+           reason,
+           (unsigned long)(now.rx_bytes - before->rx_bytes),
+           (unsigned long)now.rx_bytes,
+           (unsigned long)(now.text_lines - before->text_lines),
+           (unsigned long)(now.events - before->events),
+           (unsigned long)(now.dropped_events - before->dropped_events),
+           (unsigned long)(now.framing_errors - before->framing_errors),
+           (unsigned long)(now.overrun_errors - before->overrun_errors),
+           (unsigned int)now.ipd_remaining,
+           (unsigned int)now.partial_line_length,
+           (unsigned int)now.line_overflow);
+}
 
 static void tcp_diagnostic_print(void)
 {
@@ -140,6 +160,7 @@ static uint8_t tcp_recovery_command(tcp_recovery_state_t state)
     recovery_connect_seen = 0U;
     recovery_ok_seen = 0U;
     esp12s_response_reset();
+    esp12s_uart_health_get(&recovery_uart_before);
     /* Only CIPSTART is logged: CWJAP contains the WiFi password. */
     if(state == TCP_RECOVERY_CONNECT)
     {
@@ -153,6 +174,7 @@ static uint8_t tcp_recovery_command(tcp_recovery_state_t state)
 
 static void tcp_recovery_failed(void)
 {
+    tcp_uart_health_print("recovery failed", &recovery_uart_before);
     printf("[tcp recovery] failed stage=%u elapsed=%lu ms connect_seen=%u ok_seen=%u; retry later\r\n",
            (unsigned int)recovery_state,
            (unsigned long)(uint32_t)(board_systick_ms - recovery_started_ms),
@@ -340,6 +362,8 @@ static uint8_t tcp_wait_response(uint8_t wait_connect, uint32_t timeout_ms)
     uint8_t connect_received = TCP_FAIL;
     uint8_t ok_received = TCP_FAIL;
     esp12s_response_t response;
+    esp12s_uart_health_t uart_before;
+    esp12s_uart_health_get(&uart_before);
 
     while(tcp_deadline_expired(deadline_ms) == TCP_FAIL)
     {
@@ -417,6 +441,7 @@ static uint8_t tcp_wait_response(uint8_t wait_connect, uint32_t timeout_ms)
     }
 
     printf("ESP response: TIMEOUT\r\n");
+    tcp_uart_health_print("AT timeout", &uart_before);
     return TCP_FAIL;
 }
 
@@ -570,6 +595,7 @@ uint8_t tcp_init(const tcp_config_struct *config)
 
     /* BOARD先配置USART1的NVIC和SysTick；这里才初始化ESP12S的USART1硬件。 */
     esp12s_init();
+    printf("[tcp init] USART1 configured PA2/PA3 115200; testing ESP AT\r\n");
     tcp_connected = TCP_FAIL;
     /* 重连或重试时必须先摘掉旧牌子，否则HMI会显示上一次的在线状态。 */
     wifi_connected = TCP_FAIL;
@@ -580,6 +606,7 @@ uint8_t tcp_init(const tcp_config_struct *config)
         return TCP_FAIL;
     }
 
+    printf("[tcp init] ESP AT responded OK\r\n");
     if(tcp_command_send_and_wait_ok("AT+CWMODE=1\r\n", TCP_AT_TIMEOUT_MS) == TCP_FAIL)
     {
         printf("TCP init failed: cannot set ESP station mode\r\n");

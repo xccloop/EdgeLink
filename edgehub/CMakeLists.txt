@@ -25,6 +25,12 @@ add_executable(Edgehub
     src/Http.cpp
     src/HttpHandle.cpp
     src/OTA.cpp
+    src/OtaImageVerify.c
+    tools/ota/ota_signature.c
+    tools/ota/ota_public_key.c
+    tools/ota/crc32.c
+    tools/crypto/sha256/sha256.c
+    tools/crypto/micro-ecc/uECC.c
     # SQLite 直接编进可执行文件，不用 find_package(SQLite3)：
     # 龙芯交叉工具链的 sysroot 里没有 sqlite3，而这样本地和交叉用的是同一份代码。
     tools/sqlite/sqlite3.c
@@ -32,3 +38,9 @@ add_executable(Edgehub
 
 # SQLite 用到 dlopen（扩展加载）和数学函数
 target_link_libraries(Edgehub PRIVATE pthread dl m)
+
+# Hub独立保存验签代码和公钥，构建不依赖Node目录；库由C编译器编译。
+target_include_directories(Edgehub PRIVATE ${CMAKE_SOURCE_DIR}/tools/ota)
+set_source_files_properties(tools/crypto/micro-ecc/uECC.c PROPERTIES
+    COMPILE_DEFINITIONS "uECC_SUPPORTS_secp160r1=0;uECC_SUPPORTS_secp192r1=0;uECC_SUPPORTS_secp224r1=0;uECC_SUPPORTS_secp256k1=0;uECC_SUPPORT_COMPRESSED_POINT=0"
+)

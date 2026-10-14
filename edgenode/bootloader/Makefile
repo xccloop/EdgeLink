@@ -10,8 +10,10 @@ MCU := -mcpu=cortex-m3 -mthumb
 DEFS := -DGD32F10X_HD -DUSE_STDPERIPH_DRIVER
 # -I../Drivers/BSP 放在最后：它里面是 gd25.h 和一堆外设驱动，
 # 一旦和 -IDriver/Bsp/GD25 里有同名头文件，必须让 Bootloader 自己那份赢。
-INCLUDES := -IUser -IUser/Boot -IDriver/Core/Inc -IDriver/Bsp/GD25 -IDriver/BOARD -IDriver/Bsp -I../Common -I../Common/OTA -I../Common/CRC -I../User -I../Drivers/CMSIS/Include -I../Drivers/CMSIS/Device/GD/GD32F10x/Include -I../Drivers/GD32F10x_Standard_Peripheral/Inc -I../Drivers/BSP
-CFLAGS := $(MCU) $(DEFS) $(INCLUDES) -std=c11 -g3 -Og -Wall -Wextra -ffunction-sections -fdata-sections
+CRYPTO_DEFS := -DuECC_SUPPORTS_secp160r1=0 -DuECC_SUPPORTS_secp192r1=0 -DuECC_SUPPORTS_secp224r1=0 -DuECC_SUPPORTS_secp256k1=0 -DuECC_SUPPORT_COMPRESSED_POINT=0
+INCLUDES := -I../Common/Crypto/micro-ecc -I../Common/Crypto/sha256 -IUser -IUser/Boot -IDriver/Core/Inc -IDriver/Bsp/GD25 -IDriver/BOARD -IDriver/Bsp -I../Common -I../Common/OTA -I../Common/CRC -I../User -I../Drivers/CMSIS/Include -I../Drivers/CMSIS/Device/GD/GD32F10x/Include -I../Drivers/GD32F10x_Standard_Peripheral/Inc -I../Drivers/BSP
+# 签名库加入后以体积优化保持16KiB Bootloader分区；保留调试符号。
+CFLAGS := $(MCU) $(DEFS) $(CRYPTO_DEFS) $(INCLUDES) -std=c11 -g3 -Os -Wall -Wextra -ffunction-sections -fdata-sections
 LDFLAGS := $(MCU) -TOCD/linker/gd32f103rct6_bootloader.ld -Wl,--gc-sections -Wl,-Map=$(BUILD_DIR)/$(PROJECT).map -specs=nano.specs -specs=nosys.specs
 
 OBJECTS := $(BUILD_DIR)/main.o \
@@ -22,6 +24,10 @@ OBJECTS := $(BUILD_DIR)/main.o \
            $(BUILD_DIR)/boot_jump.o \
            $(BUILD_DIR)/boot_relay.o \
            $(BUILD_DIR)/image_verify.o \
+           $(BUILD_DIR)/ota_signature.o \
+           $(BUILD_DIR)/ota_public_key.o \
+           $(BUILD_DIR)/uECC.o \
+           $(BUILD_DIR)/sha256.o \
            $(BUILD_DIR)/ota_metadata.o \
            $(BUILD_DIR)/gd25.o \
            $(BUILD_DIR)/ch340.o \
@@ -156,3 +162,19 @@ clean:
 	@if exist "$(BUILD_DIR)" rmdir /S /Q "$(BUILD_DIR)"
 
 -include $(OBJECTS:.o=.d)
+
+$(BUILD_DIR)/ota_signature.o: ../Common/OTA/ota_signature.c
+	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
+	$(CC) $(CFLAGS) -Os -fstack-usage -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/ota_public_key.o: ../Common/OTA/ota_public_key.c
+	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
+	$(CC) $(CFLAGS) -Os -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/uECC.o: ../Common/Crypto/micro-ecc/uECC.c
+	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
+	$(CC) $(CFLAGS) -Os -fstack-usage -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/sha256.o: ../Common/Crypto/sha256/sha256.c
+	@if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
+	$(CC) $(CFLAGS) -Os -fstack-usage -MMD -MP -c $< -o $@

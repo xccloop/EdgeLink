@@ -42,18 +42,11 @@
 
 #define OTA_IMAGE_MAGIC 0x3141544FUL //OTA1
 
-/*
-    镜像头加了 target_slot（占用原来 reserved 的 4 字节）。
-
-    版本号【故意保持在 1】：字段是从 reserved 里挪出来的，头和总长都没变。
-    代价是"老镜像的 target_slot 读出来是 0"—— 这不影响 A/B 槽的启动路径
-    （那条路没人读这个字段），只有搬运路径会因为它不是合法槽基址而拒绝，
-    而那种情况本来也不该被当成有效镜像。
-
-    ⚠️ 改布局（字段顺序、结构体长度）时记得同步 tools/make_ota_image.py，
-       并考虑是否该把版本号抬上去。
-*/
-#define OTA_IMAGE_FORMAT_VERSION   1U
+/* v2 强制签名。头总长及原字段偏移保持不变，旧无签名镜像不再接受。 */
+#define OTA_IMAGE_FORMAT_VERSION   2U
+#define OTA_SIGNATURE_ECDSA_P256_SHA256 1U
+#define OTA_SIGNATURE_OFFSET 32U
+#define OTA_SIGNATURE_SIZE 64U
 
 /*
     应用体最小长度：至少 8 字节，向量表前两项（MSP 初值 + Reset_Handler）得放得下。
@@ -63,7 +56,7 @@
 #define OTA_APPLICATION_MIN_LENGTH 8U
 
 #define OTA_IMAGE_HEADER_DATA_SIZE 252U //像头里“数据部分”占 252 字节。为什么是 252 而不是 256？因为最后 4 字节要留给 header_crc32。
-#define OTA_IMAGE_HEADER_FIXED_SIZE 28U//结构体里固定字段的字节数（加了 target_slot：24 → 28）。
+#define OTA_IMAGE_HEADER_FIXED_SIZE 96U // 原有字段28B + 算法4B + 签名64B。
 #define OTA_IMAGE_RESERVED_SIZE \
     (OTA_IMAGE_HEADER_DATA_SIZE - OTA_IMAGE_HEADER_FIXED_SIZE) //空闲字段的大小
 
@@ -87,6 +80,8 @@ typedef struct
     uint32_t application_length;
     uint32_t application_crc32;
 
+    uint32_t signature_algorithm;
+    uint8_t signature[OTA_SIGNATURE_SIZE]; /* 大端 r || s */
     uint8_t reserved[OTA_IMAGE_RESERVED_SIZE];
 
     uint32_t header_crc32;
@@ -105,6 +100,8 @@ _Static_assert(offsetof(ota_image_header_t, firmware_version)    == 12U, "firmwa
 _Static_assert(offsetof(ota_image_header_t, target_slot)         == 16U, "target_slot 偏移变了");
 _Static_assert(offsetof(ota_image_header_t, application_length)  == 20U, "application_length 偏移变了");
 _Static_assert(offsetof(ota_image_header_t, application_crc32)   == 24U, "application_crc32 偏移变了");
+_Static_assert(offsetof(ota_image_header_t, signature_algorithm) == 28U, "signature_algorithm offset changed");
+_Static_assert(offsetof(ota_image_header_t, signature) == OTA_SIGNATURE_OFFSET, "signature offset changed");
 _Static_assert(offsetof(ota_image_header_t, header_crc32)        == 252U, "header_crc32 偏移变了");
 
 #endif

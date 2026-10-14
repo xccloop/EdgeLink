@@ -27,6 +27,7 @@ uint8_t esp12s_response_get(esp12s_response_t *r) {
 }
 uint8_t esp12s_local_ip_get(char *buffer, uint8_t size) { (void)buffer; (void)size; return 0; }
 uint8_t esp12s_diagnostic_get(char *buffer, uint8_t size) { (void)buffer; (void)size; return 0; }
+void esp12s_uart_health_get(esp12s_uart_health_t *health) { memset(health, 0, sizeof(*health)); }
 void vTaskDelay(unsigned ticks) { delays++; board_systick_ms += ticks; }
 static void event(esp12s_response_t r) { assert(tail < 32); events[tail++] = r; }
 static void setup(uint32_t now) {

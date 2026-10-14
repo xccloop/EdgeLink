@@ -28,10 +28,14 @@ import argparse
 import struct
 import sys
 import zlib
+import os
+from pathlib import Path
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec, utils
 
 # ── 必须和 Common/OTA/ota_image.h 保持一致 ──
 OTA_IMAGE_MAGIC = 0x3141544F          # "OTA1"；小端存进去后字节是 4F 54 41 31
-OTA_IMAGE_FORMAT_VERSION = 1          # target_slot 是从 reserved 里挪的，头总长没变
+OTA_IMAGE_FORMAT_VERSION = 2          # 强制签名，头总长保持256字节
 OTA_IMAGE_HEADER_SIZE = 256
 OTA_HARDWARE_MODEL_EDGENODE_V1 = 1
 
@@ -102,7 +106,7 @@ def sanity_check(application, slot_base):
     return msp, reset_address
 
 
-def build_header(application, firmware_version, target_slot):
+def build_header(application, firmware_version, target_slot, private_key):
     """按 ota_image_header_t 的内存布局拼出 256 字节头。"""
 
     # '<' = 小端、不加对齐填充，必须和 C 结构体在 Cortex-M3 上的实际布局一致。
@@ -127,11 +131,25 @@ def build_header(application, firmware_version, target_slot):
         zlib.crc32(application) & 0xFFFFFFFF,
     )
 
-    # reserved 补齐到 252 字节。Bootloader 不检查这段，填 0 就行。
-    body = fixed + b"\x00" * (OTA_HEADER_CRC_LENGTH - len(fixed))
+    if not (1 <= firmware_version <= 0xFFFFFFFF):
+        raise ValueError("firmware version must be in 1..4294967295")
+    if not isinstance(private_key, ec.EllipticCurvePrivateKey) or not isinstance(private_key.curve, ec.SECP256R1):
+        raise ValueError("signing key must be ECDSA P-256")
+    body = bytearray(fixed + struct.pack("<I", 1) + bytes(64 + 156))
+    signature_der = private_key.sign(bytes(body) + application, ec.ECDSA(hashes.SHA256()))
+    r, signature_s = utils.decode_dss_signature(signature_der)
+    body[32:96] = r.to_bytes(32, "big") + signature_s.to_bytes(32, "big")
+    return bytes(body) + struct.pack("<I", zlib.crc32(body) & 0xFFFFFFFF)
 
-    # header_crc32 占最后 4 字节，自己【不】参与计算。
-    return body + struct.pack("<I", zlib.crc32(body) & 0xFFFFFFFF)
+
+def load_private_key(path):
+    if not path:
+        raise ValueError("set EDGENODE_SIGNING_KEY or --private-key; unsigned images are forbidden")
+    with open(path, "rb") as handle:
+        key = serialization.load_pem_private_key(handle.read(), password=None)
+    if not isinstance(key, ec.EllipticCurvePrivateKey) or not isinstance(key.curve, ec.SECP256R1):
+        raise ValueError("signing key must be ECDSA P-256")
+    return key
 
 
 def main():
@@ -145,6 +163,8 @@ def main():
     parser.add_argument("--slot", choices=sorted(SLOTS), required=True,
                         help="这个二进制是按哪个槽链接的：a 或 b。"
                              "必须和链接脚本一致，否则打包就会报错")
+    parser.add_argument("--private-key", default=os.environ.get("EDGENODE_SIGNING_KEY"),
+                        help="P-256 PEM key outside the repository")
     args = parser.parse_args()
 
     slot_base = SLOTS[args.slot]
@@ -172,7 +192,16 @@ def main():
         print("错误：%s" % error, file=sys.stderr)
         return 1
 
-    header = build_header(application, args.version, slot_base)
+    try:
+        private_key = load_private_key(args.private_key)
+        public_path = Path(__file__).resolve().parents[1] / "Common/OTA/ota_public_key.pem"
+        public_key = serialization.load_pem_public_key(public_path.read_bytes())
+        if private_key.public_key().public_numbers() != public_key.public_numbers():
+            raise ValueError("private key does not match the device public key")
+        header = build_header(application, args.version, slot_base, private_key)
+    except (OSError, ValueError, TypeError) as error:
+        print("Signing failed: %s" % error, file=sys.stderr)
+        return 1
 
     with open(args.output, "wb") as handle:
         handle.write(header)

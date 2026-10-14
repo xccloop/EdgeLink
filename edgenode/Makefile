@@ -29,6 +29,7 @@ endif
 
 # 写进镜像头的固件版本号
 IMAGE_VERSION ?= 1
+SIGNING_KEY ?= $(EDGENODE_SIGNING_KEY)
 
 TOOLCHAIN := C:/Program Files (x86)/GNU Tools ARM Embedded/5.4 2016q3/bin
 CC := "$(TOOLCHAIN)/arm-none-eabi-gcc.exe"
@@ -37,8 +38,9 @@ SIZE := "$(TOOLCHAIN)/arm-none-eabi-size.exe"
 
 MCU := -mcpu=cortex-m3 -mthumb
 DEFS := -DGD32F10X_HD -DUSE_STDPERIPH_DRIVER $(VECT_DEF)
-INCLUDES := -IUser -IUser/App -ICommon -ICommon/CRC -IDrivers/BSP -IDrivers/BOARD -IDrivers/CMSIS/Include -IDrivers/CMSIS/Device/GD/GD32F10x/Include -IDrivers/GD32F10x_Standard_Peripheral/Inc -IThirdParty/FreeRTOS-Kernel/include -IThirdParty/FreeRTOS-Kernel/portable/GCC/ARM_CM3
-CFLAGS := $(MCU) $(DEFS) $(INCLUDES) -std=c11 -g3 -Og -Wall -Wextra -ffunction-sections -fdata-sections
+CRYPTO_DEFS := -DuECC_SUPPORTS_secp160r1=0 -DuECC_SUPPORTS_secp192r1=0 -DuECC_SUPPORTS_secp224r1=0 -DuECC_SUPPORTS_secp256k1=0 -DuECC_SUPPORT_COMPRESSED_POINT=0
+INCLUDES := -ICommon/Crypto/micro-ecc -ICommon/Crypto/sha256 -IUser -IUser/App -ICommon -ICommon/CRC -IDrivers/BSP -IDrivers/BOARD -IDrivers/CMSIS/Include -IDrivers/CMSIS/Device/GD/GD32F10x/Include -IDrivers/GD32F10x_Standard_Peripheral/Inc -IThirdParty/FreeRTOS-Kernel/include -IThirdParty/FreeRTOS-Kernel/portable/GCC/ARM_CM3
+CFLAGS := $(MCU) $(DEFS) $(CRYPTO_DEFS) $(INCLUDES) -std=c11 -g3 -Og -Wall -Wextra -ffunction-sections -fdata-sections
 LDFLAGS := $(MCU) -T$(LDSCRIPT) -Wl,--gc-sections -Wl,-Map=$(BUILD_DIR)/$(PROJECT).map -specs=nano.specs -specs=nosys.specs
 
 DRIVER_SOURCES := Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_rcu.c \
@@ -60,7 +62,7 @@ FREERTOS_SOURCES := ThirdParty/FreeRTOS-Kernel/tasks.c \
                     ThirdParty/FreeRTOS-Kernel/portable/GCC/ARM_CM3/port.c
 # Common/OTA/ota_metadata.c：应用侧销账要写元数据（ota_confirm_boot）。
 # gd32f10x_fmc.c：内部 Flash 的擦/写，只有元数据写入用到。
-SOURCES := $(wildcard User/*.c) $(APP_SOURCES) $(BSP_SOURCES) $(BOARD_SOURCES) $(FREERTOS_SOURCES) Common/CRC/crc32.c Common/IPS/ips.c Common/Hmi/hmi_widget.c Common/OTA/ota_metadata.c Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_fmc.c Drivers/CMSIS/Device/GD/GD32F10x/Source/Templates/system_gd32f10x.c $(DRIVER_SOURCES)
+SOURCES := $(wildcard User/*.c) $(APP_SOURCES) $(BSP_SOURCES) $(BOARD_SOURCES) $(FREERTOS_SOURCES) Common/CRC/crc32.c Common/IPS/ips.c Common/Hmi/hmi_widget.c Common/OTA/ota_metadata.c Common/OTA/ota_signature.c Common/OTA/ota_public_key.c Common/Crypto/micro-ecc/uECC.c Common/Crypto/sha256/sha256.c Drivers/GD32F10x_Standard_Peripheral/Src/gd32f10x_fmc.c Drivers/CMSIS/Device/GD/GD32F10x/Source/Templates/system_gd32f10x.c $(DRIVER_SOURCES)
 STARTUP := OCD/startup/startup_gd32f10x_hd.s
 OBJECTS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(SOURCES)) $(BUILD_DIR)/$(STARTUP:.s=.o)
 
@@ -93,7 +95,7 @@ endif
 FORCE:
 
 $(BUILD_DIR)/$(PROJECT)_image.bin: $(BUILD_DIR)/$(PROJECT).bin tools/make_ota_image.py FORCE
-	python tools/make_ota_image.py --input $(BUILD_DIR)/$(PROJECT).bin --output $@ --version $(IMAGE_VERSION) --slot $(SLOT)
+	python tools/make_ota_image.py --input $(BUILD_DIR)/$(PROJECT).bin --output $@ --version $(IMAGE_VERSION) --slot $(SLOT) --private-key "$(SIGNING_KEY)"
 
 $(BUILD_DIR)/$(PROJECT).elf: $(OBJECTS)
 	@if not exist "$(@D)" mkdir "$(@D)"
@@ -102,6 +104,10 @@ $(BUILD_DIR)/$(PROJECT).elf: $(OBJECTS)
 
 $(BUILD_DIR)/$(PROJECT).bin: $(BUILD_DIR)/$(PROJECT).elf
 	$(OBJCOPY) -O binary $< $@
+
+# 密码学库只启用 P-256；以体积优化编译，不改变应用其余文件的调试选项。
+$(BUILD_DIR)/Common/Crypto/micro-ecc/uECC.o $(BUILD_DIR)/Common/Crypto/sha256/sha256.o: CFLAGS += -Os -fstack-usage
+$(BUILD_DIR)/User/App/Service/Ota/ota.o $(BUILD_DIR)/User/App/FreeRtos/Tasks/Ota/ota_task.o $(BUILD_DIR)/Common/OTA/ota_signature.o: CFLAGS += -fstack-usage
 
 $(BUILD_DIR)/%.o: %.c
 	@if not exist "$(@D)" mkdir "$(@D)"

@@ -28,6 +28,7 @@
 #include "OTA/ota_image.h"
 #include "OTA/ota_metadata.h"
 #include "CRC/crc32.h"
+#include "OTA/ota_signature.h"
 #include "gd32f10x.h"        /* SCB->VTOR：问"我在哪个槽" */
 #include <stdint.h>
 #include <string.h>
@@ -164,6 +165,11 @@ static uint8_t ota_header_parse(void)
         return 0U;
     }
 
+    if (header->signature_algorithm != OTA_SIGNATURE_ECDSA_P256_SHA256)
+    {
+        return 0U;
+    }
+
     if (header->hardware_model != OTA_CURRENT_HARDWARE_MODEL)
     {
         return 0U;
@@ -220,6 +226,8 @@ static uint16_t ota_reported_seq(void)
 */
 static uint8_t ota_finalize(void)
 {
+    ota_image_header_t header;
+    ota_signature_context_t signature;
     uint32_t tail = ota_state.image_total - ota_state.written_bytes;
     uint32_t crc;
     uint32_t addr;
@@ -247,6 +255,14 @@ static uint8_t ota_finalize(void)
         镜像头里的 application_crc32 只覆盖应用本体，不含那 256 字节头，所以从 +256 开始算。
         ota_block 这会儿已经空闲了，借它当读回缓冲，省 768 字节 RAM。
     */
+    /* 验证 GD25 中实际读回的头与应用，不相信接收期间的 RAM 内容。 */
+    if((gd25_read(OTA_RELAY_IMAGE_BASE, (uint8_t *)&header, sizeof(header)) == 0U) ||
+       (header.application_length != ota_state.image_total - OTA_IMAGE_HEADER_SIZE) ||
+       (crc32_check((const uint8_t *)&header, OTA_IMAGE_HEADER_CRC_LENGTH, header.header_crc32) == 0U) ||
+       (ota_signature_begin(&signature, &header) == 0U))
+    {
+        return 0U;
+    }
     crc = crc32_begin();
     addr = OTA_RELAY_IMAGE_BASE + OTA_IMAGE_HEADER_SIZE;
     remain = ota_state.image_total - OTA_IMAGE_HEADER_SIZE;
@@ -260,11 +276,16 @@ static uint8_t ota_finalize(void)
             return 0U;
         }
         crc = crc32_update(crc, ota_block, chunk);
+        if(ota_signature_update(&signature, ota_block, chunk) == 0U)
+        {
+            return 0U;
+        }
         addr += (uint32_t)chunk;
         remain -= (uint32_t)chunk;
     }
 
-    return (crc32_finish(crc) == ota_state.image_crc32) ? 1U : 0U;
+    return ((crc32_finish(crc) == ota_state.image_crc32) &&
+            (ota_signature_finish(&signature) != 0U)) ? 1U : 0U;
 }
 
 /* ------------------------------------------------------------------ */
