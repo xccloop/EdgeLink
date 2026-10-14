@@ -9,11 +9,20 @@
 | 传输 | TCP V5 固定遥测帧为主；TCP 未确认时可走 CAN 回退 |
 | 数据身份 | `(nodeId, sequence)` 是端到端去重与 ACK 匹配键 |
 | 交付语义 | 节点 **at-least-once 重传**，Hub 以唯一索引实现幂等持久化 |
-| 链路恢复 | 运行期断线自动重连；按页建立 RAM pending 索引后集中补发，扫描与补发页间让出 CPU |
+| 链路恢复 | 运行期断线自动重连；每轮扫描一页建立 RAM pending 索引，历史补发与新采样、正常发送交替推进 |
 | 节点显示 | 320×240 IPS 四页：HOME / LINKS / EVENTS / BACKLOG；启动页、已确认固件版本及新固件重启提示 |
 | 管理接口 | HTTP `:8080`：服务状态、节点槽位查询、指定节点固件下发 |
 | 固件更新 | HTTP 发起 → CAN 8 帧确认窗口 / TCP 768 B 块逐块确认 → GD25Q32 中转校验 → 手动重启 → Bootloader 安装与确认 |
-| 当前进度 | CAN OTA 已有 A/B 升级及部分故障实测记录；TCP OTA 与新版页索引补发已实现，实机验收待完成 |
+| 固件认证 | v2 镜像使用 ECDSA P-256 / SHA-256；Hub 下发前、Node 接收读回、Bootloader 安装与启动前分别验签 |
+| 当前进度 | 初版设想已完成，进入里程碑归档；已有实测和剩余验证范围见下文 |
+
+## 初版里程碑（2026-10-14）
+
+项目最初设想的采集、Flash 持久化、TCP/CAN 上报、Hub 落库与 ACK、断线补发、IPS 显示和 A/B OTA 已形成完整流程，固件签名也已接入 Hub、APP 和 Bootloader。当前将这一阶段作为初版完成的里程碑，后续以实测补充、故障修复和现有机制优化为主。
+
+本次板端观察包括：持续采集版补发时仍能发送新数据，BACKLOG 不再反复 0↔1；TCP 下发返回 `relay_verified=true`；新 Bootloader 完成中转镜像校验、安装到 B 槽并跳转运行。TCP 下发成功记录对应增加签名前的镜像，签名版完整升级及伪造镜像拒绝仍需端到端实测，不能把这些结果合并成全部场景已验收。
+
+另有一块扩展板出现 ESP 不回应 AT 的问题，同一核心板及固件换到其他扩展板后 TCP 恢复，故障范围已缩到原扩展板。ESP 模块、供电或配置的具体原因尚未确认，不将其写成已证实的模块损坏。重连期间偶发 IPS/LED 短暂停顿也保留为待优化项。
 
 ## 文档入口
 
@@ -23,7 +32,7 @@
 | --- | --- |
 | [EdgeNode README](edgenode/README.md) | 节点配置、FreeRTOS 任务、Flash 分区、编译烧录、HMI 与主机回归 |
 | [EdgeHub README](edgehub/README.md) | Linux/LS2K0300 构建部署、HTTP API、CAN/TCP 协议、下发与排障 |
-| [APP 分层说明](edgenode/User/App/README.md) | 采样、日志、传输、OTA、显示之间的职责与队列交接 |
+| [APP 源码](edgenode/User/App/) | 采样、日志、传输、OTA、显示之间的职责与队列交接 |
 | [开发记录](docs/develop/README.md) | 按日期保留方案、调试过程、实测与未完成项 |
 
 ## 目录
@@ -173,27 +182,25 @@ sequenceDiagram
     participant H as EdgeHub
 
     S->>S: 扫描 Flash，恢复 next_sequence、写指针和页位图
-    alt 存在历史 pending
-        loop 按标记页逐条补发；页间休眠
-            S->>T: 投递 pending
-            T->>H: TCP V5 telemetry
-            alt TCP 未确认
-                T->>H: CAN telemetry fallback
-            end
-            H-->>T: 与 nodeId + sequence 匹配的 ACK
-            T->>S: confirm event
-            S->>S: 复读 CRC / sequence，写 confirmed
+    loop 主循环：先处理确认与新采样，再推进历史一步
+        S->>C: 可写且有容量时发放 sequence 与采集许可
+        C->>S: 新采样 Message
+        S->>S: 先写 pending 槽位
+        S->>T: 投递正常发送
+        opt 存在历史 pending
+            S->>S: 建图每轮最多一页；完成后定位历史记录
+            S->>T: 普通在途工作清空后投递一条历史记录
         end
+        T->>H: TCP 优先；未确认则 CAN 回退
+        H-->>T: 与 nodeId + sequence 匹配的 ACK
+        T->>S: confirm event
+        S->>S: 核对 CRC / sequence，写 confirmed
     end
-    S->>C: 发放 sequence 与采集许可
-    C->>S: 新采样 Message
-    S->>S: 先写 pending 槽位
-    S->>T: 写入成功后才投递发送任务
 ```
 
 **LogTask 负责遥测日志的 Flash 写入与确认。** 它在启动时全量扫描日志区，恢复写指针、下一个 `sequence` 和 pending 页位图，随后放行 HMI 和可写时的采集，历史补发不再独占任务。运行期重连按开始时的最大已落盘 `sequence` 建图，完整扫描后才补发该范围内的历史记录；每轮同时处理新采样和正常发送。单条历史记录连续三次无法确认时，本轮补发停止，记录保留给后续重试；正常发送继续，采集仍受 Flash 可写条件与发送队列背压约束。
 
-**CollectTask 不直接发送。** 它只有在 LogTask 发放许可后才采样，并将统一 Message 交回 LogTask。这样写 Flash 失败、缓存不可继续写入或补发期间，不会继续静默产生无处保存的新数据。
+**CollectTask 不直接发送。** 它只有在 LogTask 发放许可后才采样，并将统一 Message 交回 LogTask。历史扫描与补发期间仍可取得许可；写 Flash 失败、空间不足或发送队列背压时才暂停，避免产生无处保存的新数据。
 
 **TransmitTask 不直接确认 Flash。** 它先尝试 TCP V5，校验 ACK 的版本、目标节点、CRC、状态码和 `sequence`。TCP 未成功确认时回退 CAN，随后按冷却时间尝试恢复 TCP；两条链路都未确认时只报告失败，记录仍为 pending。TCP 重连和 CAN 发送目前共用这个任务，TCP 不通时 CAN 上报卡顿的问题由 [#7](https://github.com/xccloop/EdgeLink/issues/7) 跟踪。
 
@@ -221,13 +228,13 @@ Node 的 OTA 接收队列与遥测队列分开，CAN 与 TCP 共用 [`Service/Ot
 
 - **CAN**：中断提交固件数据帧或槽位查询帧；OtaTask 按序接收 6 B 数据，累计 768 B 写入中转区。每连续接收 8 帧，或接收停顿时，回复连续接收序号。
 - **TCP**：串口 ISR 按 `type`、帧头和有效长度组装完整块，支持跨 `+IPD` 的半包/粘包；完整块通过队列交给 OtaTask，数据缓冲处理完成前不得复用。每块最多 768 B，写入成功后才回复，重复的上一块只补成功回复，不重复写入或推进进度。
-- **共同边界**：ISR 不写 Flash；协议与校验在服务层执行，队列和缓冲生命周期由任务层管理；回复统一由 TransmitTask 发送。尾块完成整包 Flash 读回 CRC 校验后才报告成功。
+- **共同边界**：ISR 不写 Flash；协议与校验在服务层执行，队列和缓冲生命周期由任务层管理；回复统一由 TransmitTask 发送。尾块完成整包 Flash 读回 CRC 与签名校验后才报告成功。
 
 完整镜像校验通过后，Node 回复接收结果、保留已校验镜像，并在 IPS 提示重启，继续运行当前固件。用户复位或重新上电后，独立的 [`bootloader/`](edgenode/bootloader/) 再校验中转镜像、安装到非当前活动的内部 Flash 槽，并根据启动元数据决定试启动或回退。新 APP 运行约 10 秒后调用 `ota_confirm_boot()` 确认本次启动。Hub 下发的是带镜像头的应用固件，Bootloader 通过 SWD 首次部署。
 
 内部 Flash 采用 16 KiB Bootloader、两个 118 KiB 应用槽和 4 KiB 元数据区；外部 GD25Q32 分开保存遥测日志和 OTA 中转镜像。分区地址、带头镜像及烧录注意事项见 [EdgeNode Flash 分区](edgenode/README.md#flash-分区与记录格式)，CAN/TCP 帧格式和下发步骤见 [EdgeHub README](edgehub/README.md#http-管理与固件下发)。
 
-**验证情况：**[2026-10-12 开发记录](docs/develop/2026-10-12/main.md)记载 CAN A/B 双向升级、接收中途断电、Bootloader 搬运中途断电后恢复，以及损坏镜像拒绝。TCP OTA 与新版 pending 页索引补发的实现及主机验证见 [2026-10-13 开发记录](docs/develop/2026-10-13/main.md)，真机验收仍待完成。具体证据与限制见[验证记录与主机回归](#验证记录与主机回归)。镜像 CRC 用于发现损坏，当前未实现固件签名认证。
+**验证情况：**[2026-10-12 开发记录](docs/develop/2026-10-12/main.md)记载 CAN A/B 双向升级、接收中途断电、Bootloader 搬运中途断电后恢复，以及损坏镜像拒绝。[2026-10-14 开发记录](docs/develop/2026-10-14/main.md)包含 TCP 下发到中转校验成功、持续采集版观察及新 Bootloader 安装到 B 槽后跳转的记录。TCP 掉电测试本次没有重复，公共安装恢复流程沿用此前 CAN 测试证据，TCP 自身断线与重复块等分支仍需补测。v2 镜像的 P-256/SHA-256 签名在 Hub 下发前、APP 接收读回、Bootloader 搬运前及 A/B 启动前分别校验；主机验证与签名 Bootloader 板端安装跳转已有证据，完整签名升级及伪造镜像拒绝的设备测试仍未完成。见[签名与迁移说明](edgenode/Common/OTA/SIGNING.md)。
 
 ## Flash 日志：恢复逻辑与容量边界
 
@@ -321,13 +328,14 @@ ON CONFLICT(nodeId, sequence) DO NOTHING;
 
 | 项目 | 已有证据 | 待验证边界 |
 | --- | --- | --- |
-| 多节点遥测、断线恢复与历史补发 | [2026-09-22 演示](docs/develop/2026-09-22/) | 历史演示不等于新版页索引已在硬件上通过 |
+| 多节点遥测、断线恢复与历史补发 | [2026-09-22 演示](docs/develop/2026-09-22/)；本轮同一核心板换到其他扩展板后 TCP 恢复 | 原扩展板具体故障未确认；历史演示不覆盖新版全部边界 |
 | CAN OTA 与 A/B 安装 | [2026-10-12 记录](docs/develop/2026-10-12/main.md)：版本/槽位切换、接收中途断电、搬运中途断电后恢复、损坏镜像拒绝 | 是已记录场景的结果，尚不能覆盖所有断电时刻、回退分支和长期稳定性 |
-| TCP OTA | 两端已实现；[2026-10-13 记录](docs/develop/2026-10-13/main.md)保存编译及静态审查结果 | 真机下发、重复块应答、尾块校验、断线后重新下发待验收 |
-| 重连页索引补发 | `test_log_replay.py` 模拟 GD25/队列运行真实 Log 与 LogTask 代码；plain/A/B 有编译通过记录 | 真机扫描耗时、IPS 持续刷新、SPI 争用和大量积压清理待测 |
-| 固件手动重启 | `test_ota_manual_restart.py` 模拟中转 Flash、运行真实 OTA 与 HMI Page 代码，检查完成状态及重启提示 | 主机检查不能替代实际复位、安装及新版本业务恢复 |
+| TCP OTA | [2026-10-14 记录](docs/develop/2026-10-14/main.md)：49480 B 镜像下发返回 `relay_verified=true` | 该次为签名前版本；重复块应答、断线重发和 TCP 专属故障覆盖仍待补测 |
+| 重连页索引补发 | 主机运行真实 Log/LogTask；持续采集版板端观察到新记录发送、BACKLOG 不再反复 0↔1 | 偶发 IPS/LED 短暂停顿；扫描耗时、大量积压、空间边界及长期稳定性待量化 |
+| 固件手动重启与安装 | 主机检查重启提示；新 Bootloader 板端校验中转镜像、安装到 B 槽并跳转到 `0x08021900`，APP 开始运行 | 新 APP 最终确认、全部回退分支及完整签名 OTA 链路仍需留存设备证据 |
+| v2 固件签名 | Python/C 交叉验签及真实 Hub、APP、Bootloader 主机路径检查；签名 Bootloader 已有板端安装跳转记录 | 板端伪造镜像拒绝、验签耗时和 OtaTask 最低栈水位仍待验证 |
 
-主机回归命令、依赖与旧 ESP 测试桩缺失的问题见 [EdgeNode 验证说明](edgenode/README.md#主机回归与设备验证)。主机测试模拟 Flash、队列或 UART/时间，不能替代真实 FreeRTOS 抢占、SPI 时序和端到端升级验收。
+主机回归命令和依赖见 [EdgeNode 验证说明](edgenode/README.md#主机回归与设备验证)；ESP 测试桩已适配当前接收代码。主机测试模拟 Flash、队列或 UART/时间，不能替代真实 FreeRTOS 抢占、SPI 时序和端到端升级验收。
 
 ## 资料索引
 
@@ -340,24 +348,25 @@ ON CONFLICT(nodeId, sequence) DO NOTHING;
 - [Node 内部 Flash 分区](edgenode/Common/OTA/flash_layout.h)
 - [EdgeNode 构建与验证](edgenode/README.md)
 - [EdgeHub 构建、操作与协议](edgehub/README.md)
-- [APP 分层与任务入口](edgenode/User/App/README.md)
+- [APP 分层源码与任务入口](edgenode/User/App/)
 - [CAN OTA 实测记录（2026-10-12）](docs/develop/2026-10-12/main.md)
 - [TCP OTA 与页索引补发（2026-10-13）](docs/develop/2026-10-13/main.md)
+- [初版实测、固件签名与串口排查（2026-10-14）](docs/develop/2026-10-14/main.md)
 - [已知问题与后续工作](https://github.com/xccloop/EdgeLink/issues)
 - [2026-09-15 调试记录](docs/develop/2026-09-15/main.md)
 
 ## 项目边界
 
-当前阶段已实现 Node 遥测、Flash 日志恢复、Hub 持久化与 ACK，以及 CAN/TCP 应用固件下发。项目保留的遥测实机记录涵盖多节点运行、断线重连与 pending 补发，并记载过 72 小时无死机运行；CAN OTA 已有部分升级和故障恢复实测。新版页索引补发与 TCP OTA 尚待真机验收，已有结果按上表逐项列出。
+初版设想已完成。项目保留的遥测实机记录涵盖多节点运行、断线重连与 pending 补发，并记载过 72 小时无死机运行；CAN OTA 已有部分升级和故障恢复实测，TCP 下发及持续采集版已有本轮板端观察。里程碑表示初版范围完成，已有结果和剩余验证按上表逐项列出。
 
 后续工作集中在现有 issue：
 
-- [#1](https://github.com/xccloop/EdgeLink/issues/1)、[#7](https://github.com/xccloop/EdgeLink/issues/7)：新版 pending 页索引的硬件验收、TCP 未连通时 CAN 上报卡顿。
-- [#3](https://github.com/xccloop/EdgeLink/issues/3)、[#4](https://github.com/xccloop/EdgeLink/issues/4)：在已有 CAN 升级与掉电测试基础上补充故障覆盖，并验证 TCP OTA。
+- [#1](https://github.com/xccloop/EdgeLink/issues/1)、[#7](https://github.com/xccloop/EdgeLink/issues/7)：页索引补发的大量积压与容量边界测试、IPS/LED 偶发卡顿及 TCP 未连通时的发送时序。
+- [#3](https://github.com/xccloop/EdgeLink/issues/3)、[#4](https://github.com/xccloop/EdgeLink/issues/4)：在已有 CAN 掉电恢复、TCP 中转校验成功的基础上补充故障覆盖和完整签名升级实测。
 - [#5](https://github.com/xccloop/EdgeLink/issues/5)、[#6](https://github.com/xccloop/EdgeLink/issues/6)：看门狗与任务健康监督、Hub 持久化故障验证。
 - [#2](https://github.com/xccloop/EdgeLink/issues/2)：Hub 与 Dash 的节点状态和波形接口。`edgedash/` 当前为独立 EasyUI 仪表板原型。
 
-CAN 进度/结果帧没有传输编号，无法彻底区分同节点旧传输的迟到回复；接收中的重复/乱序 CAN 帧不推进序号，不能假设每次都会重新应答；完成后的尾帧重传已支持补发成功结果。Hub 对无法确认的传输返回超时。TCP 数据传输已带 `transfer_id` 并支持上一块重复应答，但槽位查询仍是无请求编号的两字节协议，查询超时后 Hub 关闭连接以隔离迟到回复。HTTP 管理接口尚未实现身份认证，固件也未签名，应在受控局域网内使用。
+CAN 进度/结果帧没有传输编号，无法彻底区分同节点旧传输的迟到回复；接收中的重复/乱序 CAN 帧不推进序号，不能假设每次都会重新应答；完成后的尾帧重传已支持补发成功结果。Hub 对无法确认的传输返回超时。TCP 数据传输已带 `transfer_id` 并支持上一块重复应答，但槽位查询仍是无请求编号的两字节协议，查询超时后 Hub 关闭连接以隔离迟到回复。HTTP 管理接口尚未实现身份认证，仍应在受控局域网内使用。固件 v2 使用固定公钥验签，拒绝无签名镜像；防回滚、密钥轮换及物理调试口保护未加入本次范围。
 
 ## 硬件原理图与 PCB
 

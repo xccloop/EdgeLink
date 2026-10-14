@@ -4,6 +4,8 @@ EdgeLink 的 Linux 网关，使用 C++17、边沿触发 `epoll`、SocketCAN 和 
 
 本文件负责网关的构建、部署、HTTP 操作、线协议和排障。整体架构与特殊处理见[项目 README](../README.md)，节点配置与烧录见 [EdgeNode README](../edgenode/README.md)。
 
+截至 2026-10-14，网关初版范围已完成：TCP/CAN 遥测接收、SQLite 幂等落库与业务 ACK、HTTP 槽位查询、CAN/TCP 固件下发和签名镜像预检查。TCP 下发已有 Node 中转校验成功的实测；签名版 Hub 与 Node 的完整升级链路仍需补充设备验证。
+
 ## 目录与职责
 
 | 文件 / 目录 | 职责 |
@@ -15,6 +17,8 @@ EdgeLink 的 Linux 网关，使用 C++17、边沿触发 `epoll`、SocketCAN 和 
 | [Message.cpp](src/Message.cpp)、[Storage.cpp](src/Storage.cpp) | 统一业务模型，SQLite 插入/去重结果 |
 | [Http.cpp](src/Http.cpp)、[HttpHandle.cpp](src/HttpHandle.cpp) | HTTP 请求解析与路由意图，不阻塞等待整场 OTA |
 | [OTA.cpp](src/OTA.cpp) | CAN 查询/窗口与 TCP 分块状态、文件读取、确认和有限重试 |
+| [OtaImageVerify.c](src/OtaImageVerify.c)、[tools/ota/](tools/ota/) | 下发前检查 v2 镜像格式、CRC 与签名；固定公钥和验签接口 |
+| [tools/crypto/](tools/crypto/) | Hub 本地的 SHA-256 与 micro-ecc，不依赖 Node 源码 |
 | [tools/](tools/README.md)、[cmake/](cmake/) | 随仓库构建的 SQLite 与 LoongArch 工具链配置 |
 
 ## 运行配置
@@ -125,6 +129,8 @@ Hub 当前只允许一个固件发送任务，CAN 与 TCP 下发互斥。CAN 每
 
 成功响应包含 `submitted`、`node`、`submitted_bytes` 和 `relay_verified`。`submitted=true` 表示整个文件已提交到对应 CAN/socket 发送接口；`relay_verified=true` 表示 Hub 收到 Node 的中转镜像校验成功回复。Node 此时提示手动重启，新 APP 的安装、启动和确认发生在用户复位之后，当前 HTTP 响应不报告这些阶段的结果。
 
+当前 v2 镜像在下发前必须通过完整 CRC 与签名校验，失败返回 `InvalidImage` 对应的错误响应，不进入 CAN/TCP 发送状态。Hub 与 Node 使用相同格式和信任公钥，私钥仅用于编译机打包，不上传到 Hub。
+
 文件不存在返回 404，传输忙或节点有待确认槽位返回 409，CAN/TCP 发送失败返回 503，确认超时返回 504。错误响应会提供 `error`；发送已经启动时还保留字节计数和校验结果，便于判断失败发生在哪个阶段。
 
 ### 使用 TCP 下发
@@ -216,8 +222,9 @@ sqlite3 data/edgehub.db 'SELECT nodeId, sequence, COUNT(*) FROM messages WHERE n
 ## 验证状态与限制
 
 - [2026-10-12 记录](../docs/develop/2026-10-12/main.md)包含 CAN A/B 升级、接收/搬运中断及坏镜像拒绝的实测。历史记录的无链路前缀路由不再用于当前操作，使用本文件的 `/can/` 和 `/tcp/` 路由。
-- [2026-10-13 记录](../docs/develop/2026-10-13/main.md)包含 TCP OTA 的实现、编译与静态检查，TCP 真机下发、重复块确认、尾块校验、断线后重发仍待验收。
-- 本次 README 整理没有重新部署 Hub 或运行设备测试；Node 主机回归及已知测试桩问题见 [EdgeNode README](../edgenode/README.md#主机回归与设备验证)。CMake 当前没有注册 Hub CTest 回归套件，编译成功不等于网络和故障验收通过。
+- [2026-10-14 记录](../docs/develop/2026-10-14/main.md)包含 TCP 实机下发：49480 B 镜像返回 `submitted=true`、`relay_verified=true`，证明该次中转接收校验成功；该记录为签名前版本。TCP 重复块、断线后重发、签名版完整升级仍待补测。TCP 掉电保护本次未重复，公共安装恢复流程沿用此前 CAN 测试证据。
+- Hub 签名主机回归运行真实 CAN/TCP 下发入口，检查有效镜像可提交，坏签名、旧格式及重算 CRC 的篡改镜像被拒绝；原生及 LoongArch 构建、仅复制 Hub 的独立构建已有通过记录。本次 README 更新未重新部署或做设备测试，Node 检查见 [EdgeNode README](../edgenode/README.md#主机回归与设备验证)。CMake 当前没有注册 Hub CTest 回归套件。
+- 同一 Node 核心板及固件换到其他扩展板后 TCP 恢复，原扩展板的 ESP 通信故障仍待硬件或独立串口验证；没有将该现象归为已确认的 Hub 软件问题。
 - CAN 进度/结果帧没有传输编号，仍需考虑迟到旧回复；完成后的尾帧重传会补发成功结果，但接收中的重复/乱序帧不会推进序号，也不能假设每次重复帧都有新应答。
 - TCP 数据帧带 `transfer_id` 并支持上一块重复应答；两字节槽位查询没有请求编号，Hub 在查询超时后关闭连接以隔离迟到回复。
 - HTTP 管理未做身份认证，当前部署范围为受控局域网。Hub在CAN/TCP下发前读取完整v2镜像，验证头CRC、应用CRC和P-256/SHA-256签名，通过后才进入发送状态。它独立使用tools中的验签源码和与Node一致的固定公钥，不保存私钥；Node接收及启动时仍独立验签。首次启用需配套更新Hub、Bootloader和签名APP，见[签名说明](../edgenode/Common/OTA/SIGNING.md)。

@@ -2,7 +2,9 @@
 
 EdgeLink 的 GD32F103RCT6 采集节点，使用 FreeRTOS 静态任务和队列。BMP280 温度先写入 GD25Q32 pending 日志，再经 ESP-AT TCP 上报，未确认时回退 CAN；收到 Hub 业务 ACK 后才确认 Flash 记录。ST7789 IPS 显示温度、链路、事件、积压和固件状态。
 
-本文件负责节点配置、任务、分区、构建烧录、HMI 和验证。系统架构见[项目 README](../README.md)，HTTP 操作与线协议见 [EdgeHub README](../edgehub/README.md)，APP 职责见[分层说明](User/App/README.md)。
+本文件负责节点配置、任务、分区、构建烧录、HMI 和验证。系统架构见[项目 README](../README.md)，HTTP 操作与线协议见 [EdgeHub README](../edgehub/README.md)，APP 实现见[分层源码](User/App/)。
+
+截至 2026-10-14，节点初版设想已完成：采集落盘、TCP/CAN 上报、断线补发、IPS 显示及签名 A/B OTA 已接入。补发期间继续采集和正常发送已有板端观察，新 Bootloader 已完成中转镜像校验、B 槽安装与跳转；完整签名升级、伪造镜像拒绝及长期边界测试仍需补充设备证据。
 
 ## 任务与目录
 
@@ -15,14 +17,15 @@ EdgeLink 的 GD32F103RCT6 采集节点，使用 FreeRTOS 静态任务和队列�
 | HmiTask | 启动握手、构建视图快照、按键和 IPS 绘制 | 页面不自行读 Flash、ESP 或 BMP280 |
 | LED / StackMonitor | 心跳指示与任务栈诊断 | 栈诊断不等于硬件看门狗或任务健康监督 |
 
-入口为 [User/main.c](User/main.c)，依次完成初始化、静态队列与任务创建，然后启动调度器。APP 层组织和队列流见 [User/App/README.md](User/App/README.md)。
+入口为 [User/main.c](User/main.c)，依次完成初始化、静态队列与任务创建，然后启动调度器。APP 层组织和队列流见 [User/App/](User/App/)。
 
 | 目录 | 用途 |
 | --- | --- |
 | [Drivers/BOARD/](Drivers/BOARD/) | 板级时基、共享 SPI 锁和事务边界 |
 | [Drivers/BSP/](Drivers/BSP/) | BMP280、GD25、ESP、CAN、IPS 等器件访问 |
-| [User/App/](User/App/README.md) | 模型、协议、输出、服务、FreeRTOS 与显示 |
-| [Common/OTA/](Common/OTA/) | 镜像头、内部 Flash 分区与启动元数据 |
+| [User/App/](User/App/) | 模型、协议、输出、服务、FreeRTOS 与显示 |
+| [Common/OTA/](Common/OTA/) | 镜像头、内部 Flash 分区、启动元数据与公共验签接口 |
+| [Common/Crypto/](Common/Crypto/) | APP / Bootloader 共用的 SHA-256 与 micro-ecc 源码 |
 | [Common/ExFlash/](Common/ExFlash/) | 外置 Flash 统一分区 |
 | [bootloader/](bootloader/) | 独立的启动、安装和回退工程 |
 | [tools/](tools/) / [OCD/](OCD/) | 编译、打包、主机回归、烧录与调试配置 |
@@ -37,8 +40,8 @@ EdgeLink 的 GD32F103RCT6 采集节点，使用 FreeRTOS 静态任务和队列�
 在仓库根目录运行：
 
 ```powershell
-# 版本号必填，示例设为 V7；仅编译，不连接设备或烧录
-./edgenode/tools/compiled.ps1 -v7
+# 版本号必填，示例设为 V10；仅编译，不连接设备或烧录
+./edgenode/tools/compiled.ps1 -v10
 ```
 
 | 布局 | 产物目录 | 用途 |
@@ -47,7 +50,7 @@ EdgeLink 的 GD32F103RCT6 采集节点，使用 FreeRTOS 静态任务和队列�
 | A | `build/a/` | 带 256 B 镜像头的 A 槽应用，槽起点 `0x08004000` |
 | B | `build/b/` | 带 256 B 镜像头的 B 槽应用，槽起点 `0x08021800` |
 
-A/B 的 OTA 文件为 `edegnode_image.bin`，不能用未带头的普通 BIN 替代。版本号写入镜像头，构建规则也支持 `mingw32-make -C edgenode SLOT=all IMAGE_VERSION=7 "SIGNING_KEY=<仓库外私钥路径>"`。
+A/B 的 OTA 文件为 `edegnode_image.bin`，不能用未带头的普通 BIN 替代。版本号写入镜像头，构建规则也支持 `mingw32-make -C edgenode SLOT=all IMAGE_VERSION=10 "SIGNING_KEY=<仓库外私钥路径>"`。首次构建前安装签名依赖并准备与固定公钥配对的私钥，见下一节。
 
 ## 固件签名
 
@@ -65,7 +68,9 @@ A/B 的 OTA 文件为 `edegnode_image.bin`，不能用未带头的普通 BIN 替
 
 `flash.ps1 default` 写入 `0x08000000`，会覆盖 Bootloader；使用 A/B OTA 的设备应选择对应槽位。烧录脚本与 OpenOCD 配置见 [tools/flash.ps1](tools/flash.ps1)、[bootloader/](bootloader/) 和 [OCD/](OCD/)。
 
-CAN 和 TCP 共用外部中转区及 Bootloader 安装流程。TCP 数据每块最多 768 B，写入成功后才应答，尾块需完成整包读回校验。接收完成后继续运行旧固件，IPS 提示手动重启；复位后安装，新 APP 运行约 10 秒后尝试确认启动。查询路由、镜像复制和下发命令统一见[EdgeHub 操作说明](../edgehub/README.md#http-管理与固件下发)。
+A/B 烧录脚本检查并写入带签名的镜像，但不会改变启动元数据。设备已有真实元数据时，Bootloader 按 `active_slot` / `pending_slot` 选择槽位；仅烧录 B 不会自动把活动槽从 A 切到 B，新 Bootloader 也不会接受原来的无签名活动镜像。
+
+CAN 和 TCP 共用外部中转区及 Bootloader 安装流程。TCP 数据每块最多 768 B，写入成功后才应答，尾块需完成整包读回 CRC 和签名校验。接收完成后继续运行旧固件，IPS 提示手动重启；复位后安装，新 APP 运行约 10 秒后尝试确认启动。查询路由、镜像复制和下发命令统一见[EdgeHub 操作说明](../edgehub/README.md#http-管理与固件下发)。
 
 ## Flash 分区与记录格式
 
@@ -141,8 +146,20 @@ Widget  →  Page   →  Render  →  Control
 python edgenode/tools/test_log_replay.py
 python edgenode/tools/test_tcp_recovery.py
 python edgenode/tools/test_ota_manual_restart.py
+python edgenode/tools/test_esp_diagnostics.py
+python edgenode/tools/test_esp_uart_health.py
+python edgenode/tools/test_ota_signature.py
+python edgenode/tools/test_boot_signature.py
 ```
 
-以上三项在 2026-10-14 的文档核验中通过。旧的 `test_esp_diagnostics.py` 尚未适配新版 TCP 接收代码，当前因缺少 `task.h` 测试桩而编译失败，需要单独修复。
+以上七项在 2026-10-14 的 README 更新核验中全部通过。ESP 解析测试桩已适配当前 TCP 接收代码；UART 计数回归覆盖字节接收、事件识别、错误计数、队列满及 `+IPD` 负载处理。签名测试使用独立测试密钥，检查有效镜像、错误公钥、旧格式、签名损坏和重新计算 CRC 后的篡改镜像，以及 Bootloader 拒绝坏镜像时不擦除目标槽。
 
-`test_log_replay.py` 模拟 Flash/队列并运行真实 Log/LogTask；`test_tcp_recovery.py` 模拟 UART 与时间；`test_ota_manual_restart.py` 模拟中转区并运行真实 OTA/HMI Page。三者都需要主机 C 编译器，但不模拟完整硬件实时性。[10 月 12 日记录](../docs/develop/2026-10-12/main.md)包含 CAN 升级和部分故障实测；[10 月 13 日记录](../docs/develop/2026-10-13/main.md)包含 TCP OTA 和页索引实现。新版扫描的 IPS 刷新、实际耗时以及 TCP OTA 端到端仍需设备验收，v2 固件签名已实现并通过主机验证，签名版实机验收仍待完成。
+`test_log_replay.py` 模拟 Flash/队列并运行真实 Log/LogTask；`test_tcp_recovery.py` 模拟 UART 与时间；`test_ota_manual_restart.py` 模拟中转区并运行真实 OTA/HMI Page。主机检查需要 C 编译器，签名测试另需 Python 签名依赖，不模拟完整硬件实时性。
+
+[10 月 12 日记录](../docs/develop/2026-10-12/main.md)包含 CAN 升级和部分故障实测；[10 月 14 日记录](../docs/develop/2026-10-14/main.md)包含持续采集版观察、TCP 下发中转校验成功及签名 Bootloader 安装到 B 槽后跳转。TCP 掉电保护本次未重复测试，公共恢复流程沿用之前 CAN 测试证据。仍待补充大量积压与空间边界、偶发 IPS/LED 卡顿耗时、签名 OTA 完整链路、设备端坏签名拒绝及最低栈水位。
+
+### 原扩展板的 ESP 通信故障
+
+本轮故障板上，ESP 上电后能获取 IP 并回应 ping，MCU 曾累计收到 29 个串口字节，但发送 AT / `AT+CIPCLOSE` 后没有新回应；IPS 可能短暂显示 Wi-Fi ONLINE，SSID/IP 仍为 `--`。接收字节计数只证明曾收到数据，不能证明 ESP 正常处理了 MCU 发出的命令。恢复流程还会主动清除 Wi-Fi 状态，OFFLINE 不等于已经确认 ESP 退出网络。
+
+板端只读检查显示 USART1 收发、接收中断、PA2/PA3 配置和中断向量正常。万用表确认线路导通后，同一核心板及固件换到其他扩展板，TCP 恢复，故障范围集中到原扩展板；ESP 模块本身、供电、连接或保存配置的具体原因尚未确认。原理图中 ESP 旁 C6/C7 为串联，实板接法及其与故障的关系仍需核实。当前保留诊断计数，暂不因该板故障修改 TCP 业务逻辑。
