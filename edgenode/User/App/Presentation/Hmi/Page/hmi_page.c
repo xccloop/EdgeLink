@@ -218,13 +218,17 @@ static uint8_t backlog_build(hmi_page_t *page, const hmi_view_data_t *data)
     scale = (length <= 3U) ? 7U : 5U;
 
     return page_add_text(page, 16U, 60U, "PENDING RECORDS", 1U, COLOR_MUTED) &&
+           ((data->storage_failed == 0U) ||
+            page_add_text(page, 208U, 60U, "FLASH ERROR", 1U, COLOR_ERROR)) &&
            page_add_text(page, 16U, 88U, buffer, scale, COLOR_TEXT) &&
            page_add_rect(page, 16U, 160U, 288U, 1U, COLOR_LINE) &&
            page_add_text(page, 16U, 172U,
-                         (all_synced != 0U) ? "ALL DATA UPLOADED"
-                                            : "WAITING TO BE SENT",
+                         (data->storage_failed != 0U) ? "STORAGE STOPPED"
+                         : (all_synced != 0U) ? "ALL DATA UPLOADED"
+                                             : "WAITING TO BE SENT",
                          1U,
-                         (all_synced != 0U) ? COLOR_ACCENT : COLOR_WAIT);
+                         (data->storage_failed != 0U) ? COLOR_ERROR
+                         : (all_synced != 0U) ? COLOR_ACCENT : COLOR_WAIT);
 }
 
 uint8_t hmi_page_build(hmi_page_t *page, const hmi_view_data_t *data,hmi_page_id_t current_page, hmi_page_id_t selected_page)

@@ -17,6 +17,7 @@ SOURCE = r'''
 static uint8_t flash[GD25Q32_CAPACITY_BYTES];
 static unsigned reads, page_reads[LOG_PAGE_COUNT], record_writes;
 static uint32_t fail_read = UINT32_MAX;
+static uint8_t fail_write;
 uint8_t gd25_init(void) { return 1; }
 uint8_t gd25_read(uint32_t address, uint8_t *data, uint32_t length) {
     assert(address + length <= sizeof(flash)); reads++;
@@ -26,6 +27,7 @@ uint8_t gd25_read(uint32_t address, uint8_t *data, uint32_t length) {
 }
 uint8_t gd25_write(uint32_t address, const uint8_t *data, uint16_t length) {
     unsigned i;
+    if(fail_write) return 0;
     assert(address + length <= sizeof(flash));
     if(length == LOG_SLOT_SIZE) record_writes++;
     for(i = 0; i < length; i++) flash[address + i] &= data[i];
@@ -137,6 +139,14 @@ static void finish_task(void) {
 }
 void vTaskDelay(unsigned ticks) {
     uint8_t permission;
+    if(ticks == 1000 && scenario >= 5) {
+        assert(log_task_storage_failed_get() == 1U);
+        assert(running == 1); /* HMI was released even on initialization failure. */
+        if(scenario == 5) assert(sequences.head == sequences.tail && sample_count == 0);
+        if(scenario == 6) assert(sample_count > 0);
+        running = 0;
+        longjmp(task_finished, 1);
+    }
     assert(ticks == 1 || ticks == 10); /* fatal stop uses 1000, caught by the mock */
     assert(++iterations < 60000);
     now += ticks;
@@ -283,13 +293,18 @@ int main(void) {
 
     /* Real infinite task: startup, continuing collection while ACK delayed,
        later runtime rebuild on failed new sample, three failures, and queue backpressure. */
-    for(scenario = 0; scenario < 5; scenario++) {
+    for(scenario = 0; scenario < 7; scenario++) {
         int mode = scenario;
         setup(); reset_task(mode);
+        storage_failed = 0U; /* each scenario represents a fresh boot */
+        if(mode == 5) fail_read = LOG_BASE_ADDRESS;
+        fail_write = (mode == 6);
         if(mode == 3) transmissions.capacity = 1; /* exercise actual full queue as well as temporary refusal */
         if(mode == 4) record(LOG_END_ADDRESS - 16, 10, 1); /* full target sector pauses only until ACK */
         if(setjmp(task_finished) == 0) log_task(NULL);
-        assert(running == 0 && initial_pages >= LOG_PAGE_COUNT);
+        assert(running == 0);
+        if(mode != 5) assert(initial_pages >= LOG_PAGE_COUNT);
+        assert(log_task_storage_failed_get() == ((mode >= 5) ? 1U : 0U));
     }
     puts("Live collection and historical replay regression tests passed");
     return 0;

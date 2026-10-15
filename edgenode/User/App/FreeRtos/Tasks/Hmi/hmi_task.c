@@ -32,6 +32,7 @@ static void hmi_task(void *argument)
     uint8_t key_event;//按键事件
     uint8_t need_commit;//这一轮有没有新数据要提交
     uint8_t restart_required;
+    uint8_t storage_failed;
     uint8_t i;
     uint32_t pending_now;
 
@@ -55,6 +56,7 @@ static void hmi_task(void *argument)
     last_wake_time = xTaskGetTickCount();
     memset(&hmi_snapshot, 0, sizeof(hmi_snapshot));
     hmi_snapshot.node_id = board_id;
+    hmi_snapshot.storage_failed = log_task_storage_failed_get();
     hmi_snapshot.firmware_version_valid =
         ota_active_version_get(&hmi_snapshot.firmware_version);
     hmi_snapshot.ota_restart_required = ota_restart_required_get();
@@ -127,6 +129,13 @@ static void hmi_task(void *argument)
         if(pending_now != hmi_snapshot.pending_count)
         {
             hmi_snapshot.pending_count = pending_now;
+            need_commit = 1U;
+        }
+
+        storage_failed = log_task_storage_failed_get();
+        if(storage_failed != hmi_snapshot.storage_failed)
+        {
+            hmi_snapshot.storage_failed = storage_failed;
             need_commit = 1U;
         }
 

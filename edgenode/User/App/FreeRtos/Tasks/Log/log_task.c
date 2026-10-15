@@ -7,6 +7,13 @@
 #include <stdint.h>
 #include <stdio.h>
 
+static volatile uint8_t storage_failed;
+
+uint8_t log_task_storage_failed_get(void)
+{
+    return storage_failed;
+}
+
 typedef enum
 {
     LOG_REPLAY_IDLE,
@@ -41,6 +48,7 @@ static void log_replay_step(log_replay_context_t *replay,
             result = log_pending_scan_step();
             if(result == LOG_FAIL)
             {
+                storage_failed = 1U;
                 task_block_forever();
             }
             if(result == LOG_SUCCESS)
@@ -54,6 +62,7 @@ static void log_replay_step(log_replay_context_t *replay,
                                              &replay->work.flash_address);
             if(result == LOG_FAIL)
             {
+                storage_failed = 1U;
                 task_block_forever();
             }
             if(result == LOG_SUCCESS)
@@ -120,6 +129,9 @@ static void log_task(void *argument)
     (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     if(log_init(&log_result) != LOG_SUCCESS)
     {
+        storage_failed = 1U;
+        /* HMI 仍需进入页面显示故障；CollectTask 继续等待起始序号。 */
+        xTaskNotifyGive(hmi_task_handle);
         task_block_forever();
     }
     if(log_result.has_pending != 0U)
@@ -148,6 +160,7 @@ static void log_task(void *argument)
                                              confirm_event.sequence);
                 if(result == LOG_FAIL)
                 {
+                    storage_failed = 1U;
                     task_block_forever();
                 }
                 /* LOG_STALE 是槽位已复用的旧结果，不得确认新记录。 */
@@ -203,6 +216,7 @@ static void log_task(void *argument)
             /* 捕获已落盘序号上限，之后的新采样不延长这一次历史恢复。 */
             if(log_pending_scan_begin() != LOG_SUCCESS)
             {
+                storage_failed = 1U;
                 task_block_forever();
             }
             replay.state = LOG_REPLAY_SCAN;
@@ -218,6 +232,7 @@ static void log_task(void *argument)
             if(log_write_pending(&collected_message, &normal_work.flash_address)
                != LOG_SUCCESS)
             {
+                storage_failed = 1U;
                 task_block_forever();
             }
             normal_work.message = collected_message;
@@ -246,6 +261,7 @@ static void log_task(void *argument)
             uint8_t result = log_write_pending_ready();
             if(result == LOG_FAIL)
             {
+                storage_failed = 1U;
                 task_block_forever();
             }
             if(result == LOG_SUCCESS)

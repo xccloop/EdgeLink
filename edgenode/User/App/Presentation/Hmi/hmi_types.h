@@ -68,6 +68,7 @@ typedef struct
 
     /* 还压在 Flash 里、没被 Hub 确认的条数，来自 log_pending_count_get()。 */
     uint32_t         pending_count;
+    uint8_t          storage_failed;     /* LogTask 存储故障后停止，保持到重启 */
 
     uint8_t          log_count;           /* 已经攒了几条，0 ~ HMI_LOG_LINES */
     char             logs[HMI_LOG_LINES][HMI_LOG_LINE_SIZE];
