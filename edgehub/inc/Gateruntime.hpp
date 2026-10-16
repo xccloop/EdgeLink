@@ -129,6 +129,7 @@ private:
     void drainHttpclient(int slot, bool &close_client);
     void sendHttpResponse(int slot, bool &close_client);
     void completeHttpRequest(const OTA::Result& result);
+    bool buildHistoryNodesJson(std::string& body);
     bool sendTcpSlotQuery(uint8_t node_id, uint64_t request_id);
     void completeTcpSlotQuery(int slot, int status, const char *body);
 

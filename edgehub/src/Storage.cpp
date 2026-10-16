@@ -112,6 +112,39 @@ StorageInsertResult Storage::insertMessage(const Message& msg)
         StorageInsertResult::Duplicate;
 }
 
+/*
+    SELECT 和 INSERT 的差别只在 sqlite3_step 上：
+    INSERT 没有结果集，调一次就 SQLITE_DONE；
+    SELECT 每调一次返回一行 SQLITE_ROW，走完最后一行才 SQLITE_DONE。
+    所以这里要包一层 while，用 sqlite3_column_int(stmt, 0) 读第 0 列。
+*/
+bool Storage::queryNodeIds(std::vector<uint8_t>& node_ids)
+{
+    // 调用方可能复用同一个 vector，不清空会把上一次的结果累积进来。
+    node_ids.clear();
+
+    const char* sql = "SELECT DISTINCT nodeId FROM messages ORDER BY nodeId;";
+    sqlite3_stmt* stmt = nullptr;
+    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+        lastError_ = sqlite3_errmsg(db_);
+        return false;
+    }
+
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        node_ids.push_back(static_cast<uint8_t>(sqlite3_column_int(stmt, 0)));
+    }
+
+    if (rc != SQLITE_DONE) {
+        lastError_ = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        return false;
+    }
+
+    sqlite3_finalize(stmt);
+    return true;
+}
+
 std::string Storage::getLastError() const
 {
     return lastError_;

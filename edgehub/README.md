@@ -92,6 +92,7 @@ HTTP 服务监听 `8080`。节点号使用十进制 1～127，槽位查询与固
 | 方法 | 路径 | 行为 |
 | --- | --- | --- |
 | `GET` | `/hub/status` | 返回 `{"running":true}`，用于检查服务响应。 |
+| `GET` | `/hub/history/node/count` | 返回 `{"count":N,"nodes":[...]}`，列出数据库中上报过数据的节点号，升序去重。这是**历史**口径：节点掉线后仍保留，不代表当前在线。 |
 | `GET` | `/hub/firmware/can/query/node/<id>` | 经 CAN 查询非当前运行的槽位，成功返回 `{"slot":"A"}` 或 `{"slot":"B"}`，查询超时为 5 s。 |
 | `POST` | `/hub/firmware/can/send/node/<id>` | 请求体为 **Hub 本地镜像文件路径**；启动 CAN 下发，等待 Node 最终结果或失败后返回。 |
 | `GET` | `/hub/firmware/tcp/query/node/<id>` | 通过节点已有 TCP 连接查询可升级槽位，成功返回 A/B；查询超时为 5 s。 |

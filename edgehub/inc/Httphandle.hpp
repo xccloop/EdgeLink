@@ -17,6 +17,7 @@ public:
     uint8_t firmwareSendTcpNode() const { return tcp_firmware_node; }
     uint8_t firmwareSendNode() const {return firmware_node;}
     std::string firmwareSendNodePath() const {return firmware_path;}
+    bool historyNodeQuery() const { return history_node_query; }
     int statusCode() const { return status; }
     const std::string& responseBody() const { return body; }
 
@@ -30,6 +31,7 @@ private:
     uint8_t tcp_query_node{0};
 
     std::string request_body;
+    bool history_node_query{false};
     uint8_t firmware_node = 0;
     uint8_t tcp_firmware_node = 0;
     std::string firmware_path;
@@ -54,4 +56,5 @@ private:
     void handleFirmwareSlotQueryTcp();
     void handleFirmwareSlotCanSend();
     void handleFirmwareSlotTcpSend();
+    void handleHistoryNodeCount();
 };

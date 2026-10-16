@@ -7,6 +7,7 @@
 const HttpHandle::Route HttpHandle::routes[] = 
 {
     {"/hub/status",&HttpHandle::hanlde_hubstatus},
+    {"/hub/history/node/count",&HttpHandle::handleHistoryNodeCount},
     {"/hub/firmware/can/query/node/", &HttpHandle::handleFirmwareSlotQueryCan, true},
     {"/hub/firmware/tcp/query/node/",&HttpHandle::handleFirmwareSlotQueryTcp,true},
     {"/hub/firmware/can/send/node/",&HttpHandle::handleFirmwareSlotCanSend,true},
@@ -27,6 +28,7 @@ void HttpHandle::clear()
     request_path.clear();
     can_query_node = 0;
     tcp_query_node = 0;
+    history_node_query = false;
     firmware_node = 0;
     tcp_firmware_node = 0;
     firmware_path.clear();
@@ -222,6 +224,14 @@ void HttpHandle::handleFirmwareSlotTcpSend()
     if(node == 0U || node > 127U) return;
     tcp_firmware_node = static_cast<uint8_t>(node);
     firmware_path = request_body;
+    status = 200;
+    body.clear();
+}
+
+void HttpHandle::handleHistoryNodeCount()
+{
+    // 这里只表达意图：具体有哪些节点要查库才知道，由 Gateruntime 填 body。
+    history_node_query = true;
     status = 200;
     body.clear();
 }

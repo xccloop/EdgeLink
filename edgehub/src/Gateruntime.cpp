@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <ratio>
+#include <vector>
 #include <sys/epoll.h>
 
 // EdgeHub 的 SQLite 数据库路径。
@@ -900,6 +901,18 @@ bool Gateruntime::handleHttpClient(int fd,uint32_t event_mask)
                     completeHttpRequest(result);
                 }
             }
+            else if(handler.historyNodeQuery())
+            {
+                std::string history_body;
+                if(buildHistoryNodesJson(history_body))
+                {
+                    client.response = Http::serialize(200, history_body);
+                }
+                else
+                {
+                    client.response = Http::serialize(500, "{\"error\":\"node query failed\"}");
+                }
+            }
             else
             {
                 client.response = Http::serialize(handler.statusCode(), handler.responseBody());
@@ -1083,6 +1096,33 @@ void Gateruntime::completeHttpRequest(const OTA::Result& result)
         client->request_id = 0U;
         return;
     }
+}
+
+/*
+    把数据库里上报过数据的节点号拼成 JSON。
+    成功返回 true 并填好 body；查询失败返回 false，调用方负责回错误状态码。
+    这里是"历史"口径：只要上报过一次就会一直留在列表里，节点掉线不会消失。
+*/
+bool Gateruntime::buildHistoryNodesJson(std::string& body)
+{
+    std::vector<uint8_t> node_ids;
+    if(_storage.queryNodeIds(node_ids) == false)
+    {
+        fprintf(stderr, "%s\n", _storage.getLastError().c_str());
+        return false;
+    }
+
+    body = "{\"count\":" + std::to_string(node_ids.size()) + ",\"nodes\":[";
+    for(size_t index = 0; index < node_ids.size(); ++index)
+    {
+        if(index != 0U)
+        {
+            body += ',';
+        }
+        body += std::to_string(node_ids[index]);
+    }
+    body += "]}";
+    return true;
 }
 
 bool Gateruntime::sendTcpSlotQuery(uint8_t node_id, uint64_t request_id)

@@ -1,6 +1,8 @@
 #include <sqlite3.h>
 #include "Message.hpp"
+#include <cstdint>
 #include <string>
+#include <vector>
 
 enum class StorageInsertResult
 {
@@ -36,6 +38,10 @@ public:
     // ---------- 核心数据操作（预编译语句） ----------
     // 插入一条 Message；重复键表示该记录已被可靠保存，仍可安全回复 ACK。
     StorageInsertResult insertMessage(const Message& msg);
+
+    // 查询历史上报过数据的全部节点号，按节点号升序、已去重。
+    // 成功返回 true 并用结果覆盖 node_ids；失败返回 false 并保留 getLastError()。
+    bool queryNodeIds(std::vector<uint8_t>& node_ids);
 
     // ---------- 错误信息获取 ----------
     // 获取最后一次操作的错误描述
